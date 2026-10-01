@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-rps", type=float, default=20.0, help="requisições por segundo (TSE: máx. 100)")
     p.add_argument("--destino", help="diretório de dados (padrão: dados_2026/<ambiente>; no 2º turno, <ambiente>_t2)")
     p.add_argument("--sem-presidente-br", action="store_true", help="não baixar o arquivo nacional do presidente")
+    p.add_argument("--sem-presidente-ufs", action="store_true", help="não baixar o presidente nas outras UFs")
     p.add_argument("--uma-vez", action="store_true", help="um único ciclo e sai")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -43,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     destino = Path(args.destino) if args.destino else destino_padrao(args.ambiente, turno=args.turno)
     coletor = Coletor(ClienteDivulgacao(args.ambiente, max_rps=args.max_rps), destino, args.uf, args.turno,
-                      presidente_br=not args.sem_presidente_br)
+                      presidente_br=not args.sem_presidente_br, presidente_ufs=not args.sem_presidente_ufs)
     if not args.uma_vez:
         try:
             coletor.executar(args.intervalo)

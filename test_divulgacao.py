@@ -112,8 +112,8 @@ def test_limitador_de_taxa() -> None:
 def test_coletor_primeiro_ciclo_e_incremental(fake_tse: FakeTSE, tmp_path: Path) -> None:
     col = Coletor(_cliente(fake_tse), tmp_path)
     r1 = col.ciclo()
-    # estadual: uf + 3 municípios × 4 cargos; federal: br + uf + 3 municípios × presidente
-    assert (r1.abrangencias_alteradas, r1.arquivos_novos, r1.arquivos_404) == (9, 21, 0)
+    # estadual: uf + 3 municípios × 4 cargos; federal: br + uf + 3 municípios × presidente + SP (EA14)
+    assert (r1.abrangencias_alteradas, r1.arquivos_novos, r1.arquivos_404) == (10, 22, 0)
     tot = pl.read_parquet(tmp_path / "ultimo" / "totais.parquet")
     assert tot.height == 21 and set(tot["CARGO"]) == {1, 3, 5, 6, 7}
     assert tot.filter((pl.col("CARGO") == 3) & (pl.col("ABRANGENCIA") == "uf"))["ELEITORADO"].item() == 13319487
@@ -131,6 +131,44 @@ def test_coletor_primeiro_ciclo_e_incremental(fake_tse: FakeTSE, tmp_path: Path)
     r3 = col.ciclo()
     assert (r3.abrangencias_alteradas, r3.arquivos_pedidos) == (1, 4)  # 4 cargos do Rio
     assert pl.read_parquet(tmp_path / "historico_totais.parquet").height == 21
+
+
+def _hora_sp(fake: FakeTSE, ht: str) -> None:
+    for a in fake._docs["br-e021270-ab.json"]["abr"]:
+        if a["cdabr"] == "sp":
+            a["ht"] = ht
+
+
+def test_coletor_presidente_nas_outras_ufs(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """O presidente nas outras UFs (linhas do EA14) vai para raw_brasil/ e ultimo/brasil_*, nunca para
+    raw/, ultimo/totais, a série ou o histórico (que são da UF e do Brasil)."""
+    col = Coletor(_cliente(fake_tse), tmp_path)
+    col.ciclo()
+    sp = "sp-c0001-e021270-u.json"
+    assert sum(p.endswith(sp) for p in fake_tse.pedidos) == 1
+    bt = pl.read_parquet(tmp_path / "ultimo" / "brasil_totais.parquet")
+    assert sorted(bt["UF"]) == ["RJ", "SP"] and set(bt["ABRANGENCIA"]) == {"uf"} and set(bt["CARGO"]) == {1}
+    bc = pl.read_parquet(tmp_path / "ultimo" / "brasil_candidatos.parquet")
+    assert set(bc["UF"]) == {"RJ", "SP"} and bc.filter(pl.col("UF") == "SP")["VOTOS"].sum() > 0
+    assert [p.parent.name for p in (tmp_path / "raw_brasil").rglob("*.json.gz")] == [sp.removesuffix(".json")]
+    assert not any("sp-c" in p.name for p in (tmp_path / "raw").rglob("*"))
+    for nome in ("ultimo/totais.parquet", "historico_totais.parquet", "historico_serie.parquet"):
+        assert "SP" not in pl.read_parquet(tmp_path / nome)["UF"].to_list(), nome
+
+    col.ciclo()  # nada mudou: SP não é pedido de novo
+    assert sum(p.endswith(sp) for p in fake_tse.pedidos) == 1
+    _hora_sp(fake_tse, "23:00:00")  # nova totalização em SP
+    r = col.ciclo()
+    assert (r.abrangencias_alteradas, r.arquivos_pedidos) == (1, 1)
+    assert sum(p.endswith(sp) for p in fake_tse.pedidos) == 2
+
+
+def test_coletor_sem_presidente_ufs(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    col = Coletor(_cliente(fake_tse), tmp_path, presidente_ufs=False)
+    r = col.ciclo()
+    assert (r.abrangencias_alteradas, r.arquivos_novos) == (9, 21)
+    assert not any(p.startswith("sp-") or "/sp-" in p for p in fake_tse.pedidos)
+    assert pl.read_parquet(tmp_path / "ultimo" / "brasil_totais.parquet")["UF"].to_list() == ["RJ"]
 
 
 def test_coletor_segundo_turno_so_governador_e_presidente(fake_tse: FakeTSE, tmp_path: Path) -> None:
@@ -198,7 +236,7 @@ def test_bloqueio_no_meio_do_ciclo_nao_perde_o_que_ja_veio(fake_tse: FakeTSE, tm
     with pytest.raises(BloqueioTSE):
         col.ciclo()
     r = col.ciclo()
-    assert r.estatisticas.get("304", 0) > 0 and r.arquivos_novos == 21
+    assert r.estatisticas.get("304", 0) > 0 and r.arquivos_novos == 22  # 21 da UF + presidente em SP
     assert pl.read_parquet(tmp_path / "ultimo" / "totais.parquet").height == 21
 
 

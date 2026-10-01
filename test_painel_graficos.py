@@ -52,6 +52,24 @@ def test_painel_cartoes(pagina: Page, site: dict) -> None:
     assert "Anulado sub judice" in gov.inner_text()  # destinação exibida ao lado da situação
 
 
+def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
+    """Cartão Brasil: mapa (quem lidera, 3 cores + Outros) e tabela por UF; o bloco sobrevive ao redesenho."""
+    abrir(pagina, site, "#painel")
+    br = cartao(pagina, "Presidente — BRASIL")
+    br.locator("#brasil-tabela tbody tr").first.wait_for()
+    assert br.locator("#brasil-tabela tbody tr td:first-child").all_inner_texts() == ["RJ ✓", "SP ✓"]
+    pagina.wait_for_function("() => estado.brasilMapa && estado.brasilMapa._camada")
+    cores_lider = set(pagina.evaluate("estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)"))
+    assert len(cores_lider) >= 1 and cores_lider <= cores(pagina, "--serie-1", "--serie-2", "--serie-3", "--outros")
+    numero = pagina.evaluate("estado.brasil.candidatos[0].NUMERO")
+    br.locator("#brasil-metrica").select_option(str(numero))
+    seq = cores(pagina, "--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5")
+    assert set(pagina.evaluate("estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)")) <= seq
+    pagina.evaluate("desenharPainel()")  # redesenho do painel: o mesmo bloco (e o mesmo mapa) volta ao cartão
+    assert cartao(pagina, "Presidente — BRASIL").locator("#brasil-mapa .leaflet-map-pane").count() == 1
+    assert cartao(pagina, "Presidente — RJ").locator(".brasil-ufs").count() == 0
+
+
 def test_painel_mostra_html_como_texto(pagina: Page, site: dict) -> None:
     abrir(pagina, site, "#painel")
     pagina.wait_for_function("() => document.querySelectorAll('.cartao').length === 6")

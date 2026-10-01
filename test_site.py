@@ -48,6 +48,36 @@ def test_painel(site: TestClient) -> None:
     assert cartoes[5]["proporcional"] and cartoes[5]["partidos"]
 
 
+def test_presidente_por_uf(site: TestClient) -> None:
+    d = site.get("/api/presidente/ufs").json()
+    assert [u["uf"] for u in d["ufs"]] == ["RJ", "SP"] and len(d["candidatos"]) == 3
+    sp = d["ufs"][1]
+    assert sp["cd_ibge"] == 35 and sp["pct_secoes"] == 100
+    assert sp["primeiro"]["pct"] >= sp["segundo"]["pct"]
+    assert sp["diferenca_pp"] == pytest.approx(sp["primeiro"]["pct"] - sp["segundo"]["pct"], abs=0.01)
+    assert set(sp["pct"]) == {str(c["NUMERO"]) for c in d["candidatos"]}
+
+
+def test_presidente_por_uf_exterior_por_ultimo() -> None:
+    import polars as pl
+    from apuracao.divulgacao import modelo as m
+    from apuracao.web.app import presidente_por_uf
+    tot = pl.DataFrame([{"CARGO": 1, "ABRANGENCIA": "uf", "UF": u, "PCT_SECOES_TOTALIZADAS": p, "VALIDOS": v}
+                        for u, p, v in (("ZZ", 10.0, 100), ("AC", 0.0, 0), ("BA", 50.0, 300))],
+                       schema=m.TOTAIS_SCHEMA)
+    cand = pl.DataFrame([{"CARGO": 1, "ABRANGENCIA": "uf", "UF": u, "NUMERO": n, "NOME_URNA": f"C{n}", "VOTOS": v,
+                          "PCT_VALIDOS": 100 * v / t if t else 0.0, "SEQ": s}
+                         for u, t in (("ZZ", 100), ("AC", 0), ("BA", 300))
+                         for n, v, s in ((10, {"ZZ": 30, "AC": 0, "BA": 200}[u], 1),
+                                         (20, {"ZZ": 70, "AC": 0, "BA": 100}[u], 2))],
+                        schema=m.CANDIDATOS_SCHEMA)
+    d = presidente_por_uf(tot, cand)
+    assert [u["uf"] for u in d["ufs"]] == ["AC", "BA", "ZZ"] and d["ufs"][2]["nome"] == "Exterior"
+    assert d["ufs"][0]["primeiro"] is None and d["ufs"][0]["diferenca_pp"] is None   # AC sem apuração
+    assert d["ufs"][1]["primeiro"]["numero"] == 10 and d["ufs"][2]["primeiro"]["numero"] == 20
+    assert [c["NUMERO"] for c in d["candidatos"]] == [10, 20]                          # 230 × 170 votos
+
+
 def test_candidato(site: TestClient) -> None:
     lista = site.get("/api/candidatos?cargo=3").json()
     numero = lista[0]["NUMERO"]

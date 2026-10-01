@@ -89,7 +89,10 @@ ROTAS_SO_LOCAL = ROTAS_PESADAS + ("/api/alertas/interesse",)
 METRICAS_CANDIDATO = {"pct_candidato": "% dos válidos do candidato", "votos_candidato": "Votos do candidato"}
 SCHEMAS = {"totais": m.TOTAIS_SCHEMA, "candidatos": m.CANDIDATOS_SCHEMA, "partidos": m.PARTIDOS_SCHEMA,
            "municipios": m.MUNICIPIOS_SCHEMA, "acompanhamento": m.ACOMPANHAMENTO_SCHEMA, "serie": sr.SCHEMA,
-           "historico_totais": m.TOTAIS_SCHEMA}
+           "historico_totais": m.TOTAIS_SCHEMA, "brasil_totais": m.TOTAIS_SCHEMA,
+           "brasil_candidatos": m.CANDIDATOS_SCHEMA}
+NOME_UF = {"ZZ": "Exterior"}
+TOP_BRASIL = 3  # candidatos com cor própria no mapa por UF (dataviz: no máximo 3 + "Outros")
 
 
 class PedidoInteresse(BaseModel):
@@ -191,6 +194,32 @@ def _abrangencia(df: pl.DataFrame, abr: str, uf: str, municipio: int | None = No
     if abr == "uf":
         return df.filter((pl.col("ABRANGENCIA") == "uf") & (pl.col("UF") == uf))
     return df.filter((pl.col("ABRANGENCIA") == "mun") & (pl.col("CD_MUNICIPIO") == municipio))
+
+
+def presidente_por_uf(tot: pl.DataFrame, cand: pl.DataFrame) -> dict[str, Any]:
+    """Presidente em cada UF (+ exterior): apuração, 1º e 2º e o % dos `TOP_BRASIL` mais votados no
+    conjunto das UFs. Entradas: `ultimo/brasil_{totais,candidatos}.parquet` do coletor."""
+    tot = tot.filter((pl.col("CARGO") == 1) & (pl.col("ABRANGENCIA") == "uf")).unique("UF", keep="last")
+    cand = cand.filter((pl.col("CARGO") == 1) & (pl.col("ABRANGENCIA") == "uf")).unique(["UF", "NUMERO"], keep="last")
+    if tot.is_empty():
+        return {"candidatos": [], "ufs": []}
+    top = (cand.group_by("NUMERO").agg(pl.col("VOTOS").sum(), pl.col("NOME_URNA").first(), pl.col("PARTIDO").first())
+           .sort(["VOTOS", "NUMERO"], descending=[True, False]))
+    destaque = top.head(TOP_BRASIL)["NUMERO"].to_list()
+    ufs = []
+    for t in tot.sort(pl.col("UF") == "ZZ", "UF").iter_rows(named=True):
+        c = cand.filter(pl.col("UF") == t["UF"]).sort(["VOTOS", "SEQ"], descending=[True, False], nulls_last=True)
+        lado = [{"numero": r["NUMERO"], "nome": r["NOME_URNA"], "partido": r["PARTIDO"], "pct": r["PCT_VALIDOS"]}
+                for r in c.filter(pl.col("VOTOS") > 0).head(2).iter_rows(named=True)]
+        ufs.append({
+            "uf": t["UF"], "nome": NOME_UF.get(t["UF"], t["UF"]), "cd_ibge": ibge.UF_IBGE.get(t["UF"]),
+            "pct_secoes": t["PCT_SECOES_TOTALIZADAS"], "hora": _jsonable(t["DT_TOTALIZACAO"]),
+            "final": t["TOTALIZACAO_FINAL"], "eleitorado": t["ELEITORADO"], "validos": t["VALIDOS"],
+            "primeiro": lado[0] if lado else None, "segundo": lado[1] if len(lado) > 1 else None,
+            "diferenca_pp": round((lado[0]["pct"] or 0) - (lado[1]["pct"] or 0), 2) if len(lado) > 1 else None,
+            "pct": {str(r["NUMERO"]): r["PCT_VALIDOS"] for r in c.iter_rows(named=True) if r["NUMERO"] in destaque},
+        })
+    return {"candidatos": _rows(top.head(TOP_BRASIL)), "ufs": ufs}
 
 
 # --------------------------------------------------------------------------
@@ -442,6 +471,17 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
             if melhor is None or f.get("gerado_em", "") > melhor["gerado_em"]:
                 melhor = {"titulo": f.get("titulo"), "gerado_em": f.get("gerado_em", "")}
         return melhor
+
+    @app.get("/api/presidente/ufs")
+    def presidente_ufs() -> dict[str, Any]:
+        """Presidente por UF (bloco "Por estado" do cartão Brasil); cache pela versão das duas tabelas."""
+        (tot, vt), (cand, vc) = dados.com_versao("brasil_totais"), dados.com_versao("brasil_candidatos")
+        chave = f"presidente_ufs:{vt}:{vc}"
+        if chave not in geo_cache:
+            for velha in [k for k in geo_cache if k.startswith("presidente_ufs:")]:
+                del geo_cache[velha]
+            geo_cache[chave] = presidente_por_uf(tot, cand)
+        return geo_cache[chave]
 
     @app.get("/api/painel")
     def painel() -> dict[str, Any]:
@@ -866,6 +906,16 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         if metrica == "vencedor":
             resp["categorias"] = br.categorias(vb, cargo)
         return resp
+
+    @app.get("/geo/ufs.geojson")
+    def malha_ufs() -> JSONResponse:
+        if "malha_ufs" not in geo_cache:
+            try:
+                path = ibge.caminho("malha_ufs", cache_dir, uf)
+            except (requests.RequestException, ValueError, v.TseDataError) as exc:
+                raise HTTPException(503, f"malha das UFs do IBGE indisponível: {exc}") from exc
+            geo_cache["malha_ufs"] = json.loads(path.read_text())
+        return JSONResponse(geo_cache["malha_ufs"])
 
     @app.get("/geo/municipios.geojson")
     def malha() -> JSONResponse:

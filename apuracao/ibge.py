@@ -39,6 +39,8 @@ GEOFTP_CD2022 = ("https://geoftp.ibge.gov.br/organizacao_do_territorio/malhas_te
                  "malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022")
 API_MALHA = ("https://servicodados.ibge.gov.br/api/v3/malhas/estados/{cod}"
              "?formato=application/vnd.geo%2Bjson&intrarregiao=municipio&qualidade=intermediaria")
+API_MALHA_UFS = ("https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR"
+                 "?formato=application/vnd.geo%2Bjson&intrarregiao=UF&qualidade=minima")  # ~100 kB; codarea = UF
 UF_IBGE = {"RO": 11, "AC": 12, "AM": 13, "RR": 14, "PA": 15, "AP": 16, "TO": 17, "MA": 21, "PI": 22, "CE": 23,
            "RN": 24, "PB": 25, "PE": 26, "AL": 27, "SE": 28, "BA": 29, "MG": 31, "ES": 32, "RJ": 33, "SP": 35,
            "PR": 41, "SC": 42, "RS": 43, "MS": 50, "MT": 51, "GO": 52, "DF": 53}
@@ -81,6 +83,8 @@ _RENDA = f"{CENSO}/Agregados_por_Setores_Censitarios_Rendimento_do_Responsavel"
 FONTES = [
     Fonte("malha_municipios", "api", API_MALHA, "municipios_{uf}.geojson", "", "malhas", (),
           "mapas por município (todas as abas)"),
+    Fonte("malha_ufs", "api", API_MALHA_UFS, "ufs_BR.geojson", "", "malhas", (),
+          "mapa do presidente por UF (cartão Brasil do painel)"),
     Fonte("malha_bairros", "fixo", f"{GEOFTP_CD2022}/bairros/shp/UF", "{uf}_bairros_CD2022.zip", "", "malhas",
           ("malhas/bairros_{uf}.geojson",), "mapas e comparação por bairro, Perfil × voto por bairro"),
     Fonte("malha_setores", "fixo", f"{GEOFTP_CD2022}/setores/shp/UF", "{uf}_setores_CD2022.zip", "", "ibge_censo2022",

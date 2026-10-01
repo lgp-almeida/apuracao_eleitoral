@@ -2,7 +2,7 @@
 
 A cada ciclo:
   1. EA15 da UF (uma linha por município + a linha da UF) de cada eleição e, para a
-     eleição federal, EA14 (linha br);
+     eleição federal, EA14 (linha br e uma linha por UF, para o presidente nas outras UFs);
   2. compara a hora da última totalização (dt/ht) de cada abrangência com o ciclo
      anterior e baixa o EA20 SÓ dos cargos cujas abrangências mudaram (no 1º ciclo, todos);
   3. grava o JSON bruto de cada arquivo que mudou (o TSE sobrescreve os parciais; o
@@ -11,6 +11,9 @@ A cada ciclo:
 Estrutura em <destino>/ (padrão dados_2026/<ambiente>/):
   raw/<eleicao>/<arquivo>/<AAAAMMDD>_<HHMMSS>_<idg>_<sha1[:10]>.json.gz
   ultimo/{totais,candidatos,partidos,municipios,acompanhamento}.parquet
+  ultimo/brasil_{totais,candidatos}.parquet   presidente em cada UF (27 + zz, exterior)
+  raw_brasil/<eleicao>/<arquivo>/...          brutos do presidente nas OUTRAS UFs: ficam fora de raw/,
+                                              ultimo/totais, das séries e do histórico, que são da UF
   historico_totais.parquet
   historico_serie.parquet   % dos válidos por candidato/partido a cada totalização (UF e Brasil)
   historico_candidatos/     um bloco Parquet por ciclo: candidato × município/UF/BR a cada totalização
@@ -72,13 +75,15 @@ class ResumoCiclo:
 
 class Coletor:
     def __init__(self, cliente: ClienteDivulgacao, destino: Path, uf: str = "RJ", turno: int = 1,
-                 presidente_br: bool = True, downloads_simultaneos: int = DOWNLOADS_SIMULTANEOS) -> None:
+                 presidente_br: bool = True, downloads_simultaneos: int = DOWNLOADS_SIMULTANEOS,
+                 presidente_ufs: bool = True) -> None:
         self.cliente = cliente
         self.downloads_simultaneos = downloads_simultaneos
         self.destino = destino
         self.uf = uf.lower()
         self.turno = turno
         self.presidente_br = presidente_br
+        self.presidente_ufs = presidente_ufs and presidente_br  # as linhas por UF vêm do mesmo EA14
         self.cfg: m.ConfigEleicoes | None = None
         self.municipios = pl.DataFrame(schema=m.MUNICIPIOS_SCHEMA)
         self._eleicoes: dict[int, tuple[int, ...]] = {}          # eleição -> cargos coletados
@@ -86,6 +91,7 @@ class Coletor:
         self._ultima_totalizacao: dict[tuple, datetime | None] = {}
         self._tentativas_404: dict[tuple, int] = {}
         self._resultados: dict[str, m.Resultado] = {}
+        self._resultados_brasil: dict[str, m.Resultado] = {}     # presidente nas outras UFs
         self._acompanhamento: dict[str, pl.DataFrame] = {}
         self.ultimo_resumo: ResumoCiclo | None = None
 
@@ -157,21 +163,24 @@ class Coletor:
                 resumo.arquivos_404 += 1
                 faltou[alvo] = "404"
                 continue
-            if not resp.mudou and caminho in self._resultados:
+            outra_uf = alvo.uf not in (self.uf, "br")
+            guardados = self._resultados_brasil if outra_uf else self._resultados
+            if not resp.mudou and caminho in guardados:
                 resumo.arquivos_304 += 1
                 continue
             # 304 de um arquivo que o coletor não guardou (o ciclo em que ele veio foi interrompido): usa o do cache
             resumo.arquivos_novos += 1
             try:
-                resultado = m.parse_resultado(resp.dados, self.uf if alvo.uf != "br" else "br")
+                resultado = m.parse_resultado(resp.dados, alvo.uf if alvo.uf != "br" else "br")
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
                 logger.error("%s: JSON com estrutura inesperada (%r); nova tentativa no próximo ciclo", caminho, exc)
                 resumo.arquivos_com_falha += 1
                 faltou[alvo] = "falha"
                 continue
-            self._guardar_bruto(alvo.eleicao, caminho, resp.dados)
-            self._resultados[caminho] = resultado
-            novos.append(resultado)
+            self._guardar_bruto(alvo.eleicao, caminho, resp.dados, "raw_brasil" if outra_uf else "raw")
+            guardados[caminho] = resultado
+            if not outra_uf:  # série e histórico são da UF (e do Brasil)
+                novos.append(resultado)
         self._confirmar(pendentes, faltou)
         self._gravar_estado(resumo)
         serie.gravar_bloco(self.destino, serie.linhas_candidatos(novos), f"{resumo.inicio:%Y%m%dT%H%M%S%f}")
@@ -223,8 +232,11 @@ class Coletor:
             if resp.mudou:
                 self._guardar_bruto(eleicao, resp.caminho, resp.dados)
             ab = m.parse_acompanhamento(resp.dados, uf)
-            if uf == "br":  # do EA14 só interessa a linha nacional (a da UF vem do EA15)
+            if uf == "br":  # do EA14: a linha nacional e, para o presidente por UF, as das OUTRAS UFs
+                outras = ab.filter((pl.col("ABRANGENCIA") == "uf") & (pl.col("UF") != self.uf.upper()))
                 ab = ab.filter(pl.col("ABRANGENCIA") == "br")
+                if self.presidente_ufs:
+                    tabelas.append(outras)
             tabelas.append(ab)
             self._acompanhamento[f"{eleicao}-{uf}"] = ab
         alterados = []
@@ -232,12 +244,13 @@ class Coletor:
             for row in tab.iter_rows(named=True):
                 chave = (eleicao, row["ABRANGENCIA"], row["UF"], row["CD_MUNICIPIO"])
                 if chave not in self._ultima_totalizacao or self._ultima_totalizacao[chave] != row["DT_TOTALIZACAO"]:
-                    uf = "br" if row["ABRANGENCIA"] == "br" else self.uf
+                    uf = ("br" if row["ABRANGENCIA"] == "br" else self.uf if row["UF"] == self.uf.upper()
+                          else row["UF"].lower())
                     alterados.append((chave, row["DT_TOTALIZACAO"], (uf, row["CD_MUNICIPIO"])))
         return alterados
 
     # ------------------------------------------------------------ persistência
-    def _guardar_bruto(self, eleicao: int, caminho: str, dados: dict[str, Any]) -> None:
+    def _guardar_bruto(self, eleicao: int, caminho: str, dados: dict[str, Any], raiz: str = "raw") -> None:
         """Guarda cada VERSÃO distinta do arquivo. O nome leva a geração (dg/hg), o idg e um hash
         do conteúdo: só o carimbo do TSE não basta para distinguir versões."""
         nome = caminho.rsplit("/", 1)[-1].removesuffix(".json")
@@ -245,7 +258,7 @@ class Coletor:
         stamp = m.to_datetime(dados.get("dg"), dados.get("hg"))
         tag = f"{stamp:%Y%m%d_%H%M%S}" if stamp else datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_coleta")
         digest = hashlib.sha1(texto.encode()).hexdigest()[:10]
-        alvo = self.destino / "raw" / str(eleicao) / nome / f"{tag}_{dados.get('idg', 'sem-idg')}_{digest}.json.gz"
+        alvo = self.destino / raiz / str(eleicao) / nome / f"{tag}_{dados.get('idg', 'sem-idg')}_{digest}.json.gz"
         if alvo.exists():
             return
         alvo.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +280,14 @@ class Coletor:
             "acompanhamento": (pl.concat(list(self._acompanhamento.values())) if self._acompanhamento
                                else pl.DataFrame(schema=m.ACOMPANHAMENTO_SCHEMA)),
         }
+        # presidente por UF: as outras UFs + a própria (já coletada pelo EA15, não é pedida de novo)
+        brasil = [r for r in res if r.totais.filter((pl.col("CARGO") == CARGO_PRESIDENTE)
+                                                    & (pl.col("ABRANGENCIA") == "uf")).height]
+        brasil += list(self._resultados_brasil.values())
+        tabelas["brasil_totais"] = (pl.concat([r.totais for r in brasil]) if brasil
+                                    else pl.DataFrame(schema=m.TOTAIS_SCHEMA))
+        tabelas["brasil_candidatos"] = (pl.concat([r.candidatos for r in brasil]) if brasil
+                                        else pl.DataFrame(schema=m.CANDIDATOS_SCHEMA))
         for nome, df in tabelas.items():
             _write_atomic(df, ultimo / f"{nome}.parquet")
         if resumo.arquivos_novos:

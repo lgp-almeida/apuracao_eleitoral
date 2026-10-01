@@ -112,10 +112,11 @@ python portal.py                     # http://localhost:8100
 ```
 
 - **Site:** http://localhost:8000. **Na TV da sala:** http://localhost:8000/#painel?tv=1 (um cargo por vez; clique uma vez na página para a tela cheia).
+- **Presidente no Brasil:** o cartão "Presidente — BRASIL" tem o bloco "Por estado", com o mapa de quem lidera em cada UF e a tabela com % apurado, 1º, 2º e diferença. É o parcial oficial do TSE, sem projeção nacional. Sem esse download extra (27 arquivos pequenos): `--sem-presidente-ufs`.
 - **Boletim para a equipe:** gravado sozinho a cada hora cheia e no fim, em `dados_2026/oficial/boletins/boletim_ultimo.html` e `.xlsx`.
 - **Alertas** (coleta parada, bloqueio do TSE, apuração parada, mudança na projeção, deputados acompanhados): aparecem no site, com som, e no terminal.
 - **Cópia de segurança:**
-  - as parciais do TSE (`raw/`) a cada 5 min;
+  - as parciais do TSE (`raw/` e `raw_brasil/`) a cada 5 min;
   - um instantâneo do resto por hora e no fim, em `--copia-dir` (use outro disco).
 - **Para ver de outro computador:** não é recomendado (o site não tem senha nem HTTPS). Mande o boletim.
 - **2º turno:** os mesmos comandos com `--turno 2`. Os dados vão para `dados_2026/oficial_t2`.

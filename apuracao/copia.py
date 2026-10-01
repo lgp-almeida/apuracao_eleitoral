@@ -8,7 +8,7 @@ Duas partes, com custos diferentes:
     INSTANTÂNEO por hora cheia e um "final" quando todos os cargos da UF têm totalização final. Guarda os
     `manter` últimos da hora e sempre o final.
 
-    destino/raw/…                      espelho de dados/raw
+    destino/raw/…, destino/raw_brasil/…  espelho de dados/raw e dados/raw_brasil
     destino/instantaneos/2026-10-04_20h00/{ultimo,historico_*.parquet,historico_candidatos,boletins,…}
     destino/instantaneos/final/…
     destino/copias.json                o registro das cópias (quando, quantos arquivos novos)
@@ -38,6 +38,9 @@ logger = logging.getLogger("apuracao.copia")
 FINAL = "final"
 
 
+RAIZES_BRUTAS = ("raw", "raw_brasil")  # espelhadas a cada poucos minutos (arquivos nunca mudam)
+
+
 class Copiador:
     def __init__(self, origem: Path, destino: Path, uf: str = "RJ", intervalo_min: int = 60, manter: int = 6,
                  espelho_min: float = 5, agora: Callable[[], datetime] = agora_brasilia) -> None:
@@ -51,32 +54,34 @@ class Copiador:
 
     # ------------------------------------------------------------ espelho de raw/
     def espelhar_raw(self) -> int:
-        """Copia para destino/raw os arquivos de raw/ que ainda não estão lá. Devolve quantos."""
-        base = self.origem / "raw"
-        if not base.exists():
-            return 0
+        """Copia para destino/<raw> os arquivos de raw/ e raw_brasil/ (presidente nas outras UFs) que ainda
+        não estão lá. Devolve quantos."""
         novos = 0
-        for arq in base.rglob("*.json.gz"):
-            alvo = self.destino / "raw" / arq.relative_to(base)
-            if alvo.exists() and alvo.stat().st_size == arq.stat().st_size:
+        for raiz in RAIZES_BRUTAS:
+            base = self.origem / raiz
+            if not base.exists():
                 continue
-            alvo.parent.mkdir(parents=True, exist_ok=True)
-            tmp = alvo.with_name(alvo.name + ".tmp")
-            shutil.copy2(arq, tmp)
-            os.replace(tmp, alvo)
-            novos += 1
+            for arq in base.rglob("*.json.gz"):
+                alvo = self.destino / raiz / arq.relative_to(base)
+                if alvo.exists() and alvo.stat().st_size == arq.stat().st_size:
+                    continue
+                alvo.parent.mkdir(parents=True, exist_ok=True)
+                tmp = alvo.with_name(alvo.name + ".tmp")
+                shutil.copy2(arq, tmp)
+                os.replace(tmp, alvo)
+                novos += 1
         self._ultimo_espelho = time.monotonic()
         return novos
 
     # ------------------------------------------------------------ instantâneo
     def instantaneo(self, nome: str) -> Path:
-        """Tudo menos raw/, numa pasta com o nome dado (troca atômica: a pasta só aparece completa)."""
+        """Tudo menos raw/ e raw_brasil/, numa pasta com o nome dado (troca atômica: a pasta só aparece completa)."""
         pasta = self.destino / "instantaneos" / nome
         tmp = self.destino / "instantaneos" / f".{nome}.tmp"
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
         for item in self.origem.iterdir():
-            if item.name == "raw" or item.name.endswith(".tmp"):
+            if item.name in RAIZES_BRUTAS or item.name.endswith(".tmp"):
                 continue
             try:
                 if item.is_dir():

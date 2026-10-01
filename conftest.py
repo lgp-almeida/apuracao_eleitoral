@@ -490,6 +490,11 @@ def site(tmp_path_factory: pytest.TempPathFactory):
                                                            [-43 - i, -22]]]}}
         for i, c in enumerate(E2E_IBGE.values())]}
     (cache / "malhas" / "municipios_RJ.geojson").write_text(json.dumps(malha))
+    ufs = {"type": "FeatureCollection", "features": [  # RJ e SP (o EA14 da fixture tem as duas)
+        {"type": "Feature", "properties": {"codarea": c},
+         "geometry": {"type": "Polygon", "coordinates": [[[x, -22], [x - 2, -22], [x - 2, -24], [x, -22]]]}}
+        for c, x in (("33", -41), ("35", -45))]}
+    (cache / "malhas" / "ufs_BR.geojson").write_text(json.dumps(ufs))
     escrever_bairros(cache)
     escrever_setores(cache)
 

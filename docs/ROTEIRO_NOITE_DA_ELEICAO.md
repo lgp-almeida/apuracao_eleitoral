@@ -7,7 +7,7 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
 | Quando | O quê | Comando |
 |---|---|---|
 | até 2/10 | ensaio geral com a apuração de 2022 | `python ensaio_apuracao.py` (cerca de 15 min; deve terminar em "RESULTADO DO ENSAIO: OK") |
-| até 3/10 | malhas e Censo 2022 do IBGE no cache (rodada 34; baixa algumas centenas de MB uma vez) | `python preparar_ibge.py` |
+| até 3/10 | malhas (inclusive a do Brasil por UF, rodada 35) e Censo 2022 do IBGE no cache (rodada 34; baixa algumas centenas de MB uma vez) | `python preparar_ibge.py` |
 | 3/10, fim do dia | prontidão, e o oficial publica a configuração | `python verificar_prontidao.py` |
 | 3/10, depois que o oficial publicar | um ciclo de teste no oficial, num diretório descartável | `python coletar_resultados.py --ambiente oficial --uma-vez --destino dados_2026/oficial_teste` e depois `rm -r dados_2026/oficial_teste` |
 | 4/10, 16h | prontidão completa, com os testes | `python verificar_prontidao.py --testes` |
@@ -82,6 +82,7 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
   - **Projeção do resultado final** (Presidente no RJ, Governador, Senador): mostra o parcial e a projeção, com margem.
     - Abaixo de 2% apurado a leitura diz "cedo demais".
     - No RJ, até ~50% apurado, o parcial foi tão bom quanto a projeção, ou melhor (rodada 21).
+  - **Presidente por estado** (cartão "Presidente — BRASIL", rodada 35): mapa de quem lidera em cada UF (ou o % de um candidato) e tabela com % apurado, 1º, 2º e diferença. É o parcial oficial de cada UF: **não há projeção nacional**.
   - **Cadeiras de deputado:**
     - antes de 30% apurado: distribuição sobre os votos parciais;
     - a partir de 30%: cadeiras projetadas, com faixa por partido, e eleitos consolidados × em disputa (rodada 22);

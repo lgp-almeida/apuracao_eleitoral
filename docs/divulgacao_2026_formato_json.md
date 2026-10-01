@@ -59,6 +59,7 @@ O cliente trata 404 e páginas HTML como "divulgação ainda não disponível" e
 - **`If-None-Match`/ETag em todo pedido:** o TSE responde 304 (que também conta no limite).
 - **404:** memorizado no ciclo, para não repetir; vários 404 podem bloquear o IP. No 2º turno, só Governador e Presidente são pedidos.
 - **Incremental:** a cada ciclo, EA15 da UF e EA14 (br) só da eleição federal. O EA20 só é baixado para as abrangências cujo `dt/ht` mudou.
+  - **Presidente por UF** (rodada 35): o EA14 traz uma linha por UF (27 + `zz`, exterior). Quando o `dt/ht` de outra UF muda, o coletor pede o EA20 do presidente dela (`<uf>-c0001-e<fed>-u.json`, ~10 kB) e o grava em `raw_brasil/` e `ultimo/brasil_*.parquet`, separado dos dados da UF. No 1º ciclo do simulado: 493 arquivos (466 + 27).
   - Medido no simulado: 1º ciclo com 466 arquivos em 35–39 s (8 downloads simultâneos); ciclo sem mudança com 3 requisições (304) em 0,2 s.
 - **Histórico:** o TSE sobrescreve os parciais, então cada versão distinta de cada arquivo é guardada em `raw/…/<AAAAMMDD_HHMMSS>_<idg>_<sha1[:10]>.json.gz` (o hash do conteúdo garante que nenhuma versão se perca; ver rodada 06). Os totais vão para `historico_totais.parquet`, e o % dos válidos por candidato/partido na UF e no Brasil vai para `historico_serie.parquet` (série do painel). A série por candidato em cada município, UF e Brasil vai para `historico_candidatos/`, um bloco Parquet por ciclo (rodada 07).
 - **Tamanho:** o 1º ciclo completo (RJ + Presidente) ocupa cerca de 12 MB comprimidos.

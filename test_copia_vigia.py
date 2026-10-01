@@ -63,6 +63,19 @@ def test_copia_da_hora_espelha_todas_as_parciais(tmp_path: Path) -> None:
     assert [x["nome"] for x in registro] == ["2026-10-04_19h00", "2026-10-04_20h00"]
 
 
+def test_copia_espelha_raw_brasil(tmp_path: Path) -> None:
+    """Os brutos do presidente nas outras UFs (raw_brasil/) também vão para o espelho, não para a hora."""
+    d = _dados(tmp_path)
+    alvo = d / "raw_brasil" / "21270" / "sp-c0001-e021270-u" / "20261004_190000_1_a.json.gz"
+    alvo.parent.mkdir(parents=True)
+    with gzip.open(alvo, "wt") as fh:
+        fh.write("{}")
+    c = Copiador(d, tmp_path / "copia", agora=Relogio("2026-10-04T19:37:00"))
+    assert c.verificar()["raw_novos"] == 1
+    assert (tmp_path / "copia" / "raw_brasil" / alvo.relative_to(d / "raw_brasil")).exists()
+    assert not (tmp_path / "copia" / "instantaneos" / "2026-10-04_19h00" / "raw_brasil").exists()
+
+
 def test_copia_final_e_poda(tmp_path: Path) -> None:
     d = _dados(tmp_path)
     c = Copiador(d, tmp_path / "copia", manter=2, agora=Relogio("2026-10-04T18:00:00"))

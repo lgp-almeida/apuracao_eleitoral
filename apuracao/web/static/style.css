@@ -185,6 +185,8 @@ tr.clicavel:hover td { background: var(--grade); }
 @media (max-width: 900px) { .mapa-area { grid-template-columns: 1fr; } }
 .mapa { height: 640px; border-radius: 10px; border: 1px solid var(--borda); background: var(--superficie); }
 .mapa.mini { height: 420px; }
+.mapa.brasil { height: 360px; }
+.tabela-rolagem.brasil { max-height: 320px; font-size: 12px; }
 .legenda {
   background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px;
   font-size: 12px; color: var(--texto-2);

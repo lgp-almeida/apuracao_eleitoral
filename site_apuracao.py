@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cache-dir", default="cache_tse")
     p.add_argument("--coletar", action="store_true", help="rodar o coletor junto")
     p.add_argument("--intervalo", type=float, default=60.0, help="segundos entre ciclos do coletor")
+    p.add_argument("--sem-presidente-ufs", action="store_true",
+                   help="não baixar o presidente nas outras UFs (bloco 'Por estado' do cartão Brasil)")
     p.add_argument("--sem-boletim", action="store_true", help="não gravar o boletim a cada hora (só com --coletar)")
     p.add_argument("--boletim-min", type=int, default=60, help="minutos entre boletins (padrão: 60, na hora cheia)")
     p.add_argument("--interesse", nargs="+", default=[], metavar="CARGO:NUMERO", type=_cargo_numero,
@@ -78,7 +80,8 @@ def _cargo_numero(texto: str) -> tuple[int, int]:
 
 def _iniciar_coletor(args: argparse.Namespace, destino: Path, status: dict[str, Any]) -> threading.Event:
     parar = threading.Event()
-    coletor = Coletor(ClienteDivulgacao(args.ambiente), destino, args.uf, args.turno)
+    coletor = Coletor(ClienteDivulgacao(args.ambiente), destino, args.uf, args.turno,
+                      presidente_ufs=not args.sem_presidente_ufs)
 
     def rodar() -> None:
         status["ativo"] = True

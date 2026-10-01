@@ -130,6 +130,7 @@ async function atualizarPainel() {
   try { dados = await api("api/painel"); } catch (e) { return; }
   estado.painel = dados;
   desenharPainel();
+  atualizarBrasil();
 }
 
 function desenharPainel() {
@@ -484,7 +485,104 @@ function cartao(c) {
   }
   if (c.projecao) filhos.splice(filhos.length - 2, 0, ...blocoProjecao(c.projecao));
   if (c.cadeiras) filhos.push(...blocoCadeiras(c.cadeiras));
+  if (c.cargo === 1 && c.abrangencia === "BRASIL") filhos.push(blocoBrasil());
   return el("article", { class: "cartao" }, filhos);
+}
+
+// ---------------------------------------------------------------- presidente por UF (cartão Brasil, rodada 35)
+// O bloco é UM nó persistente, movido para o cartão a cada redesenho: o mapa do Leaflet sobrevive à troca.
+function blocoBrasil() {
+  if (!estado.brasilBloco) {
+    const sel = el("select", { id: "brasil-metrica", "aria-label": "Métrica do mapa por estado",
+      onchange: () => desenharBrasil() }, el("option", { value: "lider" }, "Quem lidera"));
+    estado.brasilBloco = el("div", { class: "brasil-ufs", hidden: true },
+      el("h3", {}, "Por estado"),
+      el("label", { class: "nota" }, "Mapa: ", sel),
+      el("div", { id: "brasil-mapa", class: "mapa brasil" }),
+      el("div", { id: "brasil-legenda", class: "legenda-linha" }),
+      el("div", { id: "brasil-tabela", class: "tabela-rolagem brasil" }),
+      el("p", { class: "nota" }, "Resultado do TSE em cada UF (o exterior só na tabela). Sem projeção nacional."));
+  }
+  if (estado.brasilMapa) setTimeout(() => estado.brasilMapa.invalidateSize(), 50);
+  return estado.brasilBloco;
+}
+
+async function atualizarBrasil() {
+  if (!estado.brasilBloco) return;  // sem cartão Brasil (ex.: eleição sem presidente)
+  try { estado.brasil = await api("api/presidente/ufs"); } catch (e) { return; }
+  if (!estado.brasilGeo) {
+    try { estado.brasilGeo = await api("geo/ufs.geojson"); } catch (e) { estado.brasilGeo = null; }
+  }
+  desenharBrasil();
+}
+
+function desenharBrasil() {
+  const d = estado.brasil, bloco = estado.brasilBloco;
+  if (!d || !bloco) return;
+  bloco.hidden = !d.ufs.length;
+  if (!d.ufs.length) return;
+  const sel = bloco.querySelector("#brasil-metrica");
+  const escolhido = sel.value;
+  sel.replaceChildren(el("option", { value: "lider" }, "Quem lidera"),
+    ...d.candidatos.map((c) => el("option", { value: String(c.NUMERO) }, `% de ${c.NUMERO} ${c.NOME_URNA}`)));
+  sel.value = [...sel.options].some((o) => o.value === escolhido) ? escolhido : "lider";
+  const nome = (x) => (x ? `${x.numero} ${x.nome}` : "—");
+  const cores = ["--serie-1", "--serie-2", "--serie-3"].map(cor);
+  const idx = new Map(d.candidatos.map((c, i) => [c.NUMERO, i]));
+  const semDado = cor("--sem-dado");
+  let corDe, legenda, valor;
+  if (sel.value === "lider") {
+    corDe = (u) => (!u || !u.primeiro ? semDado : idx.has(u.primeiro.numero) ? cores[idx.get(u.primeiro.numero)] : cor("--outros"));
+    legenda = [...d.candidatos.map((c, i) => [cores[i], `${c.NUMERO} ${c.NOME_URNA} (${c.PARTIDO})`]), [cor("--outros"), "Outros"]];
+    valor = (u) => (u.primeiro ? `lidera: ${nome(u.primeiro)} (${pct(u.primeiro.pct)})` : "sem apuração");
+  } else {
+    const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);
+    const v = (u) => (u && u.primeiro ? u.pct[sel.value] ?? null : null);
+    const vals = d.ufs.filter((u) => u.uf !== "ZZ").map(v).filter((x) => x !== null);
+    const qb = quebrasQuantis(vals);
+    corDe = (u) => {
+      const x = v(u);
+      if (x === null) return semDado;
+      let k = 0;
+      while (k < qb.length && x > qb[k]) k++;
+      return seq[Math.min(k, seq.length - 1)];
+    };
+    const lim = vals.length ? [Math.min(...vals), ...qb, Math.max(...vals)] : [];
+    legenda = lim.slice(0, -1).map((a, i) => [seq[i], `${pct(a)} – ${pct(lim[i + 1])}`]);
+    valor = (u) => `${sel.selectedOptions[0].textContent}: ${pct(v(u))}`;
+  }
+  legenda.push([semDado, "sem apuração"]);
+  bloco.querySelector("#brasil-legenda").replaceChildren(...legenda.map(([c, t]) =>
+    el("span", {}, el("span", { class: "amostra", style: { background: c } }), t)));
+  const porIbge = new Map(d.ufs.filter((u) => u.cd_ibge).map((u) => [String(u.cd_ibge), u]));
+  if (estado.brasilGeo) {
+    if (!estado.brasilMapa) {
+      estado.brasilMapa = L.map(bloco.querySelector("#brasil-mapa"), { preferCanvas: true, zoomSnap: 0.25 });
+      estado.brasilMapa.setView([-15, -54], 3);
+    }
+    const mapa = estado.brasilMapa;
+    if (mapa._camada) mapa.removeLayer(mapa._camada);
+    mapa._camada = L.geoJSON(estado.brasilGeo, {
+      style: (ft) => ({ fillColor: corDe(porIbge.get(ft.properties.codarea)), fillOpacity: 0.85,
+        color: cor("--superficie"), weight: 1 }),
+      onEachFeature: (ft, layer) => {
+        const u = porIbge.get(ft.properties.codarea);
+        layer.bindTooltip(() => el("div", {}, el("strong", {}, u ? u.nome : ft.properties.codarea), el("br"),
+          u ? `${pct(u.pct_secoes)} das seções · ${valor(u)}` : "sem dado"), { sticky: true });
+      },
+    }).addTo(mapa);
+    if (!mapa._enquadrado) { mapa.fitBounds(mapa._camada.getBounds(), { padding: [4, 4] }); mapa._enquadrado = true; }
+  }
+  bloco.querySelector("#brasil-mapa").hidden = !estado.brasilGeo;
+  const linhas = d.ufs.map((u) => ({ ...u, ordem: u.uf === "ZZ" ? "ZZZ" : u.nome, lider: nome(u.primeiro),
+    pct1: u.primeiro ? u.primeiro.pct : null, vice: nome(u.segundo), pct2: u.segundo ? u.segundo.pct : null }));
+  const formatar = (r, k) => (["pct_secoes", "pct1", "pct2"].includes(k) ? pct(r[k])
+    : k === "diferenca_pp" ? (r[k] === null ? "—" : `${fmtPct.format(r[k])} p.p.`)
+    : k === "ordem" ? `${r.nome}${r.final ? " ✓" : ""}` : r[k] ?? "—");
+  const tab = bloco.querySelector("#brasil-tabela");
+  tab.replaceChildren(tabelaOrdenavel([["UF", "ordem"], ["Apurado", "pct_secoes", true], ["1º", "lider"],
+    ["%", "pct1", true], ["2º", "vice"], ["%", "pct2", true], ["Diferença", "diferenca_pp", true]], linhas, formatar,
+  null, { ordem: estado.brasilOrdem || "ordem-asc", aoOrdenar: (o) => { estado.brasilOrdem = o; } }));
 }
 
 // votos de candidatura sub judice entram nos votos do candidato, mas não nos válidos
