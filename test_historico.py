@@ -1,0 +1,153 @@
+"""Importação de resultado histórico (microdados) no formato do site — offline, dados sintéticos."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import polars as pl
+import pytest
+from fastapi.testclient import TestClient
+
+from apuracao import historico as h
+from apuracao.web.app import create_app
+
+RIO, NIT, SP = 60011, 58653, 71072
+
+# detalhe_votacao_munzona: (turno, eleição, uf, município, zona, cargo, aptos, comparec., válidos, nominais,
+#                           legenda, brancos, nulos, seções)
+DETALHE = [
+    (1, 546, "RJ", RIO, 4, 3, 1000, 800, 700, 700, 0, 50, 50, 3),
+    (1, 546, "RJ", RIO, 5, 3, 500, 400, 350, 350, 0, 25, 25, 2),
+    (1, 546, "RJ", NIT, 71, 3, 300, 240, 200, 200, 0, 20, 20, 1),
+    (1, 546, "RJ", RIO, 4, 7, 1000, 800, 740, 700, 40, 30, 30, 3),
+    (1, 544, "RJ", RIO, 4, 1, 1000, 800, 760, 760, 0, 20, 20, 3),
+    (1, 544, "SP", SP, 1, 1, 2000, 1500, 1400, 1400, 0, 50, 50, 5),
+    (1, 544, "ZZ", 99999, 1, 1, 100, 50, 45, 45, 0, 3, 2, 1),
+    (2, 545, "RJ", RIO, 4, 1, 1000, 790, 770, 770, 0, 10, 10, 3),
+    (2, 545, "SP", SP, 1, 1, 2000, 1490, 1450, 1450, 0, 20, 20, 5),
+]
+DET_COLS = ["NR_TURNO", "CD_ELEICAO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "QT_APTOS", "QT_COMPARECIMENTO",
+            "QT_TOTAL_VOTOS_VALIDOS", "QT_VOTOS_NOMINAIS_VALIDOS", "QT_TOTAL_VOTOS_LEG_VALIDOS", "QT_VOTOS_BRANCOS",
+            "QT_TOTAL_VOTOS_NULOS", "QT_TOTAL_SECOES"]
+
+# consulta_cand: (turno, uf, cargo, número, nome, partido, nº partido, candidatura, situação)
+CAND = [
+    (1, "RJ", 3, 22, "CASTRO", "PL", 22, "INAPTO", "ELEITO"),     # inapto HOJE, eleito em 2022
+    (1, "RJ", 3, 40, "FREIXO", "PSB", 40, "APTO", "NÃO ELEITO"),
+    (1, "RJ", 3, 40, "FREIXO (substituído)", "PSB", 40, "INAPTO", None),  # nº repetido: fica o APTO
+    (1, "RJ", 7, 55123, "FULANA", "PSD", 55, "APTO", "ELEITO POR QP"),
+    (1, "RJ", 7, 55456, "BELTRANO", "PSD", 55, "APTO", "SUPLENTE"),
+    (1, "BR", 1, 13, "LULA", "PT", 13, "APTO", "2º TURNO"),
+    (1, "BR", 1, 22, "BOLSONARO", "PL", 22, "APTO", "2º TURNO"),
+    (2, "BR", 1, 13, "LULA", "PT", 13, "APTO", "ELEITO"),
+    (2, "BR", 1, 22, "BOLSONARO", "PL", 22, "APTO", "NÃO ELEITO"),
+]
+# votação por seção: (turno, uf, município, cargo, votável, votos)
+VOTOS_UF = [
+    (1, "RJ", RIO, 3, 22, 700), (1, "RJ", RIO, 3, 40, 350), (1, "RJ", NIT, 3, 22, 50), (1, "RJ", NIT, 3, 40, 150),
+    (1, "RJ", RIO, 3, 95, 75), (1, "RJ", RIO, 3, 96, 75),
+    (1, "RJ", RIO, 7, 55123, 500), (1, "RJ", RIO, 7, 55456, 200), (1, "RJ", RIO, 7, 55, 40), (1, "RJ", RIO, 7, 96, 30),
+]
+VOTOS_BR = [
+    (1, "RJ", RIO, 1, 13, 300), (1, "RJ", RIO, 1, 22, 460), (1, "SP", SP, 1, 13, 800), (1, "SP", SP, 1, 22, 600),
+    (1, "ZZ", 99999, 1, 13, 20), (1, "ZZ", 99999, 1, 22, 25),
+    (2, "RJ", RIO, 1, 13, 330), (2, "RJ", RIO, 1, 22, 440), (2, "SP", SP, 1, 13, 800), (2, "SP", SP, 1, 22, 650),
+]
+
+
+def _detalhe() -> pl.DataFrame:
+    df = pl.DataFrame([[str(x) for x in r] for r in DETALHE], schema=DET_COLS, orient="row")
+    return df.with_columns(
+        (pl.col("QT_APTOS").cast(pl.Int64) - pl.col("QT_COMPARECIMENTO").cast(pl.Int64)).cast(pl.String).alias("QT_ABSTENCOES"),
+        pl.col("QT_COMPARECIMENTO").alias("QT_VOTOS"), pl.lit("0").alias("QT_TOTAL_VOTOS_ANULADOS"),
+        pl.lit("0").alias("QT_TOTAL_VOTOS_ANUL_SUBJUD"),
+        pl.when(pl.col("CD_CARGO") == "1").then(pl.lit("Presidente")).when(pl.col("CD_CARGO") == "3")
+        .then(pl.lit("Governador")).otherwise(pl.lit("Deputado Estadual")).alias("DS_CARGO"),
+        pl.lit("02/10/2022").alias("DT_ULTIMA_TOTALIZACAO"), pl.lit("20:00:00").alias("HH_ULTIMA_TOTALIZACAO"),
+    )
+
+
+def _cand() -> pl.DataFrame:
+    rows = [{"NR_TURNO": str(t), "SG_UF": uf, "CD_CARGO": str(c), "NR_CANDIDATO": str(n), "NM_URNA_CANDIDATO": nm,
+             "NM_CANDIDATO": nm, "SQ_CANDIDATO": str(i), "SG_PARTIDO": sg, "NR_PARTIDO": str(np_),
+             "SG_FEDERACAO": None, "NM_FEDERACAO": None, "NM_COLIGACAO": "PARTIDO ISOLADO",
+             "DS_COMPOSICAO_COLIGACAO": sg, "DS_SITUACAO_CANDIDATURA": apto, "DS_SIT_TOT_TURNO": sit,
+             "DT_GERACAO": "29/09/2026"}
+            for i, (t, uf, c, n, nm, sg, np_, apto, sit) in enumerate(CAND)]
+    return pl.DataFrame(rows, schema={k: pl.String for k in rows[0]})
+
+
+def _votos(rows: list[tuple]) -> pl.LazyFrame:
+    return pl.DataFrame(rows, schema=["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "CD_CARGO", "NR_VOTAVEL", "QT_VOTOS"],
+                        orient="row").lazy()
+
+
+def _tabelas(turno: int) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    tot = h.totais(_detalhe(), "RJ", turno)
+    cand, part = h.candidatos_e_partidos(_votos(VOTOS_UF), _votos(VOTOS_BR), _cand(), tot, "RJ", turno)
+    return h.vagas(tot, cand), cand, part
+
+
+def _row(df: pl.DataFrame, **kw: object) -> dict:
+    cond = pl.lit(True)
+    for k, val in kw.items():
+        cond &= pl.col(k).is_null() if val is None else pl.col(k) == val
+    return df.filter(cond).row(0, named=True)
+
+
+def test_totais_por_abrangencia() -> None:
+    tot, _, _ = _tabelas(1)
+    gov_uf = _row(tot, CARGO=3, ABRANGENCIA="uf")
+    assert (gov_uf["ELEITORADO"], gov_uf["VALIDOS"], gov_uf["SECOES_TOTAL"]) == (1800, 1250, 6)
+    assert gov_uf["PCT_ABSTENCAO"] == pytest.approx(100 * 360 / 1800)
+    assert _row(tot, CARGO=3, ABRANGENCIA="mun", CD_MUNICIPIO=RIO)["VALIDOS"] == 1050  # zonas somadas
+    pres_br = _row(tot, CARGO=1, ABRANGENCIA="br")
+    assert pres_br["VALIDOS"] == 760 + 1400 + 45 and pres_br["ELEICAO"] == 544  # Brasil inclui SP e exterior
+    assert tot.filter(pl.col("UF") == "SP").is_empty()  # municípios de outras UFs não entram
+    assert gov_uf["TOTALIZACAO_FINAL"] and gov_uf["PCT_SECOES_TOTALIZADAS"] == 100.0
+
+
+def test_candidatos_situacao_e_destinacao() -> None:
+    _, cand, _ = _tabelas(1)
+    castro = _row(cand, CARGO=3, ABRANGENCIA="uf", NUMERO=22)
+    assert castro["VOTOS"] == 750 and castro["PCT_VALIDOS"] == pytest.approx(60.0) and castro["SEQ"] == 1
+    assert castro["SITUACAO"] == "Eleito" and castro["ELEITO"]
+    assert castro["DESTINACAO"] == "candidatura INAPTO no cadastro de 29/09/2026"  # não vira "anulado"
+    assert _row(cand, CARGO=3, ABRANGENCIA="uf", NUMERO=40)["NOME_URNA"] == "FREIXO"  # APTO vence o duplicado
+    assert _row(cand, CARGO=7, ABRANGENCIA="uf", NUMERO=55123)["SITUACAO"] == "Eleito por QP"
+    lula = _row(cand, CARGO=1, ABRANGENCIA="br", NUMERO=13)
+    assert lula["VOTOS"] == 1120 and lula["SITUACAO"] == "2º turno" and lula["ELEITO"]
+    assert cand.filter(pl.col("NUMERO").is_in([95, 96, 55])).is_empty()  # brancos, nulos e legenda fora
+
+
+def test_partidos_vagas_e_segundo_turno() -> None:
+    tot, _, part = _tabelas(1)
+    psd = _row(part, CARGO=7, ABRANGENCIA="uf", NR_PARTIDO=55)
+    assert (psd["VOTOS_NOMINAIS"], psd["VOTOS_LEGENDA"], psd["VOTOS_TOTAL"], psd["PARTIDO"]) == (700, 40, 740, "PSD")
+    assert psd["VAGAS_AGREMIACAO"] == 1 and psd["ELEICAO"] == 546
+    assert _row(tot, CARGO=7, ABRANGENCIA="uf")["VAGAS"] == 1 and _row(tot, CARGO=3, ABRANGENCIA="uf")["VAGAS"] == 1
+    tot2, cand2, part2 = _tabelas(2)
+    assert set(tot2["CARGO"]) == {1} and part2.is_empty()
+    assert _row(cand2, CARGO=1, ABRANGENCIA="br", NUMERO=13)["SITUACAO"] == "Eleito"
+
+
+def test_importar_e_abrir_no_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(h, "load_detalhe", lambda ano, cache: _detalhe())
+    monkeypatch.setattr(h, "load_candidatos", lambda ano, cache: _cand())
+    monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    monkeypatch.setattr(h, "municipios_tse_ibge", lambda uf, cache: pl.DataFrame(
+        {"UF": ["RJ", "RJ"], "CD_MUNICIPIO": [RIO, NIT], "CD_MUNICIPIO_IBGE": [3304557, 3303302],
+         "NM_MUNICIPIO": ["RIO DE JANEIRO", "NITERÓI"], "CAPITAL": [True, False], "ZONAS": ["4,5", "71"]}))
+    destino = tmp_path / "historico_2022_t1"
+    n = h.importar(2022, "RJ", 1, tmp_path, destino)
+    assert n["municipios"] == 2 and n["candidatos"] > 0
+    st = json.loads((destino / "status.json").read_text())
+    assert st["ano"] == 2022 and st["erro"] is None
+
+    site = TestClient(create_app(destino, "RJ", tmp_path))
+    assert site.get("/api/status").json()["coletor"]["ano"] == 2022
+    cartoes = {(c["cargo"], c["abrangencia"]) for c in site.get("/api/painel").json()["cartoes"]}
+    assert cartoes == {(1, "BRASIL"), (1, "RJ"), (3, "RJ"), (7, "RJ")}
+    mapa = site.get("/api/mapa?cargo=3&metrica=vencedor").json()
+    assert mapa["itens"]["3304557"]["valor"] == 22 and mapa["itens"]["3303302"]["valor"] == 40

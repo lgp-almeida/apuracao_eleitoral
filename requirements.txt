@@ -1,0 +1,24 @@
+# Versões FIXADAS (rodada 27): as que passaram nos testes e no ensaio geral antes de 4/10/2026.
+# Para atualizar: mude aqui, reinstale, rode `pytest -q` e `python ensaio_apuracao.py`, e regrave o lock
+# com `pip freeze > requirements-lock.txt`. Instalação idêntica à testada (inclui as dependências
+# indiretas): `pip install -r requirements-lock.txt`.
+polars==1.44.2      # 1.44 tem um panic em pl.format sobre full join (ver CLAUDE.md); não suba sem testar
+numpy==2.5.1        # estatística do perfil × voto (apuracao/perfil.py)
+requests==2.34.2
+urllib3==2.8.0      # via requests; a 2.7.0 tinha 3 CVEs (pip-audit, rodada 27)
+xlsxwriter==3.2.9
+# site local de apuração
+fastapi==0.142.1
+uvicorn==0.54.0
+# mapas por bairro e perfil por local (malhas do IBGE)
+geopandas==1.1.4
+shapely==2.1.2
+pandas==3.0.3
+matplotlib==3.11.1  # exportação do mapa em PNG/SVG/JPEG
+# desenvolvimento / testes
+pytest==9.1.1
+openpyxl==3.1.5
+httpx==0.28.1       # TestClient do FastAPI
+playwright==1.63.0  # testes de navegador; usa o Chrome instalado, sem baixar navegador
+# mapa_votacao_13713_rj.py (script legado)
+geobr==2.1.1

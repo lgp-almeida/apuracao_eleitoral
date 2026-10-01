@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apuração 2026</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topo">
+    <div class="marca">
+      <h1 id="titulo">Apuração</h1>
+      <span id="ambiente" class="selo"></span>
+    </div>
+    <div id="situacao" class="situacao" aria-live="polite"></div>
+    <div class="alertas-controle">
+      <button type="button" id="botao-alertas" aria-haspopup="dialog" aria-expanded="false"
+              aria-controls="painel-alertas">Alertas <span id="alertas-contagem" class="contagem" hidden></span></button>
+      <label class="som" title="Tocar um som a cada alerta novo"><input type="checkbox" id="alertas-som"> som</label>
+    </div>
+    <nav class="abas" role="tablist">
+      <button role="tab" data-aba="painel" aria-selected="true">Painel</button>
+      <button role="tab" data-aba="candidato" aria-selected="false">Candidato</button>
+      <button role="tab" data-aba="mapas" aria-selected="false">Mapas</button>
+      <button role="tab" data-aba="comparacao" aria-selected="false" hidden id="botao-comparacao">Comparação</button>
+      <button role="tab" data-aba="perfil" aria-selected="false">Perfil × voto</button>
+      <button role="tab" data-aba="transferencia" aria-selected="false">1º → 2º turno</button>
+    </nav>
+    <div id="faixa-alertas" class="faixa-alertas" role="alert" hidden></div>
+  </header>
+
+  <aside id="painel-alertas" class="painel-alertas" role="dialog" aria-label="Alertas" hidden>
+    <div class="painel-cab">
+      <h2>Alertas</h2>
+      <button type="button" id="fechar-alertas" class="fechar" aria-label="Fechar">×</button>
+    </div>
+    <h3>Deputados acompanhados</h3>
+    <div id="alertas-interesse"></div>
+    <p class="nota">Para acompanhar um deputado, consulte-o na aba Candidato e clique em “Acompanhar”. Você é
+      avisado quando ele vira consolidado, entra ou sai da disputa e, no fim, se foi eleito.</p>
+    <h3>Histórico</h3>
+    <ol id="alertas-historico" class="alertas-historico" reversed></ol>
+  </aside>
+  <div id="avisos" class="avisos" aria-live="polite"></div>
+  <div id="tv-barra" class="tv-barra" hidden aria-live="polite"></div>
+
+  <main>
+    <section id="aba-painel" class="aba" role="tabpanel">
+      <div id="painel-vazio" class="aviso" hidden>
+        Ainda não há resultados coletados. Inicie o coletor
+        (<code>python site_apuracao.py --coletar</code> ou <code>python coletar_resultados.py</code>).
+      </div>
+      <p class="nota painel-acoes"><button type="button" class="link" id="botao-tv">Modo TV (tela cheia, um cargo por vez)</button></p>
+      <details id="mudancas" class="caixa mudancas-caixa" open hidden>
+        <summary id="mudancas-titulo">O que mudou</summary>
+        <ul id="mudancas-lista" class="mudancas-lista"></ul>
+      </details>
+      <details id="destaque" class="caixa destaque-caixa" hidden>
+        <summary>Destacar partidos/federações nas listas de eleitos <span id="destaque-resumo" class="nota"></span></summary>
+        <div id="destaque-opcoes" class="destaque-opcoes"></div>
+        <p class="nota">Marcar uma federação destaca todos os partidos dela. A escolha fica neste navegador e no
+          endereço da página.
+          <button type="button" class="link" id="destaque-limpar">Limpar</button> ·
+          <button type="button" class="link" id="destaque-link">Copiar link</button><span id="destaque-link-msg" aria-live="polite"></span></p>
+      </details>
+      <div id="cartoes" class="grade"></div>
+    </section>
+
+    <section id="aba-candidato" class="aba" role="tabpanel" hidden>
+      <form id="form-candidato" class="filtros">
+        <label>Cargo
+          <select id="cand-cargo">
+            <option value="1">Presidente</option>
+            <option value="3">Governador</option>
+            <option value="5">Senador</option>
+            <option value="6">Deputado Federal</option>
+            <option value="7" selected>Deputado Estadual</option>
+          </select>
+        </label>
+        <label>Número ou nome
+          <input id="cand-numero" list="cand-lista" autocomplete="off" required placeholder="ex.: 13713">
+          <datalist id="cand-lista"></datalist>
+        </label>
+        <button type="submit">Consultar</button>
+      </form>
+      <div id="cand-resultado"></div>
+
+      <details class="caixa" id="caixa-planilha">
+        <summary>Planilha histórica (microdados por local, zona, bairro e seção)</summary>
+        <form id="form-planilha" class="filtros">
+          <label>Ano
+            <select id="pl-ano"><option>2022</option><option>2024</option><option>2026</option></select>
+          </label>
+          <label>Cargo
+            <select id="pl-cargo">
+              <option>presidente</option><option>governador</option><option>senador</option>
+              <option>deputado federal</option><option selected>deputado estadual</option>
+              <option>prefeito</option><option>vereador</option>
+            </select>
+          </label>
+          <label>Número <input id="pl-numero" type="number" required></label>
+          <label>Município (opcional; obrigatório p/ prefeito e vereador) <input id="pl-municipio"></label>
+          <label>Comparar locais com <input id="pl-comparar" type="number" placeholder="padrão: o ano"></label>
+          <button type="submit">Gerar .xlsx</button>
+        </form>
+        <p class="nota">Usa os microdados por seção do TSE (2026 só depois que o TSE publicar, dias após o pleito).
+          A primeira geração de um ano pode levar alguns minutos (download).</p>
+        <p id="pl-msg" class="nota" aria-live="polite"></p>
+      </details>
+    </section>
+
+    <section id="aba-mapas" class="aba" role="tabpanel" hidden>
+      <form id="form-mapa" class="filtros">
+        <label>Cargo
+          <select id="mapa-cargo">
+            <option value="1">Presidente</option>
+            <option value="3" selected>Governador</option>
+            <option value="5">Senador</option>
+            <option value="6">Deputado Federal</option>
+            <option value="7">Deputado Estadual</option>
+          </select>
+        </label>
+        <label id="mapa-l-camada" hidden>Camada
+          <select id="mapa-camada">
+            <option value="voto" selected>Voto</option>
+            <option value="perfil">Perfil do eleitorado</option>
+            <option value="residuo">Resíduo do Perfil × voto</option>
+          </select>
+        </label>
+        <label id="mapa-l-metrica">Mostrar
+          <select id="mapa-metrica">
+            <option value="vencedor">Mais votado no município</option>
+            <option value="pct_candidato">% dos válidos de um candidato</option>
+            <option value="votos_candidato">Votos de um candidato</option>
+            <option value="abstencao_pct">Abstenção (%)</option>
+            <option value="comparecimento_pct">Comparecimento (%)</option>
+            <option value="brancos_nulos_pct">Brancos + nulos (%)</option>
+            <option value="brancos_pct">Brancos (%)</option>
+            <option value="nulos_pct">Nulos (%)</option>
+            <option value="secoes_totalizadas_pct">Seções totalizadas (%)</option>
+          </select>
+        </label>
+        <label id="mapa-l-indicador" hidden>Indicador <select id="mapa-indicador"></select></label>
+        <label>Candidato
+          <input id="mapa-numero" list="mapa-lista" autocomplete="off" disabled placeholder="número">
+          <datalist id="mapa-lista"></datalist>
+        </label>
+        <label>Detalhe
+          <select id="mapa-detalhe">
+            <option value="municipios" selected>Municípios</option>
+            <option value="bairros">Bairros (IBGE)</option>
+            <option value="locais">Locais de votação (pontos)</option>
+          </select>
+        </label>
+        <label id="mapa-l-ano" hidden>Ano (microdados) <select id="mapa-ano"></select></label>
+        <label id="mapa-l-municipio" hidden>Área <select id="mapa-municipio"></select></label>
+        <label class="check" id="mapa-l-locais"><input type="checkbox" id="mapa-locais"><span id="rotulo-locais"> Locais de votação</span></label>
+        <button type="submit">Atualizar mapa</button>
+      </form>
+      <div id="linha-tempo" class="linha-tempo" hidden>
+        <button type="button" id="lt-play" aria-label="Reproduzir a apuração">▶</button>
+        <input type="range" id="lt-range" min="0" max="0" value="0" aria-label="Momento da apuração">
+        <span id="lt-rotulo" aria-live="polite"></span>
+      </div>
+      <p class="nota">
+        <button type="button" id="copiar-link" class="link">Copiar link deste mapa</button>
+        <span id="copiar-msg" aria-live="polite"></span>
+        · Baixar mapa:
+        <button type="button" class="link baixar-mapa" data-mapa="mapa" data-formato="png">PNG</button>
+        <button type="button" class="link baixar-mapa" data-mapa="mapa" data-formato="svg">SVG</button>
+        <button type="button" class="link baixar-mapa" data-mapa="mapa" data-formato="jpeg">JPEG</button>
+        <span id="baixar-msg" class="baixar-msg" aria-live="polite"></span>
+      </p>
+      <p id="lt-nota" class="nota" hidden></p>
+      <p id="bairros-nota" class="nota" hidden></p>
+      <p id="locais-nota" class="nota" hidden></p>
+      <div class="mapa-area">
+        <div id="mapa" class="mapa" aria-label="Mapa dos municípios"></div>
+        <aside id="mapa-legenda" class="legenda"></aside>
+      </div>
+      <p class="nota">Resultados em tempo real chegam ao nível de município. Mapas por local de votação dependem
+        dos microdados publicados pelo TSE após o pleito. Malha: IBGE. Fundo: © OpenStreetMap.</p>
+    </section>
+    <section id="aba-comparacao" class="aba" role="tabpanel" hidden>
+      <form id="form-comp" class="filtros">
+        <label>Detalhe
+          <select id="comp-detalhe">
+            <option value="municipios" selected>Municípios</option>
+            <option value="bairros">Bairros (IBGE)</option>
+          </select>
+        </label>
+        <label id="comp-l-cargo">Cargo <select id="comp-cargo"></select></label>
+        <label class="comp-bairro" hidden>Ano A <select id="comp-ano-a"></select></label>
+        <label class="comp-bairro" hidden>Cargo A <select id="comp-cargo-a"></select></label>
+        <label class="comp-bairro" hidden>Ano B <select id="comp-ano-b"></select></label>
+        <label class="comp-bairro" hidden>Cargo B <select id="comp-cargo-b"></select></label>
+        <label>Comparar
+          <select id="comp-metrica">
+            <option value="abstencao">Abstenção (p.p.)</option>
+            <option value="comparecimento">Comparecimento (p.p.)</option>
+            <option value="brancos_nulos">Brancos + nulos (p.p.)</option>
+            <option value="brancos">Brancos (p.p.)</option>
+            <option value="nulos">Nulos (p.p.)</option>
+            <option value="eleitorado">Eleitorado (variação %)</option>
+            <option value="partido">Partido — % dos válidos (p.p.)</option>
+            <option value="candidato">Candidato — % dos válidos (p.p.)</option>
+          </select>
+        </label>
+        <label id="comp-l-partido" hidden>Partido <select id="comp-partido"></select></label>
+        <label id="comp-l-na" hidden><span id="comp-rot-a">Nº em A</span> <input id="comp-num-a" type="number"></label>
+        <label id="comp-l-nb" hidden><span id="comp-rot-b">Nº em B</span> <input id="comp-num-b" type="number"></label>
+        <button type="submit">Comparar</button>
+      </form>
+      <p class="nota">
+        <button type="button" id="comp-copiar" class="link">Copiar link desta comparação</button>
+        <span id="comp-copiar-msg" aria-live="polite"></span>
+        · Baixar mapa:
+        <button type="button" class="link baixar-mapa" data-mapa="compMapa" data-formato="png">PNG</button>
+        <button type="button" class="link baixar-mapa" data-mapa="compMapa" data-formato="svg">SVG</button>
+        <button type="button" class="link baixar-mapa" data-mapa="compMapa" data-formato="jpeg">JPEG</button>
+        <span class="baixar-msg" aria-live="polite"></span>
+      </p>
+      <p id="comp-bairros-nota" class="nota" hidden></p>
+      <div id="comp-fichas" class="fichas"></div>
+      <div class="mapa-area">
+        <div id="comp-mapa" class="mapa" aria-label="Mapa da diferença por município"></div>
+        <aside id="comp-legenda" class="legenda"></aside>
+      </div>
+      <h3 class="sub" id="comp-titulo-tabela">Por município (clique no cabeçalho para ordenar)</h3>
+      <div id="comp-tabela" class="tabela-rolagem"></div>
+      <p class="nota">Diferença = ano atual − ano de referência. Percentuais sobre o total de cada ano; senador:
+        1 vaga em 2022 e 2 em 2026 (cada eleitor votou duas vezes), então os percentuais não são diretamente equivalentes.
+        Partidos e números de candidato do ambiente de simulado são fictícios.</p>
+    </section>
+    <section id="aba-perfil" class="aba" role="tabpanel" hidden>
+      <form id="form-perfil" class="filtros">
+        <fieldset class="grupo">
+          <legend>Voto (eixo Y)</legend>
+          <label>Ano <select id="pf-ano"></select></label>
+          <label>Turno <select id="pf-turno"><option value="1">1º</option><option value="2">2º</option></select></label>
+          <label>Cargo <select id="pf-cargo"></select></label>
+          <label>De <select id="pf-tipo"><option value="numero">Candidato</option><option value="partido">Partido</option></select></label>
+          <label id="pf-l-numero">Candidato
+            <input id="pf-numero" list="pf-lista" autocomplete="off" placeholder="número ou nome">
+            <datalist id="pf-lista"></datalist>
+          </label>
+          <label id="pf-l-partido" hidden>Partido <select id="pf-partido"></select></label>
+        </fieldset>
+        <fieldset class="grupo">
+          <legend>Comparar com (eixo X)</legend>
+          <label>Eixo X <select id="pf-x"></select></label>
+          <label class="pf-xv" hidden>Ano <select id="pf-x-ano"></select></label>
+          <label class="pf-xv" hidden>Turno <select id="pf-x-turno"><option value="1">1º</option><option value="2">2º</option></select></label>
+          <label class="pf-xv" hidden>Cargo <select id="pf-x-cargo"></select></label>
+          <label class="pf-xv" hidden>De <select id="pf-x-tipo"><option value="numero">Candidato</option><option value="partido">Partido</option></select></label>
+          <label class="pf-xv" id="pf-l-x-numero" hidden>Candidato
+            <input id="pf-x-numero" list="pf-x-lista" autocomplete="off" placeholder="número ou nome">
+            <datalist id="pf-x-lista"></datalist>
+          </label>
+          <label class="pf-xv" id="pf-l-x-partido" hidden>Partido <select id="pf-x-partido"></select></label>
+        </fieldset>
+        <fieldset class="grupo">
+          <legend>Unidade de análise</legend>
+          <label>Unidade
+            <select id="pf-unidade">
+              <option value="bairro">Bairros do IBGE (31 municípios)</option>
+              <option value="local">Locais de votação (estado inteiro)</option>
+            </select>
+          </label>
+          <label>Município <select id="pf-municipio"><option value="">Todos com bairros</option></select></label>
+          <label>Mín. de votos válidos <input id="pf-min" type="number" min="0" step="50" value="200"></label>
+          <label class="check"><input type="checkbox" id="pf-ponderar"> Ponderar pelos votos válidos</label>
+        </fieldset>
+        <button type="submit">Analisar</button>
+      </form>
+      <p class="nota">
+        <button type="button" id="pf-copiar" class="link">Copiar link desta análise</button>
+        <span id="pf-copiar-msg" aria-live="polite"></span>
+      </p>
+      <p id="pf-msg" class="nota" aria-live="polite"></p>
+      <div id="pf-fichas" class="fichas"></div>
+      <div class="perfil-duplo">
+        <div class="bloco">
+          <h2 id="pf-titulo-grafico">Dispersão por bairro</h2>
+          <div id="pf-grafico"></div>
+        </div>
+        <div class="bloco">
+          <h2>Correlação com cada indicador</h2>
+          <p class="sub">Clique numa linha para usá-la no eixo X. r = Pearson; ρ = Spearman (postos).</p>
+          <div id="pf-correlacoes" class="tabela-rolagem"></div>
+        </div>
+      </div>
+      <div class="perfil-duplo">
+        <div><h3 class="sub">Mais ACIMA da tendência (voto maior que o esperado pelo eixo X)</h3><div id="pf-acima"></div></div>
+        <div><h3 class="sub">Mais ABAIXO da tendência</h3><div id="pf-abaixo"></div></div>
+      </div>
+      <div class="bloco" id="pf-reg-bloco">
+        <h2>Vários indicadores ao mesmo tempo</h2>
+        <p class="sub">Efeito de cada indicador no voto com os demais FIXOS (regressão múltipla): p.p. de voto por
+          +1 desvio-padrão do indicador. Compare com o r simples: um indicador pode "sumir" ou até inverter o sinal
+          quando os outros entram (ex.: escolaridade controlada por renda). VIF acima de ~5 = indicadores que andam
+          juntos demais; o efeito individual fica instável.</p>
+        <div id="pf-reg-ind" class="pf-reg-ind"></div>
+        <p class="nota"><button type="button" id="pf-reg-btn" class="link">Recalcular com os indicadores marcados</button></p>
+        <div id="pf-reg-fichas" class="fichas"></div>
+        <div id="pf-reg"></div>
+      </div>
+      <p class="nota">Correlação <strong>ecológica</strong>: compara bairros ou locais, não pessoas; associação não é
+        causa e não diz como cada eleitor votou (inclusive na transferência entre eleições).
+        Perfil do TSE = eleitores inscritos nos locais de votação (do bairro ou do próprio local), no ano da eleição.
+        Censo 2022 (IBGE) = moradores: do bairro; ou, por local, dos setores censitários a até 800 m dele (sem
+        nenhum no raio, o setor que o contém). Cada local conta no bairro que contém sua coordenada.
+        IC 95% e p-valor pela transformação z de Fisher (aproximação normal; com peso, n efetivo de Kish).
+        Em prefeito/vereador, bairros de municípios onde o alvo não concorreu ficam de fora.</p>
+    </section>
+
+    <section id="aba-transferencia" class="aba" role="tabpanel" hidden>
+      <form id="form-tf" class="filtros">
+        <label>Fonte
+          <select id="tf-fonte">
+            <option value="microdados" selected>Microdados do TSE (seção, local, município)</option>
+            <option value="tempo_real">Tempo real, 1º × 2º turno (municípios)</option>
+          </select>
+        </label>
+        <label class="tf-md">Ano <select id="tf-ano"></select></label>
+        <label>Cargo <select id="tf-cargo"></select></label>
+        <label class="tf-md">Unidade
+          <select id="tf-nivel">
+            <option value="secao">Seção</option>
+            <option value="local" selected>Local de votação</option>
+            <option value="municipio">Município</option>
+          </select>
+        </label>
+        <label class="tf-md">Área <select id="tf-municipio"></select></label>
+        <button type="submit">Calcular</button>
+      </form>
+      <p class="nota"><button type="button" class="link" id="tf-link">Copiar link desta análise</button>
+        <span id="tf-link-msg" aria-live="polite"></span></p>
+      <p id="tf-msg" class="nota" aria-live="polite"></p>
+      <div id="tf-resultado"></div>
+      <p class="nota">Inferência <strong>ecológica</strong>: compara unidades (seções, locais ou municípios), não pessoas.
+        A matriz é o padrão médio que melhor explica as diferenças entre as unidades de cada região (zona, nas seções;
+        município, nos locais), com cada linha somando 100% e nenhuma célula negativa, combinado pelo eleitorado.
+        O intervalo (bootstrap por local de votação) mede só a variação amostral; o viés de agregação — o
+        comportamento mudar com a composição da unidade — não entra nele: compare as unidades (seção × local ×
+        município). A validação prevê o 2º turno de locais fora da amostra e compara com o “swing uniforme”.
+        Na noite do 2º turno só há municípios (tempo real): 92 unidades, intervalos largos.</p>
+    </section>
+  </main>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

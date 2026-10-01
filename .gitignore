@@ -1,0 +1,18 @@
+# Lista de permissão: tudo fica de fora, exceto os scripts, as pastas apuracao/ e docs/
+# e o mínimo para rodar e testar (dependências, configuração do pytest, recortes de teste do TSE).
+/*
+!/.gitignore
+!/*.py
+!/apuracao/
+!/docs/
+!/tests/
+!/requirements.txt
+!/requirements-lock.txt
+!/pytest.ini
+!/CLAUDE.md
+
+# dados, caches e artefatos (mesmo que apareçam dentro das pastas permitidas)
+__pycache__/
+*.pyc
+.pytest_cache/
+*.tmp
