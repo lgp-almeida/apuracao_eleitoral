@@ -10,6 +10,7 @@
 !/requirements-lock.txt
 !/pytest.ini
 !/CLAUDE.md
+!/README.md
 
 # dados, caches e artefatos (mesmo que apareçam dentro das pastas permitidas)
 __pycache__/
