@@ -48,7 +48,7 @@ def test_painel(site: TestClient) -> None:
     assert cartoes[5]["proporcional"] and cartoes[5]["partidos"]
 
 
-def test_presidente_por_uf(site: TestClient) -> None:
+def test_presidente_por_uf(site: TestClient, tmp_path: Path) -> None:
     d = site.get("/api/presidente/ufs").json()
     assert [u["uf"] for u in d["ufs"]] == ["RJ", "SP"] and len(d["candidatos"]) == 3
     sp = d["ufs"][1]
@@ -56,6 +56,14 @@ def test_presidente_por_uf(site: TestClient) -> None:
     assert sp["primeiro"]["pct"] >= sp["segundo"]["pct"]
     assert sp["diferenca_pp"] == pytest.approx(sp["primeiro"]["pct"] - sp["segundo"]["pct"], abs=0.01)
     assert set(sp["pct"]) == {str(c["NUMERO"]) for c in d["candidatos"]}
+    # hint do mapa: todos os candidatos, em ordem de votos, e os não válidos do TSE
+    votos = [c["votos"] for c in sp["candidatos"]]
+    assert len(sp["candidatos"]) > 3 and votos == sorted(votos, reverse=True)
+    assert sp["candidatos"][0]["numero"] == sp["primeiro"]["numero"]
+    import polars as pl
+    t = pl.read_parquet(tmp_path / "dados" / "ultimo" / "brasil_totais.parquet").filter(pl.col("UF") == "SP").row(0, named=True)
+    for k in ("brancos", "pct_brancos", "nulos", "pct_nulos", "abstencao", "pct_abstencao", "comparecimento"):
+        assert sp[k] is not None and sp[k] == t[k.upper()], k
 
 
 def test_presidente_por_uf_exterior_por_ultimo() -> None:
@@ -76,6 +84,7 @@ def test_presidente_por_uf_exterior_por_ultimo() -> None:
     assert d["ufs"][0]["primeiro"] is None and d["ufs"][0]["diferenca_pp"] is None   # AC sem apuração
     assert d["ufs"][1]["primeiro"]["numero"] == 10 and d["ufs"][2]["primeiro"]["numero"] == 20
     assert [c["NUMERO"] for c in d["candidatos"]] == [10, 20]                          # 230 × 170 votos
+    assert [c["numero"] for c in d["ufs"][2]["candidatos"]] == [20, 10]                # exterior: 70 × 30
 
 
 def test_candidato(site: TestClient) -> None:

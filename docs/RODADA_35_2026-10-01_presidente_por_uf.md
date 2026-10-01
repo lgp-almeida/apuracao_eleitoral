@@ -49,6 +49,26 @@ Até aqui, o coletor baixava o EA14 nacional (`br-e<fed>-ab.json`), mas descarta
 - Simulado real (`coletar_resultados.py --ambiente simulado --uma-vez`): 493 arquivos (466 + 27). `brasil_totais` tem 28 linhas (27 UFs e o exterior). `ultimo/totais` ficou só com o RJ e a série só com BR e RJ. O site mostrou o mapa e a tabela com a malha real do IBGE.
 - O ensaio geral não foi rodado nesta rodada: o `detalhe_votacao_secao_2022.zip` está incompleto no cache. O EA14 do ensaio só tem RJ e BR, então o comportamento dele não muda.
 
+## Complemento: tabela no hint de cada UF
+
+Pedido do usuário: no hint de cada estado do mapa, uma tabela com o % apurado, o % de cada candidato, brancos, nulos e abstenção. O custo é baixo: os dados já estavam em `brasil_*`, então não há pedido novo ao TSE.
+
+- **`presidente_por_uf`**: cada UF ganha:
+  - `candidatos`, com todos os candidatos em ordem de votos (número, nome, partido, votos e % dos válidos);
+  - `brancos`/`pct_brancos`, `nulos`/`pct_nulos`, `abstencao`/`pct_abstencao` e `comparecimento`.
+  - Os percentuais vêm prontos do TSE: brancos e nulos sobre o total de votos, abstenção sobre o eleitorado.
+- **Página**: `dicaUf` monta a tabela (`.tabela-dica`):
+  - cabeçalho com a UF, o % apurado, a hora e "FINAL";
+  - o valor da métrica escolhida;
+  - os candidatos, com o líder em negrito;
+  - brancos, nulos e abstenção.
+- **Bug encontrado na conferência visual:** com 12 candidatos, a tabela é mais alta que o mapa (360 px), e o tooltip do Leaflet, desenhado dentro do mapa, saía cortado. A dica passou a ser um elemento `position: fixed` no `body` (`mostrarDica`/`posicionarDica`/`esconderDica`), que acompanha o mouse e fica presa à janela.
+- **Verificação:**
+  - `pytest -q`: 309 passaram, 6 pulados;
+  - `test_site.py` confere os campos novos com o `brasil_totais.parquet`;
+  - o e2e passa o mouse de verdade sobre SP e confere a tabela inteira dentro da janela e a dica escondida ao sair;
+  - no simulado real, o hint de SP mostrou 13 candidatos, brancos 6,64% (2.020.082), nulos 6,68% (2.032.809) e abstenção 14,86% (5.312.531), iguais aos do Parquet.
+
 ## Pendências
 
 - Na máquina da noite, rodar `python preparar_ibge.py` para baixar `malhas/ufs_BR.geojson`. Sem a malha, o site tenta baixá-la na primeira vez; se não conseguir, mostra só a tabela.

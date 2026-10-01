@@ -61,6 +61,25 @@ def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
     pagina.wait_for_function("() => estado.brasilMapa && estado.brasilMapa._camada")
     cores_lider = set(pagina.evaluate("estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)"))
     assert len(cores_lider) >= 1 and cores_lider <= cores(pagina, "--serie-1", "--serie-2", "--serie-3", "--outros")
+    pagina.wait_for_function("() => !estado.brasilMapa._animatingZoom")
+    br.locator("#brasil-mapa").scroll_into_view_if_needed()
+    ponto = pagina.evaluate("""() => {  // centro de SP na tela: mouse de verdade (posição da dica incluída)
+      const m = estado.brasilMapa, l = m._camada.getLayers().find(l => l.feature.properties.codarea === '35');
+      const anel = l.getLatLngs()[0], c = L.latLng(anel.reduce((a, q) => a + q.lat, 0) / anel.length,
+        anel.reduce((a, q) => a + q.lng, 0) / anel.length);  // centroide dos vértices: dentro do triângulo
+      const p = m.latLngToContainerPoint(c), r = m.getContainer().getBoundingClientRect();
+      return [r.left + p.x, r.top + p.y]; }""")
+    pagina.mouse.move(*ponto)
+    dica = pagina.locator(".dica-flutuante .tabela-dica")
+    dica.wait_for()
+    texto = dica.inner_text()
+    for trecho in ("Brancos", "Nulos", "Abstenção", "% válidos"):
+        assert trecho in texto, trecho
+    assert pagina.evaluate("estado.brasil.ufs.find(u => u.uf === 'SP').candidatos[0].nome") in texto
+    caixa = pagina.locator(".dica-flutuante").bounding_box()
+    assert caixa["y"] >= 0 and caixa["y"] + caixa["height"] <= pagina.viewport_size["height"]  # inteira na janela
+    pagina.mouse.move(1, 1)
+    pagina.locator(".dica-flutuante").wait_for(state="hidden")
     numero = pagina.evaluate("estado.brasil.candidatos[0].NUMERO")
     br.locator("#brasil-metrica").select_option(str(numero))
     seq = cores(pagina, "--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5")

@@ -218,6 +218,12 @@ def presidente_por_uf(tot: pl.DataFrame, cand: pl.DataFrame) -> dict[str, Any]:
             "primeiro": lado[0] if lado else None, "segundo": lado[1] if len(lado) > 1 else None,
             "diferenca_pp": round((lado[0]["pct"] or 0) - (lado[1]["pct"] or 0), 2) if len(lado) > 1 else None,
             "pct": {str(r["NUMERO"]): r["PCT_VALIDOS"] for r in c.iter_rows(named=True) if r["NUMERO"] in destaque},
+            # hint do mapa: todos os candidatos e os não válidos (percentuais do TSE: brancos/nulos sobre o
+            # total de votos, abstenção sobre o eleitorado)
+            "candidatos": [{"numero": r["NUMERO"], "nome": r["NOME_URNA"], "partido": r["PARTIDO"],
+                            "votos": r["VOTOS"], "pct": r["PCT_VALIDOS"]} for r in c.iter_rows(named=True)],
+            "brancos": t["BRANCOS"], "pct_brancos": t["PCT_BRANCOS"], "nulos": t["NULOS"], "pct_nulos": t["PCT_NULOS"],
+            "abstencao": t["ABSTENCAO"], "pct_abstencao": t["PCT_ABSTENCAO"], "comparecimento": t["COMPARECIMENTO"],
         })
     return {"candidatos": _rows(top.head(TOP_BRASIL)), "ufs": ufs}
 

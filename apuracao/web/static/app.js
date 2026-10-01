@@ -507,6 +507,43 @@ function blocoBrasil() {
   return estado.brasilBloco;
 }
 
+// dica flutuante (position: fixed, presa à janela): para conteúdo maior que o mapa
+function mostrarDica(conteudo, ev) {
+  if (!estado.dica) { estado.dica = el("div", { class: "dica-flutuante", role: "tooltip" }); document.body.append(estado.dica); }
+  estado.dica.replaceChildren(conteudo);
+  estado.dica.hidden = false;
+  if (ev) posicionarDica(ev);
+}
+function posicionarDica(ev) {
+  const d = estado.dica;
+  if (!d || d.hidden || !ev) return;
+  const m = 14, w = d.offsetWidth, h = d.offsetHeight;
+  let x = ev.clientX + m, y = ev.clientY + m;
+  if (x + w > window.innerWidth - 4) x = Math.max(4, ev.clientX - m - w);
+  if (y + h > window.innerHeight - 4) y = Math.max(4, window.innerHeight - h - 4);
+  d.style.left = `${x}px`; d.style.top = `${y}px`;
+}
+function esconderDica() { if (estado.dica) estado.dica.hidden = true; }
+
+// hint de uma UF: apuração, todos os candidatos (% dos válidos) e brancos, nulos e abstenção
+function dicaUf(u, codigo, valor) {
+  if (!u) return el("div", {}, el("strong", {}, codigo), el("br"), "sem dado");
+  const cab = el("div", {}, el("strong", {}, u.nome), " · ", `${pct(u.pct_secoes)} apurado`,
+    u.hora ? ` · totalização ${hora(u.hora)}` : null, u.final ? " · FINAL" : null);
+  if (!u.primeiro) return el("div", {}, cab, el("div", { class: "nota" }, "sem apuração"));
+  const linha = (rotulo, p, n, classe = null) => el("tr", { class: classe },
+    el("td", { class: "nome" }, rotulo), el("td", { class: "num" }, pct(p)), el("td", { class: "num" }, int(n)));
+  return el("div", {}, cab, el("div", {}, valor(u)),
+    el("table", { class: "tabela-dica" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Candidato"), el("th", { class: "num" }, "% válidos"),
+        el("th", { class: "num" }, "Votos"))),
+      el("tbody", {}, u.candidatos.map((c, i) => linha(`${c.numero} ${c.nome}`, c.pct, c.votos, i === 0 ? "lider" : null))),
+      el("tbody", { class: "nao-validos" },
+        linha("Brancos", u.pct_brancos, u.brancos), linha("Nulos", u.pct_nulos, u.nulos),
+        linha("Abstenção", u.pct_abstencao, u.abstencao))),
+    el("div", { class: "nota" }, "Brancos e nulos: % do total de votos; abstenção: % do eleitorado."));
+}
+
 async function atualizarBrasil() {
   if (!estado.brasilBloco) return;  // sem cartão Brasil (ex.: eleição sem presidente)
   try { estado.brasil = await api("api/presidente/ufs"); } catch (e) { return; }
@@ -567,8 +604,11 @@ function desenharBrasil() {
         color: cor("--superficie"), weight: 1 }),
       onEachFeature: (ft, layer) => {
         const u = porIbge.get(ft.properties.codarea);
-        layer.bindTooltip(() => el("div", {}, el("strong", {}, u ? u.nome : ft.properties.codarea), el("br"),
-          u ? `${pct(u.pct_secoes)} das seções · ${valor(u)}` : "sem dado"), { sticky: true });
+        // hint fora do mapa (a tabela é mais alta que o mapa, que corta o tooltip do Leaflet)
+        layer.on("mouseover", (e) => { mostrarDica(dicaUf(u, ft.properties.codarea, valor), e.originalEvent);
+          layer.setStyle({ weight: 3, color: cor("--texto") }); });
+        layer.on("mousemove", (e) => posicionarDica(e.originalEvent));
+        layer.on("mouseout", () => { esconderDica(); layer.setStyle({ weight: 1, color: cor("--superficie") }); });
       },
     }).addTo(mapa);
     if (!mapa._enquadrado) { mapa.fitBounds(mapa._camada.getBounds(), { padding: [4, 4] }); mapa._enquadrado = true; }
