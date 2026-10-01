@@ -88,6 +88,9 @@ O site se atualiza sozinho. Os dados ficam em `dados_2026/simulado/`.
 # resultado de 2022 no mesmo formato, para a aba Comparação (baixa os microdados de 2022: centenas de MB)
 python importar_resultado_historico.py --ano 2022 --uf RJ --turno 1 2
 
+# dados do IBGE (malhas e Censo 2022) para mapas por bairro/local e Perfil × voto: algumas centenas de MB
+python preparar_ibge.py              # repetir depois da eleição: baixa só versões novas (--so-verificar só relata)
+
 # ensaio geral: a apuração real de 2022 refeita 30× mais rápido, com coletor, site e usuários (~15 min)
 python ensaio_apuracao.py            # deve terminar em "RESULTADO DO ENSAIO: OK"
 
@@ -136,6 +139,7 @@ python coletar_resultados.py --ambiente oficial --uma-vez          # um ciclo de
 python gerar_boletim.py --ambiente oficial [--vigiar]               # boletim agora (ou a cada hora e no fim)
 python copiar_dados.py --dados dados_2026/oficial --destino <outro disco>/oficial [--vigiar]
 python preparar_2026.py --vigiar                                    # baixa os microdados de 2026 quando o TSE publicar
+python preparar_ibge.py [--so-verificar] [--forcar-api]              # verifica/atualiza malhas e Censo 2022 do IBGE
 python transferencia_turnos.py --ano 2022 --cargo presidente --nivel secao --saida saidas/t.xlsx
 python planilha_candidato.py --ano 2022 --uf RJ --cargo "deputado estadual" --candidato 13713
 python ingerir_eleitorado.py --ano 2026 --uf RJ --relatorio-geo
@@ -166,6 +170,9 @@ Parquet), `dados_2026/` (dados coletados, boletins, alertas, vigia), `saidas/` e
 ## Fontes
 
 - **TSE:** divulgação de resultados (`resultados.tse.jus.br`) e dados abertos (`cdn.tse.jus.br`: votação por seção, eleitorado, candidatos, perfil do eleitorado).
-- **IBGE:** malhas municipais, de bairros e de setores censitários, e agregados do Censo 2022.
+- **IBGE:** malhas municipais, de bairros e de setores censitários, e agregados do Censo 2022. O catálogo fica em
+  `apuracao/ibge.py`: a versão mais nova é descoberta no índice do FTP (o IBGE põe a data no nome do
+  arquivo) e `preparar_ibge.py` atualiza o cache, refaz os derivados e volta à versão anterior se a nova
+  não converter. Depois de uma atualização, reinicie os sites no ar.
 
 O coletor respeita o limite de acessos do TSE (20 requisições/s, cache com ETag, pausa automática se bloqueado).

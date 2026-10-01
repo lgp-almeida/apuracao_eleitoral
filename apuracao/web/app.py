@@ -54,6 +54,7 @@ import votos_por_local_votacao as v
 from apuracao import alertas as al
 from apuracao import mapa_locais as ml
 from apuracao import bairros as br
+from apuracao import ibge
 from apuracao import cadeiras as cd
 from apuracao import projecao as pj
 from apuracao import projecao_cadeiras as pcad
@@ -68,12 +69,7 @@ from apuracao.divulgacao import serie as sr
 logger = logging.getLogger("apuracao.web")
 
 STATIC = Path(__file__).parent / "static"
-IBGE_UF = {"RO": 11, "AC": 12, "AM": 13, "RR": 14, "PA": 15, "AP": 16, "TO": 17, "MA": 21, "PI": 22, "CE": 23,
-           "RN": 24, "PB": 25, "PE": 26, "AL": 27, "SE": 28, "BA": 29, "MG": 31, "ES": 32, "RJ": 33, "SP": 35,
-           "PR": 41, "SC": 42, "RS": 43, "MS": 50, "MT": 51, "GO": 52, "DF": 53}
 BRASILIA = ZoneInfo("America/Sao_Paulo")
-MALHA_URL = ("https://servicodados.ibge.gov.br/api/v3/malhas/estados/{cod}"
-             "?formato=application/vnd.geo%2Bjson&intrarregiao=municipio&qualidade=intermediaria")
 # cartões do painel: (cargo, abrangência); "uf" é a UF configurada
 PAINEL = [(1, "br"), (1, "uf"), (3, "uf"), (5, "uf"), (6, "uf"), (7, "uf")]
 TOP_MAJORITARIO, TOP_PROPORCIONAL, TOP_PARTIDOS = 12, 20, 15
@@ -661,15 +657,10 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
 
     def malha_municipios() -> dict[str, Any]:
         if "malha" not in geo_cache:
-            path = cache_dir / "malhas" / f"municipios_{uf}.geojson"
-            if not path.exists():
-                try:
-                    resp = requests.get(MALHA_URL.format(cod=IBGE_UF[uf]), timeout=60)
-                    resp.raise_for_status()
-                except requests.RequestException as exc:
-                    raise HTTPException(503, f"malha do IBGE indisponível: {exc}") from exc
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(resp.content)
+            try:
+                path = ibge.caminho("malha_municipios", cache_dir, uf)
+            except (requests.RequestException, ValueError) as exc:
+                raise HTTPException(503, f"malha do IBGE indisponível: {exc}") from exc
             geo_cache["malha"] = json.loads(path.read_text())
         return geo_cache["malha"]
 

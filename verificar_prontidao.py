@@ -22,6 +22,7 @@ from typing import Any
 
 import requests
 
+from apuracao import ibge
 from apuracao.divulgacao import modelo as m
 from apuracao.divulgacao.cliente import AMBIENTES, ClienteDivulgacao, DivulgacaoIndisponivel
 
@@ -73,11 +74,28 @@ def _cache(cache: Path) -> list[Resultado]:
     itens = [
         (cache / "malhas" / "municipios_RJ.geojson", True, "malha dos municípios (mapas)"),
         (cache / "malhas" / "bairros_RJ.geojson", False, "malha dos bairros (mapas por bairro)"),
+        (cache / "ibge_censo2022" / "censo_bairros_RJ.parquet", False, "Censo 2022 por bairro (Perfil × voto)"),
+        (cache / "ibge_censo2022" / "censo_setores_RJ.parquet", False, "Censo 2022 por setor (Perfil × voto por local)"),
         (Path("dados_2026/historico_2022_t1/ultimo/totais.parquet"), False, "2022 importado (aba Comparação)"),
         (cache / "votacao_candidato_munzona_2022.zip", False, "microdados de 2022 (cadeiras de 2022 e ensaio)"),
         (cache / "eleitorado_local_votacao_2026__RJ.parquet", False, "eleitorado 2026 (planilhas e locais)"),
     ]
-    return [("OK" if p.exists() else ("FALHA" if obrig else "AVISO"), desc, str(p)) for p, obrig, desc in itens]
+    return ([("OK" if p.exists() else ("FALHA" if obrig else "AVISO"), desc, str(p)) for p, obrig, desc in itens]
+            + _ibge(cache))
+
+
+def _ibge(cache: Path) -> list[Resultado]:
+    """Última verificação de `preparar_ibge.py` (sem rede): idade e ações pendentes."""
+    estado = ibge.ler_estado(cache)
+    if estado is None:
+        return [("AVISO", "IBGE atualizado", "nunca verificado — python preparar_ibge.py")]
+    idade = (datetime.now(timezone.utc) - datetime.fromisoformat(estado["verificado_em"])).days
+    pendentes = [f["chave"] for f in estado.get("fontes", []) if f.get("acao") not in ("", "baixado", "atualizado")]
+    if pendentes:
+        return [("AVISO", "IBGE atualizado", f"pendente: {', '.join(pendentes)} — python preparar_ibge.py")]
+    if idade > ibge.IDADE_MAX_API_DIAS:
+        return [("AVISO", "IBGE atualizado", f"verificado há {idade} dias — python preparar_ibge.py")]
+    return [("OK", "IBGE atualizado", f"verificado há {idade} dias")]
 
 
 def _relogio() -> list[Resultado]:

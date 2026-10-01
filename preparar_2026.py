@@ -57,6 +57,10 @@ def ao_chegar(a: argparse.Namespace, todos_com_dados: set[str]):
                     logger.info("resultado oficial de %s (%sº turno) importado em %s: %s", a.ano, turno, destino, n)
                 except v.TseDataError as exc:
                     logger.info("%sº turno de %s ainda sem dados: %s", turno, a.ano, exc)
+        if mudaram & {"votos_uf", "votos_br", "perfil"}:
+            from apuracao import ibge
+            for falha in ibge.preparar(a.cache_dir, a.uf):  # malhas e Censo para os mapas e o Perfil × voto de 2026
+                logger.warning("IBGE: %s (python preparar_ibge.py)", falha)
         if "votos_uf" in mudaram:
             transferencia(a)
     return reagir

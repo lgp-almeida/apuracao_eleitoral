@@ -7,6 +7,7 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
 | Quando | O quê | Comando |
 |---|---|---|
 | até 2/10 | ensaio geral com a apuração de 2022 | `python ensaio_apuracao.py` (cerca de 15 min; deve terminar em "RESULTADO DO ENSAIO: OK") |
+| até 3/10 | malhas e Censo 2022 do IBGE no cache (rodada 34; baixa algumas centenas de MB uma vez) | `python preparar_ibge.py` |
 | 3/10, fim do dia | prontidão, e o oficial publica a configuração | `python verificar_prontidao.py` |
 | 3/10, depois que o oficial publicar | um ciclo de teste no oficial, num diretório descartável | `python coletar_resultados.py --ambiente oficial --uma-vez --destino dados_2026/oficial_teste` e depois `rm -r dados_2026/oficial_teste` |
 | 4/10, 16h | prontidão completa, com os testes | `python verificar_prontidao.py --testes` |
@@ -32,7 +33,7 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
      - as cadeiras (46/46 e 70/70).
    - **Onde fica o relatório:** `dados_2026/ensaio_2022/relatorio_ensaio.json`.
    - **Opções:** `--velocidade 120` para um ensaio curto; `--inicio 19:30` para começar no meio da noite; `--manter` para deixar o site no ar ao fim.
-2. **Prontidão** (`verificar_prontidao.py`). Checa dependências, disco, cache (malhas, 2022 importado), a hora do computador contra a do TSE, os ambientes simulado e oficial, a porta 8000 e o diretório `dados_2026/oficial`. Deve terminar em "PRONTO".
+2. **Prontidão** (`verificar_prontidao.py`). Checa dependências, disco, cache (malhas, Censo 2022, última verificação do IBGE, 2022 importado), a hora do computador contra a do TSE, os ambientes simulado e oficial, a porta 8000 e o diretório `dados_2026/oficial`. Deve terminar em "PRONTO".
    - **Oficial com 404 na configuração:** antes de 3/10 é o esperado e sai como AVISO.
    - **Dados de outro ambiente em `dados_2026/oficial`:** é FALHA. Apague o diretório.
 3. **Códigos das eleições:** o coletor lê do `ele-c.json`, nunca do código. Se o oficial vier com códigos diferentes de 6257/6259 (Anexo I), nada precisa mudar; a prontidão só avisa.
@@ -122,4 +123,5 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
   - Também grava `saidas/transferencia_2022_2026.csv`.
   - Mapas por bairro e por local de votação, comparação e Perfil × voto passam a oferecer 2026 sozinhos.
   - Se o TSE atualizar um arquivo, ele baixa de novo. Nesse caso reinicie o site para ele reler os dados.
+- **Dados do IBGE** (rodada 34): `python preparar_ibge.py --so-verificar` mostra se o IBGE publicou uma versão nova das malhas ou dos agregados do Censo 2022 (ele põe a data no nome do arquivo). `python preparar_ibge.py` baixa, refaz os derivados e, se a versão nova não converter, volta à anterior. Depois, reinicie o site. `preparar_2026.py` já garante o IBGE no cache quando os votos por seção chegam.
 - **Recalibrar as margens** da projeção e das cadeiras com 2026, seguindo `docs/RECALIBRAR_MARGENS.md`. Primeiro valide 2026 com as margens de 2022 (o teste fora da amostra) e depois junte os dois anos.

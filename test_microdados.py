@@ -125,13 +125,15 @@ def test_cli_vigia_encerra_quando_os_votos_chegam(tmp_path: Path, monkeypatch: p
     chamadas: list[tuple] = []
     monkeypatch.setattr(md, "converter", lambda c, a, u, chaves: chamadas.append(("converter", frozenset(chaves))) or [])
     monkeypatch.setattr(cli, "transferencia", lambda a: chamadas.append(("transferencia",)))
+    from apuracao import ibge
+    monkeypatch.setattr(ibge, "preparar", lambda c, uf: chamadas.append(("ibge",)) or [])
     dormiu: list[float] = []
     monkeypatch.setattr(cli.time, "sleep", lambda s: (dormiu.append(s), publicar(cdn)))
     args = ["--vigiar", "--intervalo", "10", "--cache-dir", str(tmp_path), "--saidas", str(tmp_path / "s")]
     assert cli.main(args, sessao=cdn) == 0
     assert dormiu == [600]  # 1ª verificação sem nada; espera (nunca menos de 10 min) e na 2ª chegou tudo
     assert chamadas[0] == ("converter", frozenset({"votos_uf", "votos_br", "detalhe_secao"}))
-    assert ("transferencia",) in chamadas
+    assert chamadas.index(("ibge",)) < chamadas.index(("transferencia",))  # malhas/Censo antes das análises
 
 
 def publicar(cdn: CDN) -> None:

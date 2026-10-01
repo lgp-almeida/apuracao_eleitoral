@@ -23,12 +23,10 @@ import requests
 
 import votos_por_local_votacao as v
 from apuracao import eleitorado as el
+from apuracao import ibge
 
 logger = logging.getLogger("apuracao.bairros")
 
-MALHA_URL = ("https://geoftp.ibge.gov.br/organizacao_do_territorio/malhas_territoriais/"
-             "malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF/"
-             "{uf}_bairros_CD2022.zip")
 SIMPLIFICACAO_GRAUS = 0.0002  # ~20 m: GeoJSON leve para o navegador sem deformar os bairros
 CARGOS = {1: "PRESIDENTE", 3: "GOVERNADOR", 5: "SENADOR", 6: "DEPUTADO FEDERAL", 7: "DEPUTADO ESTADUAL",
           8: "DEPUTADO DISTRITAL", 11: "PREFEITO", 13: "VEREADOR"}
@@ -57,15 +55,10 @@ def malha(uf: str, cache: Path) -> dict[str, Any]:
     if not destino.exists():
         import geopandas as gpd
 
-        zp = cache / "malhas" / f"{uf}_bairros_CD2022.zip"
-        if not zp.exists():
-            logger.info("baixando malha de bairros do IBGE (%s)", uf)
-            resp = requests.get(MALHA_URL.format(uf=uf), timeout=120)
-            if resp.status_code == 404:
-                raise v.TseDataError(f"o IBGE não publica malha de bairros para {uf}")
-            resp.raise_for_status()
-            zp.parent.mkdir(parents=True, exist_ok=True)
-            zp.write_bytes(resp.content)
+        try:
+            zp = ibge.caminho("malha_bairros", cache, uf)
+        except v.TseDataError as exc:  # 404: a UF não tem bairros definidos em lei na malha do Censo
+            raise v.TseDataError(f"o IBGE não publica malha de bairros para {uf}") from exc
         g = gpd.read_file(f"zip://{zp}").to_crs("EPSG:4326")
         g["geometry"] = g.geometry.simplify(SIMPLIFICACAO_GRAUS, preserve_topology=True)
         g = g[["CD_BAIRRO", "NM_BAIRRO", "CD_MUN", "NM_MUN", "geometry"]].astype(

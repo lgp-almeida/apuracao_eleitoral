@@ -198,7 +198,7 @@ def write_cache(root: Path) -> Path:
         with zipfile.ZipFile(root / f"perfil_eleitor_secao_{ano}_RJ.zip", "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(f"perfil_eleitor_secao_{ano}_RJ.csv", _csv(header, prow))
 
-    # Censo 2022 por bairro, com os nomes de arquivo do IBGE (apuracao.perfil.CENSO_ARQUIVOS)
+    # Censo 2022 por bairro, com os nomes de arquivo do IBGE (versões conhecidas em apuracao.ibge.FONTES)
     censo = root / "ibge_censo2022"
     censo.mkdir(exist_ok=True)
     for nome, header, linhas in (
@@ -248,6 +248,17 @@ def download_sem_rede(mp: pytest.MonkeyPatch) -> None:
         raise v.TseDataError(f"404 em {spec.url} (teste offline)")
 
     mp.setattr(v, "download", falso)
+
+    from apuracao import ibge
+
+    listar = ibge.listar
+
+    def sem_indice(url: str, sessao=requests) -> list[str]:
+        if sessao is requests:  # rede de verdade; sessões falsas (test_ibge) seguem normalmente
+            raise requests.ConnectionError(f"índice {url} (teste offline)")
+        return listar(url, sessao)
+
+    mp.setattr(ibge, "listar", sem_indice)  # sem o índice do IBGE, `ibge.caminho` tenta a versão conhecida
 
 
 # --------------------------------------------------------------------------

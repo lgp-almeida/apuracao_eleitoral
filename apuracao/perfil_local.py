@@ -31,20 +31,12 @@ import polars as pl
 
 import votos_por_local_votacao as v
 from apuracao import eleitorado as el
+from apuracao import ibge
 from apuracao import perfil as pf
 
 logger = logging.getLogger("apuracao.perfil_local")
 
-MALHA_SETORES = ("https://geoftp.ibge.gov.br/organizacao_do_territorio/malhas_territoriais/"
-                 "malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/setores/shp/UF/"
-                 "{uf}_setores_CD2022.zip")
-CENSO = "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022"
-AGREGADOS_SETOR = {
-    "basico": f"{CENSO}/Agregados_por_Setores_Censitarios/Agregados_por_Setor_csv/Agregados_por_setores_basico_BR_20260520.zip",
-    "renda": f"{CENSO}/Agregados_por_Setores_Censitarios_Rendimento_do_Responsavel/"
-             "Agregados_por_setores_renda_responsavel_BR_20260508_csv.zip",
-    "cor": f"{CENSO}/Agregados_por_Setores_Censitarios/Agregados_por_Setor_csv/Agregados_por_setores_cor_ou_raca_BR.zip",
-}
+AGREGADOS_SETOR = {"basico": "setores_basico", "renda": "setores_renda", "cor": "setores_cor"}  # apuracao.ibge.FONTES
 METODOS = ("contem", "raio", "influencia", "raio+contem")
 METODO_PADRAO = "raio+contem"  # vencedor da validação (rodada 26): raio de 800 m; sem setor no raio, o que contém
 RAIO_M = 800.0
@@ -56,9 +48,9 @@ def _num(col: str) -> pl.Expr:
     return pl.col(col).str.strip_chars().str.replace(",", ".").cast(pl.Float64, strict=False)
 
 
-def _baixar(url: str, pasta: Path) -> Path:
-    spec = v.DatasetSpec(url.rsplit("/", 1)[-1].removesuffix(".zip"), url, v.NATIONAL)
-    return v.download(spec, pasta)
+def _baixar(fonte: str, cache: Path, uf: str) -> Path:
+    """ZIP do IBGE em cache (versão mais nova; baixa se faltar) — catálogo em `apuracao.ibge`."""
+    return ibge.caminho(fonte, cache, uf)
 
 
 def _ler_setores_csv(zp: Path, prefixo: str, colunas: list[str]) -> pl.DataFrame:
@@ -77,22 +69,21 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
     """Um setor por linha: CD_SETOR, CD_MUN (IBGE), LON, LAT (ponto representativo), TIPO, AREA_KM2,
     POP, DOMICILIOS, MORADORES_DOM, RESP (responsáveis com renda), RENDA_MEDIA, RENDA_MEDIANA,
     BRANCOS…INDIGENAS (cor ou raça). Cache: ibge_censo2022/censo_setores_<UF>.parquet."""
-    pasta = cache / "ibge_censo2022"
-    destino = pasta / f"censo_setores_{uf.upper()}.parquet"
+    destino = cache / "ibge_censo2022" / f"censo_setores_{uf.upper()}.parquet"
     if destino.exists():
         return pl.read_parquet(destino)
     import geopandas as gpd
 
     prefixo = str(pf.UF_IBGE[uf.upper()])
-    malha = _baixar(MALHA_SETORES.format(uf=uf.upper()), pasta)
+    malha = _baixar("malha_setores", cache, uf)
     g = gpd.read_file(f"zip://{malha}", columns=["CD_SETOR", "CD_MUN"]).to_crs("EPSG:4326")
     pt = g.geometry.representative_point()
     geo = pl.DataFrame({"CD_SETOR": g["CD_SETOR"].astype(str).to_list(), "CD_MUN": g["CD_MUN"].astype(int).to_list(),
                         "LON": pt.x.to_numpy(), "LAT": pt.y.to_numpy()})
-    b = _ler_setores_csv(_baixar(AGREGADOS_SETOR["basico"], pasta), prefixo,
+    b = _ler_setores_csv(_baixar(AGREGADOS_SETOR["basico"], cache, uf), prefixo,
                          ["CD_SETOR", "CD_TIPO", "AREA_KM2", "v0001", "v0005", "v0007"])
-    r = _ler_setores_csv(_baixar(AGREGADOS_SETOR["renda"], pasta), prefixo, ["CD_SETOR", "V06001", "V06004", "V06006"])
-    c = _ler_setores_csv(_baixar(AGREGADOS_SETOR["cor"], pasta), prefixo,
+    r = _ler_setores_csv(_baixar(AGREGADOS_SETOR["renda"], cache, uf), prefixo, ["CD_SETOR", "V06001", "V06004", "V06006"])
+    c = _ler_setores_csv(_baixar(AGREGADOS_SETOR["cor"], cache, uf), prefixo,
                          ["CD_SETOR", "V01317", "V01318", "V01319", "V01320", "V01321"])
     df = (geo.join(b.select("CD_SETOR", _num("CD_TIPO").cast(pl.Int64).alias("TIPO"), _num("AREA_KM2").alias("AREA_KM2"),
                             _num("V0001").alias("POP"), _num("V0005").alias("MORADORES_DOM"),
@@ -145,7 +136,7 @@ def ligar(uf: str, cache: Path, locais_: pl.DataFrame, metodo: str, raio_m: floa
                            geometry=gpd.points_from_xy(locais_["LON"].to_numpy(), locais_["LAT"].to_numpy()),
                            crs="EPSG:4326").to_crs(UTM)
     if metodo == "contem":
-        malha = _baixar(MALHA_SETORES.format(uf=uf.upper()), cache / "ibge_censo2022")
+        malha = _baixar("malha_setores", cache, uf)
         pol = gpd.read_file(f"zip://{malha}", columns=["CD_SETOR"]).to_crs(UTM)
         j = gpd.sjoin(pts, pol, how="inner", predicate="within").drop_duplicates("UNIDADE")
         return pl.DataFrame({"CD_SETOR": j["CD_SETOR"].astype(str).to_list(), "UNIDADE": j["UNIDADE"].to_list()})

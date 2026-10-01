@@ -34,6 +34,7 @@ import requests
 
 import votos_por_local_votacao as v
 from apuracao import bairros as br
+from apuracao import ibge
 
 logger = logging.getLogger("apuracao.perfil")
 
@@ -91,13 +92,7 @@ def perfil_por_bairro(perfil: pl.LazyFrame, local_bairro: pl.DataFrame) -> pl.Da
 # --------------------------------------------------------------------------
 # Censo 2022 por bairro (IBGE)
 # --------------------------------------------------------------------------
-CENSO_BASE = "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022"
-CENSO_ARQUIVOS = {  # o IBGE põe a data da versão no nome; se republicar, atualize aqui
-    "renda": "Agregados_por_Setores_Censitarios_Rendimento_do_Responsavel/"
-             "Agregados_por_bairros_renda_responsavel_BR_20260508_csv.zip",
-    "basico": "Agregados_por_Setores_Censitarios/Agregados_por_Bairro_csv/Agregados_por_bairros_basico_BR_20260520.zip",
-    "cor": "Agregados_por_Setores_Censitarios/Agregados_por_Bairro_csv/Agregados_por_bairros_cor_ou_raca_BR.zip",
-}
+CENSO_FONTES = {"renda": "bairros_renda", "basico": "bairros_basico", "cor": "bairros_cor"}  # apuracao.ibge.FONTES
 INDICADORES_CENSO = {
     "renda_media": "Renda média do responsável (R$)",
     "renda_mediana": "Renda mediana do responsável (R$)",
@@ -105,9 +100,7 @@ INDICADORES_CENSO = {
     "densidade": "Densidade (moradores/km²)",
     "moradores_domicilio": "Moradores por domicílio",
 }
-UF_IBGE = {"RO": 11, "AC": 12, "AM": 13, "RR": 14, "PA": 15, "AP": 16, "TO": 17, "MA": 21, "PI": 22, "CE": 23,
-           "RN": 24, "PB": 25, "PE": 26, "AL": 27, "SE": 28, "BA": 29, "MG": 31, "ES": 32, "RJ": 33, "SP": 35,
-           "PR": 41, "SC": 42, "RS": 43, "MS": 50, "MT": 51, "GO": 52, "DF": 53}
+UF_IBGE = ibge.UF_IBGE
 
 
 def _num(col: str) -> pl.Expr:
@@ -142,13 +135,11 @@ def censo_por_bairro(uf: str, cache: Path) -> pl.DataFrame:
     destino = cache / "ibge_censo2022" / f"censo_bairros_{uf.upper()}.parquet"
     if destino.exists():
         return pl.read_parquet(destino)
-    pasta = cache / "ibge_censo2022"
     prefixo = str(UF_IBGE[uf.upper()])
     partes = {}
-    for chave, caminho in CENSO_ARQUIVOS.items():
-        spec = v.DatasetSpec(f"censo2022_{chave}", f"{CENSO_BASE}/{caminho}", v.NATIONAL)
+    for chave, fonte in CENSO_FONTES.items():
         try:
-            partes[chave] = _ler_censo(v.download(spec, pasta), prefixo)
+            partes[chave] = _ler_censo(ibge.caminho(fonte, cache, uf), prefixo)
         except (v.TseDataError, requests.RequestException) as exc:
             raise FonteIndisponivel(f"agregados do Censo 2022 por bairro indisponíveis no IBGE ({exc})") from exc
     df = indicadores_censo(partes["renda"], partes["basico"], partes["cor"])
