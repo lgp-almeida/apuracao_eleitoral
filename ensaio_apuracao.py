@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -169,10 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     if a.inicio:
         h, mnt = map(int, a.inicio.split(":"))
         inicio = rec.inicio.replace(hour=h, minute=mnt)
-    relogio = en.Relogio(inicio, rec.fim, a.velocidade)
-    duracao = (rec.fim - inicio).total_seconds() / a.velocidade
+    # o relógio passa do fim de 2022 pelo atraso do EA20: a última totalização anunciada só é publicada
+    # depois (sem isso o ensaio acabava com o último EA20 na versão anterior)
+    fim = rec.fim + timedelta(minutes=a.atraso_ea20)
+    relogio = en.Relogio(inicio, fim, a.velocidade)
+    duracao = (fim - inicio).total_seconds() / a.velocidade
     logger.info("reconstituição de 2022 carregada em %.1f s: %s → %s em ~%.1f min reais", time.time() - t0,
-                f"{inicio:%H:%M}", f"{rec.fim:%H:%M}", duracao / 60)
+                f"{inicio:%H:%M}", f"{fim:%H:%M}", duracao / 60)
 
     muns = Path("dados_2026/historico_2022_t1/ultimo/municipios.parquet")  # os 92 do RJ, com nome
     sessao = en.SessaoEnsaio(en.Gerador(rec, relogio, a.atraso_ea20), pl.read_parquet(muns) if muns.exists() else None)
@@ -252,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
                                       "projecao": arred(k["PCT_PROJ"]), "margem": d["margem_pp"], "situacao": d["situacao"]})
             except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
                 logger.warning("leitura da projeção falhou: %s", exc)
-            if relogio.terminou and ult.get("erro") is None and ciclos[-1]["hora_2022"] == f"{rec.fim:%H:%M}":
+            if relogio.terminou and ult.get("erro") is None and ciclos[-1]["hora_2022"] == f"{fim:%H:%M}":
                 break
             time.sleep(max(0.0, a.intervalo - (time.time() - c0)))
         time.sleep(3)

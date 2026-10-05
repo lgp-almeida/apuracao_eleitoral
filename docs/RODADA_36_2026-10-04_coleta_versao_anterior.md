@@ -126,7 +126,19 @@ O site foi reiniciado pelo usuário depois, sob o vigia.
   - `pytest -q -m "not e2e"`: 264 passando;
   - `pytest -q -m e2e`: 57 passando.
 - **Ciclo real no oficial** (depois da correção do `parse_config`): 493 arquivos, sem erro.
-- **Ensaio geral:** em andamento no commit da correção; o resultado entra num commit seguinte.
+- **Ensaio geral** (`python ensaio_apuracao.py`, com `--atraso-ea20 3`): **OK** em 14,4 min.
+  - 52 ciclos, 7.097 pedidos, 5.666 arquivos novos, nenhum erro;
+  - **2.035 respostas na versão anterior**, todas pedidas de novo;
+  - 5.117 consultas ao site, nenhum 5xx; painel com p50/p95 de 148/815 ms;
+  - conferência com o oficial: válidos de Presidente, Governador e Senador **exatos**; deputados a 0,005–0,006%; tudo 100% e final; cadeiras **46/46 e 70/70** sem divergência; Castro eleito no 1º turno; cópia final com 5.822 de 5.822 parciais; boletim final com "o que mudou".
+
+## Achados no ensaio
+
+- **O primeiro ensaio terminou em PROBLEMAS** (99,997% apurado, sem boletim e sem cópia final). O relógio do ensaio parava no fim de 2022 (00h20), e o EA20 simulado é gerado 3 min antes do relógio. Assim, a última totalização anunciada nunca era publicada, e o coletor a tratava corretamente como versão anterior.
+- **Correção:** o relógio do ensaio vai até o fim mais o atraso (00h23), como no TSE real, que regera o EA20 depois do último anúncio. O teste do ensaio já fazia isso (`fim + 5 min` com o relógio fixado).
+- **Avisos de "depois de 15 ciclos" no log** (7 no ensaio): aparecem em abrangências que seguem totalizando a cada ciclo, como a UF, a capital e o Brasil. Com ~7 min virtuais por ciclo e o EA20 sempre 3 min atrás, quase sempre há uma seção anunciada ainda não publicada.
+  - É só ruído: o que chega é **sempre gravado**, e a abrangência continua sendo pedida a cada nova totalização.
+  - O total final confere com o oficial.
 
 ## Pendências
 
