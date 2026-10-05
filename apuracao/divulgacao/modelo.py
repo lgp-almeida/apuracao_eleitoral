@@ -96,19 +96,34 @@ class ConfigEleicoes:
         return None
 
 
+def _ano_do_ciclo(ciclo: str) -> int:
+    digitos = "".join(ch for ch in str(ciclo) if ch.isdigit())
+    return int(digitos) if digitos else 0
+
+
 def parse_config(data: dict) -> ConfigEleicoes:
-    """EA11. Considera o primeiro pleito da lista (um pleito por ambiente em 2026)."""
-    pleito = data["pl"][0]
+    """EA11. Usa o ciclo MAIS RECENTE (maior ano em "c", ex.: ele2026) e junta as eleições de todos os
+    pleitos desse ciclo (o 2º turno pode vir num pleito próprio).
+
+    O simulado traz um pleito só; o OFICIAL lista todos os pleitos ainda vigentes — em 04/10/2026, 54:
+    o de 2024 primeiro, dezenas de suplementares e o de 2026 por ÚLTIMO. Pegar o primeiro da lista
+    (versão anterior) deixava o coletor sem eleição na noite da apuração."""
+    pleitos = data.get("pl") or []
+    if not pleitos:
+        raise ValueError("ele-c.json sem pleitos")
+    ciclo = max((p_["c"] for p_ in pleitos), key=_ano_do_ciclo)
+    do_ciclo = [p_ for p_ in pleitos if p_["c"] == ciclo]
     eleicoes = []
-    for e in pleito["e"]:
-        cargos = []
-        for abr in e.get("abr", []):
-            for c in abr.get("cp", []):
-                cargos.append(Cargo(int(c["cd"]), c["ds"], c.get("tp") == CARGOS_PROPORCIONAIS_TP))
-        eleicoes.append(Eleicao(int(e["cd"]), to_int(e.get("cdt2")), e.get("nm", ""), int(e.get("t", 1)),
-                                tuple(cargos)))
+    for pleito in do_ciclo:
+        for e in pleito["e"]:
+            cargos = []
+            for abr in e.get("abr", []):
+                for c in abr.get("cp", []):
+                    cargos.append(Cargo(int(c["cd"]), c["ds"], c.get("tp") == CARGOS_PROPORCIONAIS_TP))
+            eleicoes.append(Eleicao(int(e["cd"]), to_int(e.get("cdt2")), e.get("nm", ""), int(e.get("t", 1)),
+                                    tuple(cargos)))
     return ConfigEleicoes(
-        ciclo=pleito["c"], pleito=int(pleito["cd"]), gerado_em=to_datetime(data.get("dg"), data.get("hg")),
+        ciclo=ciclo, pleito=int(do_ciclo[0]["cd"]), gerado_em=to_datetime(data.get("dg"), data.get("hg")),
         eleicoes=tuple(eleicoes), diretorios={a["tp"]: a["dir"] for a in data.get("arq", [])},
     )
 

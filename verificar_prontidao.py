@@ -127,6 +127,14 @@ def _ambiente(nome: str) -> list[Resultado]:
     if nome == "oficial" and not CODIGOS_OFICIAIS <= codigos:
         out.append(("AVISO", "TSE oficial: códigos", f"esperados {sorted(CODIGOS_OFICIAIS)} (Anexo I), vieram "
                                                       f"{sorted(codigos)} — o coletor usa os do arquivo, sem problema"))
+    # o que o COLETOR acharia nesta configuração (04/10/2026: o oficial listava 2024 primeiro e o coletor não
+    # achava 2026 — a prontidão só conferia que o arquivo respondia)
+    faltam = [nome_ for cargo_, nome_ in ((3, "Governador"), (1, "Presidente")) if cfg.por_cargo(cargo_) is None]
+    if faltam:
+        ainda = m._ano_do_ciclo(cfg.ciclo) < 2026
+        out.append(("AVISO" if ainda else "FALHA", f"TSE {nome}: eleições que o coletor usaria",
+                    f"sem {', '.join(faltam)} no ciclo {cfg.ciclo}" + (" (2026 ainda não publicado)" if ainda
+                                                                        else " — o coletor ficaria sem eleição")))
     est = cfg.por_cargo(3)
     if est is not None:
         ab = cli.get_json(cli.caminho_acompanhamento(cfg, est.codigo, "rj"))

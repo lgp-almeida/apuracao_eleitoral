@@ -64,8 +64,8 @@ def test_progresso_junta_as_eleicoes_da_uf() -> None:
                                          {"abrangencia": "Brasil", "pct": 50.0, "final": False}]
 
 
-def test_pagina_e_api(rede) -> None:
-    app = TestClient(portal.create_app([8000, 8001, 8002]))
+def test_pagina_e_api(rede, tmp_path: Path) -> None:
+    app = TestClient(portal.create_app([8000, 8001, 8002], tmp_path / "vigia"))  # não o vigia real
     assert [x["porta"] for x in app.get("/api/servicos").json()] == [8001]
     html = app.get("/").text
     assert "Portal da apuração" in html and "<script src" not in html and "<link" not in html  # autônomo

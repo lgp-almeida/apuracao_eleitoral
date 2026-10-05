@@ -297,11 +297,29 @@ class FakeTSE:
         self._docs: dict[str, dict] = {p.name: json.loads(p.read_text(encoding="utf-8"))
                                        for p in DIVULGACAO_FIXTURES.glob("*.json")}
 
-    def totalizar(self, eleicao: int, municipio: int, ht: str = "23:59:59") -> None:
+    def totalizar(self, eleicao: int, municipio: int, ht: str = "23:59:59", publicar: bool = True) -> None:
+        """Nova totalização do município no EA15. `publicar`: os EA20 do município passam a ter sido gerados
+        nessa hora (dg/hg); False imita o TSE de 04/10/2026, que anunciava antes de publicar o EA20 novo."""
         ab = self._docs[f"rj-e0{eleicao}-ab.json"]
         for a in ab["abr"]:
             if a["cdabr"] == f"{municipio:05d}":
                 a["ht"] = ht
+                dia = a.get("dt")
+        ab["dg"], ab["hg"] = dia or ab.get("dg"), max(ab.get("hg", ht), ht)  # o EA15 é regerado ao anunciar
+        if publicar:
+            self.publicar(eleicao, municipio, ht, dia)
+
+    def publicar(self, eleicao: int, municipio: int, hg: str, dg: str | None = None) -> None:
+        """EA20 do município "gerados" pelo TSE em dg/hg (o conteúdo não muda)."""
+        for cargo in ((1,) if eleicao == 21270 else (3, 5, 6, 7)):
+            nome = f"rj{municipio:05d}-c{cargo:04d}-e0{eleicao}-u.json"
+            doc = self._doc(nome)
+            if doc is None:
+                continue
+            self._docs[nome] = doc  # passa a ser um documento próprio, alterável
+            doc["hg"] = hg
+            if dg:
+                doc["dg"] = dg
 
     def avancar_uf(self, eleicao: int, ht: str, pct_secoes: float, fator_primeiro: float) -> None:
         """Nova totalização da UF: hora, % de seções e votos do 1º candidato de cada arquivo da UF."""
@@ -310,7 +328,7 @@ class FakeTSE:
                 a["ht"] = ht
         for nome, doc in self._docs.items():
             if nome.startswith("rj-c") and nome.endswith(f"-e0{eleicao}-u.json"):
-                doc["ht"] = ht
+                doc["ht"] = doc["hg"] = ht
                 doc["s"]["pst"] = doc["s"]["pstn"] = f"{pct_secoes:.2f}".replace(".", ",")
                 doc["tf"] = "s" if pct_secoes >= 100 else "n"  # apuração em andamento não é totalização final
                 cand = doc["carg"][0]["agr"][0]["par"][0]["cand"][0]

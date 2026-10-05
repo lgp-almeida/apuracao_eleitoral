@@ -207,8 +207,8 @@ def test_arquivo_que_falhou_e_pedido_de_novo_no_ciclo_seguinte(fake_tse: FakeTSE
     col.ciclo()
     fake_tse.avancar_municipio(21272, 60011, "23:59:59", 100, {})
     fake_tse.falhas[RIO_GOV] = falha
-    r2 = col.ciclo()  # a falha de um arquivo não derruba o ciclo inteiro (os outros 3 cargos: 304)
-    assert (r2.arquivos_pedidos, r2.arquivos_304) == (4, 3) and _hora_rio_governador(tmp_path) != "23:59:59"
+    r2 = col.ciclo()  # a falha de um arquivo não derruba o ciclo inteiro (os outros 3 cargos chegam, regerados)
+    assert (r2.arquivos_pedidos, r2.arquivos_novos) == (4, 3) and _hora_rio_governador(tmp_path) != "23:59:59"
     r3 = col.ciclo()  # a abrangência é pedida de novo inteira; o que não mudou volta como 304
     assert (r3.arquivos_pedidos, r3.arquivos_novos, r3.arquivos_304) == (4, 1, 3)
     assert _hora_rio_governador(tmp_path) == "23:59:59"
@@ -254,3 +254,61 @@ def test_erro_inesperado_nao_mata_o_laco(fake_tse: FakeTSE, tmp_path: Path, monk
     col.executar(intervalo=0, max_ciclos=2)
     assert len(chamadas) == 2
     assert json.loads((tmp_path / "status.json").read_text())["erro"] is None  # o 2º ciclo deu certo
+
+
+def test_config_oficial_usa_o_ciclo_mais_recente() -> None:
+    """04/10/2026: o ele-c.json OFICIAL lista 54 pleitos (o de 2024 primeiro, suplementares, o de 2026 por
+    último). Usar o primeiro deixava o coletor sem eleição ("nenhuma eleição do 1º turno")."""
+    import json
+    from apuracao.divulgacao import modelo as mo
+    dados = json.loads((Path(__file__).parent / "tests/fixtures/divulgacao/ele-c-oficial-2026-10-02.json")
+                       .read_text(encoding="utf-8"))
+    assert dados["pl"][0]["c"] == "ele2024" and dados["pl"][-1]["c"] == "ele2026"
+    cfg = mo.parse_config(dados)
+    assert cfg.ciclo == "ele2026"
+    assert cfg.por_cargo(3).codigo == 6259 and cfg.por_cargo(1).codigo == 6257
+    assert cfg.por_cargo(3, 2).codigo == 6260 and cfg.por_cargo(1, 2).codigo == 6258
+
+
+
+# --------------------------------------------------------------- versão anterior (04/10/2026, rodada 36)
+def test_tse_anuncia_antes_de_publicar_o_coletor_pede_de_novo(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """Na noite de 04/10, o EA15 anunciava a totalização e o EA20 novo só saía minutos depois: o coletor
+    baixava a versão anterior, dava a totalização por vista e não pedia mais (38% dos casos, até 83 min
+    de atraso, só resolvidos reiniciando). Agora ele pede de novo até o TSE publicar."""
+    col = Coletor(_cliente(fake_tse), tmp_path)
+    col.ciclo()
+    fake_tse.avancar_municipio(21272, 60011, "23:59:59", 100, {}, cargos=())   # só o anúncio, sem publicar
+    for doc_nome in [n for n in fake_tse._docs if n.startswith("rj60011-") and "-e021272-" in n]:
+        fake_tse._docs[doc_nome]["hg"] = "16:00:00"                            # EA20 ainda da versão anterior
+    r1 = col.ciclo()
+    assert r1.arquivos_pedidos == 4 and r1.arquivos_antigos == 4 and _hora_rio_governador(tmp_path) != "23:59:59"
+    r2 = col.ciclo()                         # pede de novo (o TSE responde 304 enquanto não muda)
+    assert r2.arquivos_pedidos == 4 and r2.arquivos_antigos == 4
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["arquivos_antigos"] == 4
+    fake_tse.avancar_municipio(21272, 60011, "23:59:59", 100, {})              # agora o TSE publica
+    r3 = col.ciclo()
+    assert r3.arquivos_novos == 4 and r3.arquivos_antigos == 0 and _hora_rio_governador(tmp_path) == "23:59:59"
+    assert col.ciclo().arquivos_pedidos == 0  # em dia: não pede mais
+
+
+def test_versao_anterior_para_sempre_desiste_depois_de_algumas_tentativas(fake_tse: FakeTSE, tmp_path: Path,
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    from apuracao.divulgacao import coletor as cm
+    monkeypatch.setattr(cm, "TENTATIVAS_ANTIGO", 3)
+    col = Coletor(_cliente(fake_tse), tmp_path)
+    col.ciclo()
+    fake_tse.totalizar(21272, 60011, publicar=False)
+    for doc_nome in [n for n in fake_tse._docs if n.startswith("rj60011-") and "-e021272-" in n]:
+        fake_tse._docs[doc_nome]["hg"] = "16:00:00"
+    assert [col.ciclo().arquivos_pedidos for _ in range(5)] == [4, 4, 4, 0, 0]
+
+
+def test_hora_no_futuro_do_acompanhamento_nacional_nao_trava(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """O EA14 nacional traz uma hora de totalização no futuro (04/10/2026: 05/10 09h19): limitada à geração
+    do próprio acompanhamento, ela não faz o Presidente-BR parecer sempre "versão anterior"."""
+    col = Coletor(_cliente(fake_tse), tmp_path)
+    r1 = col.ciclo()
+    assert r1.arquivos_antigos == 0
+    assert col.ciclo().arquivos_pedidos == 0

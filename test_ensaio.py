@@ -144,3 +144,22 @@ def test_sessao_serve_a_lista_de_municipios_dada(rec: en.Reconstituicao) -> None
     s = en.SessaoEnsaio(en.Gerador(rec, en.Relogio(rec.inicio, rec.fim)), muns)
     lido = m.parse_municipios(s.get("x/mun-e021272-cm.json").json())
     assert lido.sort("CD_MUNICIPIO").equals(muns.sort("CD_MUNICIPIO"))
+
+
+def test_ensaio_com_o_atraso_do_tse(rec: en.Reconstituicao, tmp_path: Path) -> None:
+    """Rodada 36: o EA20 sai alguns minutos depois do anúncio no EA15 (como o TSE em 04/10/2026). O coletor
+    recebe a versão anterior, NÃO dá a totalização por vista e a busca de novo quando o TSE a publica."""
+    from datetime import timedelta
+    rel = en.Relogio(rec.inicio, rec.fim)
+    sessao = en.SessaoEnsaio(en.Gerador(rec, rel, atraso_ea20_min=3))
+    col = Coletor(ClienteDivulgacao("simulado", sessao=sessao, limitador=LimitadorTaxa(1e9)), tmp_path)
+    rel.fixar(H(18, 31))
+    r1 = col.ciclo()
+    assert r1.arquivos_antigos > 0                       # Niterói anunciado às 18h30; o EA20 ainda é de 18h28
+    rel.fixar(H(18, 31) + timedelta(seconds=30))
+    assert col.ciclo().arquivos_antigos > 0              # ainda não publicado: pede de novo
+    rel.fixar(rec.fim + timedelta(minutes=5))            # o TSE publicou tudo
+    col.ciclo()
+    fim = pl.read_parquet(tmp_path / "ultimo" / "totais.parquet").filter(pl.col("ABRANGENCIA") == "uf")
+    assert fim["TOTALIZACAO_FINAL"].all()
+    assert col.ciclo().arquivos_pedidos == 0

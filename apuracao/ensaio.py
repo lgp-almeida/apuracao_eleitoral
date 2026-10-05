@@ -227,12 +227,14 @@ def _dt(t: datetime | None) -> tuple[str, str]:
 class Gerador:
     """Monta os EA14/EA15/EA20 de uma hora virtual."""
 
-    def __init__(self, rec: Reconstituicao, relogio: Relogio) -> None:
-        self.rec, self.relogio = rec, relogio
+    def __init__(self, rec: Reconstituicao, relogio: Relogio, atraso_ea20_min: float = 0.0) -> None:
+        """`atraso_ea20_min`: o EA20 (resultado) mostra a apuração de N minutos antes do EA14/EA15
+        (acompanhamento) — como o TSE em 04/10/2026, que anunciava a totalização antes de publicá-la."""
+        self.rec, self.relogio, self.atraso_ea20_min = rec, relogio, atraso_ea20_min
         self._idg = 0
 
-    def _cabecalho(self, eleicao: int) -> dict[str, str]:
-        agora = self.relogio.agora()
+    def _cabecalho(self, eleicao: int, agora: datetime | None = None) -> dict[str, str]:
+        agora = agora or self.relogio.agora()
         self._idg += 1
         dg, hg = _dt(agora)
         return {"ele": str(eleicao), "t": "1", "f": "s", "dg": dg, "hg": hg, "idg": str(200000000 + self._idg)}
@@ -270,7 +272,7 @@ class Gerador:
         d = self.rec.cargos[cargo]
         if eleicao != d.eleicao:
             return None
-        agora = self.relogio.agora()
+        agora = self.relogio.agora() - timedelta(minutes=self.atraso_ea20_min)
         foto = self.rec.fotografia(cargo, agora)
         if abrangencia == "br":
             sec = foto["secoes_uf"].select(pl.col("TS", "TE", "ST", "EST", "C", "A").sum(), pl.col("DT").max())
@@ -301,7 +303,7 @@ class Gerador:
         uf_final = self.rec.fotografia(cargo, agora)["secoes_uf"].filter(pl.col("SG_UF") == self.rec.uf)
         final_uf = bool(uf_final.row(0, named=True)["ST"] == uf_final.row(0, named=True)["TS"]) if not uf_final.is_empty() else False
         dt, ht = _dt(r["DT"] or self.rec.inicio)
-        doc: dict[str, Any] = {**self._cabecalho(eleicao), "tpabr": tp, "cdabr": cdabr, "dt": dt, "ht": ht,
+        doc: dict[str, Any] = {**self._cabecalho(eleicao, agora), "tpabr": tp, "cdabr": cdabr, "dt": dt, "ht": ht,
                                "tf": "s" if r["ST"] == r["TS"] else "n", "and": "f" if r["ST"] == r["TS"] else "p",
                                "esae": "n", "s": _bloco_s(r["TS"], r["ST"]),
                                "e": _bloco_e(r["TE"], r["EST"], r["C"], r["A"])}

@@ -44,6 +44,7 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
   - O coletor faz um ciclo a cada 60 s (`--intervalo`). No 1º ciclo baixa cerca de 470 arquivos, em uns 25 s com o limite de 20 req/s; depois baixa só o que mudou.
   - O topo do site mostra a hora da última coleta e qualquer erro do coletor.
   - Um arquivo que falhar (rede, erro 5xx, página HTML no lugar do JSON) é pedido de novo no ciclo seguinte; o `status.json` conta esses casos em `arquivos_com_falha`. Um erro inesperado não para mais a coleta: vai para o log e o ciclo seguinte roda normalmente.
+  - **O TSE anuncia antes de publicar** (rodada 36): o acompanhamento (EA15) diz que um município foi totalizado minutos antes de o resultado (EA20) ser regerado. O coletor só aceita o EA20 gerado depois da hora anunciada; se vier a versão anterior, pede de novo a cada ciclo (até 15), e o `status.json` conta em `arquivos_antigos`. **Não é preciso reiniciar o site para "destravar" a apuração** (em 4/10, os reinícios manuais faziam esse papel).
 - **Alertas** (rodada 29): o site verifica a cada 15 s e avisa na própria página (faixa no topo, aviso no canto, som e "⚠" no título da aba) e no terminal (linha `ALERTA [...]` e campainha).
   - **Crítico** (faixa vermelha, 4 bipes):
     - coleta parada há mais de 10 min (3 intervalos, se o intervalo for maior);

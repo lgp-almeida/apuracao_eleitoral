@@ -48,6 +48,10 @@ CARGO_DISTRITAL = 8               # só para o DF
 CARGO_PRESIDENTE = 1
 PAUSA_BLOQUEIO_S = 660            # bloqueio do TSE dura 10 min e reinicia a cada tentativa
 TENTATIVAS_404 = 3                # EA20 com 404 é pedido de novo em até 3 ciclos (vários 404 bloqueiam o IP)
+# EA20 gerado ANTES da totalização que o EA15 anunciou = o TSE ainda serve a versão anterior (04/10/2026: 38% das
+# totalizações municipais; o EA20 novo sai até ~10 min depois do anúncio). Pede de novo (304 enquanto não muda)
+# por até 15 ciclos (~15 min) e só então aceita o que tem (rodada 36).
+TENTATIVAS_ANTIGO = 15
 DOWNLOADS_SIMULTANEOS = 8         # a taxa continua limitada pelo LimitadorTaxa do cliente
 
 
@@ -68,6 +72,7 @@ class ResumoCiclo:
     arquivos_304: int = 0
     arquivos_404: int = 0
     arquivos_com_falha: int = 0   # rede, 5xx ou JSON que não se lê: pedidos de novo no ciclo seguinte
+    arquivos_antigos: int = 0     # EA20 anterior à totalização anunciada: pedidos de novo no ciclo seguinte
     abrangencias_alteradas: int = 0
     erro: str | None = None
     estatisticas: dict[str, int] = field(default_factory=dict)
@@ -90,6 +95,8 @@ class Coletor:
         self._federal: int | None = None                           # eleição do presidente
         self._ultima_totalizacao: dict[tuple, datetime | None] = {}
         self._tentativas_404: dict[tuple, int] = {}
+        self._tentativas_antigo: dict[tuple, int] = {}
+        self._ab_gerado: dict[tuple, datetime | None] = {}  # chave da abrangência -> geração (dg/hg) do EA15/EA14
         self._resultados: dict[str, m.Resultado] = {}
         self._resultados_brasil: dict[str, m.Resultado] = {}     # presidente nas outras UFs
         self._acompanhamento: dict[str, pl.DataFrame] = {}
@@ -147,6 +154,8 @@ class Coletor:
                 meus = [Alvo(eleicao, c, uf, mun) for c in cargos if uf != "br" or c == CARGO_PRESIDENTE]
                 pendentes[chave] = (dt, meus)
                 alvos += meus
+        anunciado = {a: _limitar(dt, self._ab_gerado.get(chave))  # hora da totalização no EA15
+                     for chave, (dt, meus) in pendentes.items() for a in meus}
         cfg = self.cfg
         caminhos = [(a, self.cliente.caminho_resultado(cfg, a.eleicao, a.uf, a.cargo, a.municipio)) for a in alvos]
         with ThreadPoolExecutor(max_workers=self.downloads_simultaneos) as pool:
@@ -165,6 +174,9 @@ class Coletor:
                 continue
             outra_uf = alvo.uf not in (self.uf, "br")
             guardados = self._resultados_brasil if outra_uf else self._resultados
+            if _versao_anterior(resp, anunciado.get(alvo)):
+                faltou[alvo] = "antigo"   # guarda o que veio (é o melhor que há), mas pede de novo no próximo ciclo
+                resumo.arquivos_antigos += 1
             if not resp.mudou and caminho in guardados:
                 resumo.arquivos_304 += 1
                 continue
@@ -203,20 +215,30 @@ class Coletor:
             return exc
 
     def _confirmar(self, pendentes: dict[tuple, tuple[datetime | None, list[Alvo]]], faltou: dict[Alvo, str]) -> None:
-        """Dá por vista a totalização de cada abrangência cujos arquivos chegaram. Com falha (rede, 5xx,
-        JSON ilegível), ela é pedida de novo no ciclo seguinte; com 404, no máximo `TENTATIVAS_404` vezes."""
+        """Dá por vista a totalização de cada abrangência cujos arquivos chegaram ATUALIZADOS. Com falha
+        (rede, 5xx, JSON ilegível), ela é pedida de novo no ciclo seguinte; com 404, no máximo
+        `TENTATIVAS_404` vezes; com versão anterior à anunciada (o TSE ainda não publicou o EA20 novo),
+        no máximo `TENTATIVAS_ANTIGO` vezes."""
         for chave, (dt, alvos) in pendentes.items():
             motivos = {faltou[a] for a in alvos if a in faltou}
             if "falha" in motivos:
                 continue
-            if motivos:  # só 404
+            if "404" in motivos:
                 n = self._tentativas_404.get(chave, 0) + 1
                 if n < TENTATIVAS_404:
                     self._tentativas_404[chave] = n
                     continue
                 logger.warning("abrangência %s: 404 em %d ciclos seguidos; só volta na próxima totalização", chave, n)
+            elif "antigo" in motivos:
+                n = self._tentativas_antigo.get(chave, 0) + 1
+                if n < TENTATIVAS_ANTIGO:
+                    self._tentativas_antigo[chave] = n
+                    continue
+                logger.warning("abrangência %s: o TSE ainda serve resultado anterior à totalização de %s depois de "
+                               "%d ciclos; fica o que há até a próxima totalização", chave, dt, n)
             self._ultima_totalizacao[chave] = dt
             self._tentativas_404.pop(chave, None)
+            self._tentativas_antigo.pop(chave, None)
 
     def _abrangencias_alteradas(self, eleicao: int) -> list[tuple[tuple, datetime | None, tuple[str, int | None]]]:
         """(chave, dt/ht novo, (uf, município)) de cada abrangência cujo dt/ht mudou desde a última
@@ -232,6 +254,7 @@ class Coletor:
             if resp.mudou:
                 self._guardar_bruto(eleicao, resp.caminho, resp.dados)
             ab = m.parse_acompanhamento(resp.dados, uf)
+            gerado_ab = m.to_datetime(resp.dados.get("dg"), resp.dados.get("hg"))
             if uf == "br":  # do EA14: a linha nacional e, para o presidente por UF, as das OUTRAS UFs
                 outras = ab.filter((pl.col("ABRANGENCIA") == "uf") & (pl.col("UF") != self.uf.upper()))
                 ab = ab.filter(pl.col("ABRANGENCIA") == "br")
@@ -239,6 +262,9 @@ class Coletor:
                     tabelas.append(outras)
             tabelas.append(ab)
             self._acompanhamento[f"{eleicao}-{uf}"] = ab
+            for tab in (ab, outras) if uf == "br" and self.presidente_ufs else (ab,):
+                for row in tab.select("ABRANGENCIA", "UF", "CD_MUNICIPIO").iter_rows():
+                    self._ab_gerado[(eleicao, *row)] = gerado_ab
         alterados = []
         for tab in tabelas:
             for row in tab.iter_rows(named=True):
@@ -310,6 +336,7 @@ class Coletor:
             "ultimo_ciclo_fim": resumo.fim.isoformat(timespec="seconds") if resumo.fim else None,
             "arquivos_novos": resumo.arquivos_novos, "arquivos_304": resumo.arquivos_304,
             "arquivos_404": resumo.arquivos_404, "arquivos_com_falha": resumo.arquivos_com_falha,
+            "arquivos_antigos": resumo.arquivos_antigos,
             "abrangencias_alteradas": resumo.abrangencias_alteradas,
             "estatisticas": resumo.estatisticas, "erro": erro or resumo.erro,
             # bloqueio | indisponivel | rede | inesperado (os alertas do site dependem do tipo)
@@ -333,9 +360,10 @@ class Coletor:
             espera = intervalo
             try:
                 r = self.ciclo()
-                logger.info("ciclo %d: %d abrangências alteradas, %d arquivos novos, %d 304, %d 404, %d com falha (%.1fs)",
+                logger.info("ciclo %d: %d abrangências alteradas, %d arquivos novos, %d 304, %d 404, %d com falha, "
+                            "%d ainda na versão anterior (%.1fs)",
                             n, r.abrangencias_alteradas, r.arquivos_novos, r.arquivos_304, r.arquivos_404,
-                            r.arquivos_com_falha,
+                            r.arquivos_com_falha, r.arquivos_antigos,
                             (r.fim - r.inicio).total_seconds() if r.fim else 0)
             except DivulgacaoIndisponivel as exc:
                 logger.warning("%s — nova tentativa em %.0fs", exc, max(intervalo, 300))
@@ -360,6 +388,24 @@ class Coletor:
         resumo = ResumoCiclo(inicio=datetime.now(timezone.utc), erro=msg)
         resumo.fim = resumo.inicio
         self._gravar_status(resumo, erro=msg, tipo_erro=tipo)
+
+
+def _limitar(anunciado: datetime | None, gerado_ab: datetime | None) -> datetime | None:
+    """A hora anunciada não pode passar da geração do próprio acompanhamento: o EA14 NACIONAL traz uma
+    hora no futuro (04/10/2026: 05/10 09:19:47; no simulado, 30/09 07:10 num arquivo de 29/09)."""
+    if anunciado is None or gerado_ab is None:
+        return anunciado
+    return min(anunciado, gerado_ab)
+
+
+def _versao_anterior(resp: Resposta, anunciado: datetime | None) -> bool:
+    """O EA20 foi gerado (dg/hg) antes da totalização que o EA15 anunciou? Então é a versão anterior:
+    o TSE anuncia a totalização no acompanhamento antes de publicar o resultado do município.
+    Não usa o dt/ht do próprio EA20: nos de deputado o TSE grava 1–2 min antes da hora anunciada (04/10/2026)."""
+    if anunciado is None or not isinstance(resp.dados, dict):
+        return False
+    gerado = m.to_datetime(resp.dados.get("dg"), resp.dados.get("hg"))
+    return gerado is not None and gerado < anunciado
 
 
 def tipo_do_erro(exc: BaseException) -> str:

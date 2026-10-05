@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--inicio", help="hora de 2022 em que o ensaio começa (HH:MM; padrão: 5 min antes da 1ª seção)")
     p.add_argument("--intervalo", type=float, default=15.0, help="segundos (reais) entre ciclos do coletor")
     p.add_argument("--max-rps", type=float, default=20.0, help="limite de requisições do coletor (o mesmo da noite)")
+    p.add_argument("--atraso-ea20", type=float, default=3.0,
+                   help="minutos (de 2022) entre o anúncio da totalização (EA15) e o resultado (EA20), como o TSE "
+                        "em 04/10/2026 (padrão 3; 0 = juntos)")
     p.add_argument("--carga", type=int, default=4, help="usuários simultâneos consultando o site")
     p.add_argument("--boletim-min", type=int, default=60, help="minutos (da hora de 2022) entre boletins")
     p.add_argument("--interesse", nargs="+", default=["7:13713"], metavar="CARGO:NUMERO",
@@ -172,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{inicio:%H:%M}", f"{rec.fim:%H:%M}", duracao / 60)
 
     muns = Path("dados_2026/historico_2022_t1/ultimo/municipios.parquet")  # os 92 do RJ, com nome
-    sessao = en.SessaoEnsaio(en.Gerador(rec, relogio), pl.read_parquet(muns) if muns.exists() else None)
+    sessao = en.SessaoEnsaio(en.Gerador(rec, relogio, a.atraso_ea20), pl.read_parquet(muns) if muns.exists() else None)
     cliente = ClienteDivulgacao("simulado", sessao=sessao, max_rps=a.max_rps)
     cliente.ambiente = "ensaio 2022"  # só o rótulo (status.json e selo do site); os caminhos são os do simulado
     coletor = Coletor(cliente, destino)
@@ -204,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
                 r = coletor.ciclo()
                 ciclos.append({"hora_2022": f"{hora:%H:%M}", "duracao_s": round(time.time() - c0, 1),
                                "pedidos": r.arquivos_pedidos, "novos": r.arquivos_novos, "304": r.arquivos_304,
-                               "404": r.arquivos_404, "erro": None})
+                               "404": r.arquivos_404, "antigos": r.arquivos_antigos, "erro": None})
             except Exception as exc:  # o ensaio existe para achar isto: anota e segue
                 logger.exception("ciclo do coletor falhou")
                 ciclos.append({"hora_2022": f"{hora:%H:%M}", "duracao_s": round(time.time() - c0, 1), "erro": repr(exc)})
