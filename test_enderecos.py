@@ -101,7 +101,54 @@ def test_planilha_sem_consulta(pagina: Page, site: dict) -> None:
     assert pagina.get_attribute("button[data-aba=candidato]", "aria-selected") == "true"
 
 
+def test_historico_no_endereco(pagina: Page, site: dict) -> None:
+    """Resultado por município × 2022: indicado à mão pelo link (cargo 3, nº 22 do 2022 sintético)."""
+    n = site["numero"]
+    abrir(pagina, site, f"#candidato?cargo=3&numero={n}&hist=1&hist_cargo=3&hist_numero=22")
+    pagina.wait_for_function("() => document.querySelector('#hist-resultado table tbody tr')")
+    texto = pagina.inner_text("#hist-resultado")
+    assert "indicado à mão" in texto and "Votos 2022" in texto and "Variação dos votos" in texto
+    href = pagina.get_attribute("#hist-resultado a.botao-salvar", "href")
+    assert href == f"api/candidato/historico/planilha?cargo=3&numero={n}&numero_ref=22&cargo_ref=3"
+    r = pagina.request.get(site["url"] + href)
+    assert r.ok and r.body()[:2] == b"PK"
+    aba, q = endereco(pagina)
+    assert aba == "candidato" and (q["hist"], q["hist_cargo"], q["hist_numero"]) == ("1", "3", "22")
+
+    pagina.fill("#hist-numero", "")  # volta à identificação pelo nome civil
+    pagina.click("#form-historico button[type=submit]")
+    esperar_endereco(pagina, "h.includes('hist=1') && !h.includes('hist_numero')")
+    pagina.wait_for_function("() => !document.getElementById('hist-resultado').textContent.includes('indicado')")
+    pagina.click("#caixa-historico summary")  # fecha: hist sai do endereço
+    esperar_endereco(pagina, "!h.includes('hist')")
+
+
+def test_historico_nome_com_html(pagina: Page, site: dict) -> None:
+    abrir(pagina, site, "#candidato")
+    cands = pagina.evaluate("() => fetch('api/candidatos?cargo=3').then((r) => r.json())")
+    n = next(c["NUMERO"] for c in cands if "injetado" in c["NOME_URNA"])
+    abrir(pagina, site, f"#candidato?cargo=3&numero={n}&hist=1")
+    pagina.wait_for_function("() => document.getElementById('hist-resultado').textContent.includes('CANDIDATO HTML')")
+    assert "CANDIDATO HTML</b>" in pagina.inner_text("#hist-resultado")  # como texto
+    assert pagina.query_selector("#injetado") is None
+
+
 # --------------------------------------------------------------------------- comparação
+def test_variacao_partidos_no_endereco(pagina: Page, site: dict) -> None:
+    """Bloco "Gráfico da variação por partido": escolha (na ordem do link) e no máximo 3 partidos."""
+    abrir(pagina, site, "#comparacao?cargo=3&metrica=abstencao&var=1&var_partidos=PSB,PL&var_ponderar=1")
+    pagina.wait_for_function("() => document.querySelectorAll('#var-partidos input').length >= 4")
+    assert pagina.evaluate("() => partidosVar()") == ["PSB", "PL"]
+    assert pagina.is_checked("#var-ponderar")
+    # 2022 sintético só tem 2 municípios: a API explica por que não há gráfico
+    pagina.wait_for_function("() => document.querySelector('#var-resultado .aviso')?.textContent.includes('menos de 3')")
+    esperar_endereco(pagina, "h.includes('var_partidos=PSB,PL') && h.includes('var_ponderar=1')")
+    pagina.locator("#var-partidos input:not(:checked)").nth(0).check()
+    assert pagina.locator("#var-partidos input:disabled").count() == pagina.locator("#var-partidos input").count() - 3
+    pagina.click("#comp-variacao summary")  # fecha: var sai do endereço
+    esperar_endereco(pagina, "!h.includes('var')")
+
+
 def test_comparacao_partido(pagina: Page, site: dict) -> None:
     abrir(pagina, site, "#comparacao?cargo=3&metrica=partido&partido=PL&ordem=NM_MUNICIPIO-asc")
     pagina.wait_for_selector("#comp-tabela tbody tr")

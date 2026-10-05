@@ -873,7 +873,11 @@ function textoCadeira(k) {
 
 async function consultarCandidato(cargo, numero, municipio = null, ordem = null) {
   mostrarAba("candidato");
+  if (estado.cand && (estado.cand.cargo !== String(cargo) || estado.cand.numero !== String(numero))) {
+    for (const [, id] of CAMPOS_HISTORICO) document.getElementById(id).value = "";  // indicação era do anterior
+  }
   estado.cand = { cargo: String(cargo), numero: String(numero), municipio: municipio ?? null, ordem };
+  carregarHistorico();
   document.getElementById("cand-cargo").value = String(cargo);
   document.getElementById("cand-numero").value = String(numero);
   document.getElementById("pl-numero").value = String(numero);
@@ -978,6 +982,95 @@ function tabelaOrdenavel(colunas, linhas, formatar, aoClicar = null, opcoes = {}
   render();
   return el("table", {}, el("thead", {}, cab), corpo);
 }
+
+// ---------------------------------------------------------------- resultado por município × eleição anterior
+const CAMPOS_HISTORICO = [["hist_cargo", "hist-cargo"], ["hist_numero", "hist-numero"]];
+const CRITERIO_HIST = {
+  "nome completo": "mesmo nome civil completo", "indicado": "indicado à mão",
+  "ambíguo": "há homônimos — escolha abaixo", "não concorreu": "não encontrado pelo nome completo",
+  "sem referência": "site sem eleição de referência (--comparar-com)",
+};
+
+function paramsHistorico() {
+  const c = estado.cand;
+  if (!c) return null;
+  const q = new URLSearchParams({ cargo: c.cargo, numero: c.numero });
+  const nr = document.getElementById("hist-numero").value.trim();
+  const cr = document.getElementById("hist-cargo").value;
+  if (nr) { q.set("numero_ref", nr); if (cr) q.set("cargo_ref", cr); }
+  return q;
+}
+
+function descCandidato(c) {
+  return `${c.NUMERO} — ${c.NOME_URNA} · ${c.PARTIDO}${c.FEDERACAO ? " · " + c.FEDERACAO : ""} · ${c.DS_CARGO || c.CARGO}`;
+}
+
+async function carregarHistorico() {
+  const out = document.getElementById("hist-resultado");
+  if (!document.getElementById("caixa-historico").open) return;
+  const q = paramsHistorico();
+  if (!q) { out.replaceChildren(el("p", { class: "nota" }, "Consulte um candidato acima.")); return; }
+  if (estado.histEmCurso === q.toString()) return;  // o mesmo pedido já está a caminho (navegação dispara 2×)
+  const pedido = (estado.histPedido = estado.histEmCurso = q.toString());
+  // recarga do mesmo pedido: o que está na tela fica até chegar o novo (sem piscar "Carregando…")
+  if (estado.histMostrado !== pedido) out.replaceChildren(el("p", { class: "nota" }, "Carregando…"));
+  let d;
+  try { d = await api(`api/candidato/historico?${q}`); } catch (e) {
+    if (estado.histPedido === pedido) {
+      estado.histEmCurso = estado.histMostrado = null;
+      out.replaceChildren(el("p", { class: "aviso" }, e.message));
+    }
+    return;
+  }
+  if (estado.histPedido !== pedido) return;  // outro candidato pedido enquanto este carregava
+  estado.histEmCurso = null;
+  estado.histMostrado = pedido;
+  const [a, b] = d.sufixos, anoRef = d.ano_ref ?? "anterior";
+  const uf = d.linhas.find((r) => r.ABRANGENCIA === "uf") || {};
+  const at = d.atual, an = d.anterior;
+  const fichas = el("div", { class: "fichas" },
+    ficha(`Em ${d.ano}`, descCandidato(at)), ficha(`Votos ${d.ano} (${estado.uf})`, `${int(at.VOTOS)} · ${pct(at.PCT_VALIDOS)}`),
+    ficha(`Em ${anoRef}`, an ? descCandidato(an) : "—"),
+    an ? ficha(`Votos ${anoRef} (${estado.uf})`, `${int(an.VOTOS)} · ${pct(an.PCT_VALIDOS)} · ${an.SITUACAO || "—"}`) : null,
+    an ? ficha("Variação no estado", `${fmtComp(uf.VAR_VOTOS_PCT, "var_pct")} votos · ` +
+      `${fmtComp(uf.VAR_PCT_VALIDOS_PP, "pp")}`) : null,
+    ficha("Identificação", CRITERIO_HIST[d.criterio] || d.criterio));
+  const notas = d.notas.map((n) => el("p", { class: "nota" }, n));
+  const opcoes = d.opcoes.length ? el("ul", {}, d.opcoes.map((o) => el("li", {}, `${descCandidato(o)} (${int(o.VOTOS)} votos) `,
+    el("button", { type: "button", class: "link", onclick: () => {
+      document.getElementById("hist-cargo").value = String(o.CARGO);
+      document.getElementById("hist-numero").value = String(o.NUMERO);
+      gravarEnderecoCandidato(); carregarHistorico();
+    } }, "usar este")))) : null;
+  const salvar = el("a", { class: "botao-salvar", href: `api/candidato/historico/planilha?${q}`, download: "" },
+    "Salvar planilha (.xlsx)");
+  const cab = [["Município", "NM_MUNICIPIO"], [`Votos ${a}`, `VOTOS_${a}`, true], [`% válidos ${a}`, `PCT_VALIDOS_${a}`, true],
+    [`Posição ${a}`, `POSICAO_${a}`, true], [`Votos ${b}`, `VOTOS_${b}`, true], [`% válidos ${b}`, `PCT_VALIDOS_${b}`, true],
+    [`Posição ${b}`, `POSICAO_${b}`, true], ["Variação dos votos", "VAR_VOTOS_PCT", true],
+    ["Variação % válidos", "VAR_PCT_VALIDOS_PP", true], ["Seções totalizadas", "PCT_SECOES_TOTALIZADAS", true]];
+  const tabela = tabelaOrdenavel(cab, d.linhas.filter((r) => r.ABRANGENCIA === "mun"), (r, k) => {
+    const x = r[k];
+    if (k === "VAR_VOTOS_PCT") return fmtComp(x, "var_pct");
+    if (k === "VAR_PCT_VALIDOS_PP") return fmtComp(x, "pp");
+    if (k.startsWith("VOTOS_")) return int(x);
+    if (k.startsWith("POSICAO_")) return x === null || x === undefined ? "—" : `${x}º`;
+    if (k.startsWith("PCT")) return pct(x);
+    return x;
+  });
+  out.replaceChildren(...[fichas, ...notas, opcoes, salvar, el("div", { class: "tabela-rolagem" }, tabela)].filter(Boolean));
+}
+
+function aplicarHistorico(q) {
+  const caixa = document.getElementById("caixa-historico");
+  for (const [k, id] of CAMPOS_HISTORICO) document.getElementById(id).value = q.get(k) ?? "";
+  if (caixa.open !== (q.get("hist") === "1")) caixa.open = q.get("hist") === "1";  // o "toggle" carrega
+  else carregarHistorico();
+}
+
+document.getElementById("form-historico").addEventListener("submit", (e) => {
+  e.preventDefault(); gravarEnderecoCandidato(); carregarHistorico();
+});
+document.getElementById("caixa-historico").addEventListener("toggle", () => { gravarEnderecoCandidato(); carregarHistorico(); });
 
 // ---------------------------------------------------------------- planilha histórica
 document.getElementById("form-planilha").addEventListener("submit", async (e) => {
@@ -1147,7 +1240,8 @@ async function atualizarMapa() {
 
 // ---------------------------------------------------------------- endereço da aba Candidato
 // #candidato?cargo=7&numero=13713&municipio=60011&ordem=VOTOS-desc (formato antigo /cargo/número/município aceito)
-// campos da planilha histórica no endereço (prefixo pl_), só com o bloco aberto (pl=1)
+// campos da planilha histórica no endereço (prefixo pl_), só com o bloco aberto (pl=1); idem o resultado
+// por município × eleição anterior (hist=1, hist_cargo, hist_numero)
 const CAMPOS_PLANILHA = [["pl_ano", "pl-ano"], ["pl_cargo", "pl-cargo"], ["pl_numero", "pl-numero"],
   ["pl_municipio", "pl-municipio"], ["pl_comparar", "pl-comparar"]];
 
@@ -1156,6 +1250,13 @@ function enderecoCandidato() {
   const q = new URLSearchParams(c ? { cargo: c.cargo, numero: c.numero } : {});
   if (c && c.municipio !== null && c.municipio !== undefined) q.set("municipio", String(c.municipio));
   if (c && c.ordem) q.set("ordem", c.ordem);
+  if (document.getElementById("caixa-historico").open) {
+    q.set("hist", "1");
+    for (const [k, id] of CAMPOS_HISTORICO) {
+      const v = document.getElementById(id).value.trim();
+      if (v) q.set(k, v);
+    }
+  }
   if (document.getElementById("caixa-planilha").open) {
     q.set("pl", "1");
     for (const [k, id] of CAMPOS_PLANILHA) {
@@ -1734,6 +1835,12 @@ function enderecoComp() {
     }
   }
   if (estado.compOrdem) q.set("ordem", estado.compOrdem);
+  if (varCaixa.open && estado.compDetalhe !== "bairros") {
+    q.set("var", "1");
+    const ps = partidosVar();
+    if (ps.length) q.set("var_partidos", ps.join(","));
+    if (document.getElementById("var-ponderar").checked) q.set("var_ponderar", "1");
+  }
   return `#comparacao?${q}`;
 }
 
@@ -1762,10 +1869,254 @@ async function aplicarEnderecoComp(params) {
   estado.compFeito = true;  // mostrarAba não deve disparar a consulta padrão
   mostrarAba("comparacao");
   await atualizarComparacao();
+  document.getElementById("var-ponderar").checked = q.get("var_ponderar") === "1";
+  const abrir = q.get("var") === "1" && estado.compDetalhe !== "bairros";
+  estado.varEscolha = abrir && q.get("var_partidos") ? q.get("var_partidos").split(",").slice(0, MAX_VAR) : null;
+  if (varCaixa.open !== abrir) varCaixa.open = abrir;  // o "toggle" prepara e desenha
+  else if (abrir) await prepararVar().then(desenharVar);
 }
 
 document.getElementById("comp-copiar").addEventListener("click",
   () => copiarLink(enderecoComp(), document.getElementById("comp-copiar-msg")));
+
+// ---------------------------------------------------------------- variação por partido (aba Comparação)
+// Dispersão A × B por município (diagonal = sem mudança), distribuição da variação e estatística
+// (apuracao/comparacao.py: variacao_partidos). Endereço: &var=1&var_partidos=PT,PL[&var_ponderar=1]
+const MAX_VAR = 3;
+const CORES_VAR = ["--serie-1", "--serie-2", "--serie-3"];  // ordem fixa da escolha (dataviz)
+const PADRAO_VAR = { 1: ["PT", "PL"] };
+const varCaixa = document.getElementById("comp-variacao");
+const fmtNum = (v, casas = 2) => (v === null || v === undefined ? "—" : v.toFixed(casas).replace(".", ","));
+
+// na ordem em que foram escolhidos (o 1º e o 2º definem o sentido do swing de Butler), não na da lista
+function partidosVar() {
+  const marcados = new Set([...document.querySelectorAll("#var-partidos input:checked")].map((i) => i.value));
+  estado.varOrdem = (estado.varOrdem || []).filter((p) => marcados.has(p));
+  for (const p of marcados) if (!estado.varOrdem.includes(p)) estado.varOrdem.push(p);
+  return [...estado.varOrdem];
+}
+
+function limitarVar() {
+  const n = partidosVar().length;
+  document.querySelectorAll("#var-partidos input").forEach((i) => { i.disabled = !i.checked && n >= MAX_VAR; });
+}
+
+async function prepararVar(escolhidos = null) {
+  const caixa = document.getElementById("var-partidos");
+  const cargo = compCargo.value;
+  let ps;
+  try { ps = await api(`api/comparacao/partidos?cargo=${cargo}`); } catch (e) {
+    caixa.replaceChildren(el("span", { class: "nota" }, e.message)); return;
+  }
+  escolhidos = escolhidos ?? estado.varEscolha;
+  estado.varEscolha = null;
+  const marcados = new Set(escolhidos ?? (estado.varCargo === cargo ? partidosVar() : null)
+    ?? PADRAO_VAR[cargo]?.filter((p) => ps.some((x) => x.PARTIDO === p && x.NOS_DOIS))
+    ?? ps.filter((x) => x.NOS_DOIS).slice(0, 2).map((x) => x.PARTIDO));
+  estado.varCargo = cargo;
+  estado.varOrdem = [...marcados];
+  caixa.replaceChildren(...ps.map((x) => el("label", {}, el("input", { type: "checkbox", value: x.PARTIDO,
+    checked: marcados.has(x.PARTIDO), onchange: () => { limitarVar(); gravarEnderecoComp(); } }),
+  `${x.PARTIDO}${x.NOS_DOIS ? "" : x.VOTOS_A ? ` (só ${estado.comp.ano_a})` : ` (só ${estado.comp.ano_b})`}`)));
+  limitarVar();
+}
+
+async function desenharVar() {
+  const out = document.getElementById("var-resultado");
+  if (!varCaixa.open || estado.compDetalhe === "bairros") return;
+  const ps = partidosVar();
+  if (!ps.length) { out.replaceChildren(el("p", { class: "nota" }, "Escolha de 1 a 3 partidos.")); return; }
+  const q = new URLSearchParams({ cargo: compCargo.value, partidos: ps.join(",") });
+  if (document.getElementById("var-ponderar").checked) q.set("ponderar", "true");
+  if (estado.varEmCurso === q.toString()) return;  // o mesmo pedido já está a caminho
+  const pedido = (estado.varPedido = estado.varEmCurso = q.toString());
+  if (estado.varMostrado !== pedido) out.replaceChildren(el("p", { class: "nota" }, "Calculando…"));
+  let d;
+  try { d = await api(`api/comparacao/variacao?${q}`); } catch (e) {
+    if (estado.varPedido === pedido) {
+      estado.varEmCurso = estado.varMostrado = null;
+      out.replaceChildren(el("p", { class: "aviso" }, e.message));
+    }
+    return;
+  }
+  if (estado.varPedido !== pedido) return;
+  estado.varEmCurso = null;
+  estado.varMostrado = pedido;
+  const series = d.partidos.map((p, i) => ({ ...p, cor: cor(CORES_VAR[i]) }));
+  const fichas = el("div", { class: "fichas" }, ...series.flatMap((p) => [
+    ficha(`${p.partido} no estado`, p.uf ? `${pct(p.uf.A)} → ${pct(p.uf.B)} (${fmtComp(p.uf.DIF, "pp")})` : "—"),
+    ficha(`${p.partido}: variação média por município${d.ponderado ? " (ponderada)" : ""}`,
+      `${fmtComp(p.media, "pp")} · IC 95% ${fmtComp(p.ic_media[0], "pp")} a ${fmtComp(p.ic_media[1], "pp")} · DP ${fmtNum(p.dp)}`),
+    ficha(`${p.partido}: inclinação b (${d.ano_b} = a + b·${d.ano_a})`, p.reta.b === null ? "—"
+      : `${fmtNum(p.reta.b, 3)}${p.reta.ic_b ? ` · IC 95% ${fmtNum(p.reta.ic_b[0], 3)} a ${fmtNum(p.reta.ic_b[1], 3)}` : ""}` +
+        ` · p(b = 1) ${fmtP(p.reta.p_b1)} · r ${fmtNum(p.reta.pearson, 3)}`),
+  ]), d.butler ? ficha(`Swing de Butler ${d.butler.de} → ${d.butler.para}`,
+    `estado ${fmtComp(d.butler.uf, "pp")} · média por município ${fmtComp(d.butler.media, "pp")} ` +
+    `(IC 95% ${fmtComp(d.butler.ic_media[0], "pp")} a ${fmtComp(d.butler.ic_media[1], "pp")})`) : null);
+  const leituras = series.map((p) => el("p", { class: "nota var-leitura" }, el("strong", {}, `${p.partido}: `), p.leitura));
+  const cab = [["Município", "NM_MUNICIPIO"], ...series.flatMap((p) => [[`${p.partido} ${d.ano_a}`, `${p.partido}_A`, true],
+    [`${p.partido} ${d.ano_b}`, `${p.partido}_B`, true], [`${p.partido} variação`, `${p.partido}_DIF`, true]])];
+  if (d.butler) cab.push([`Butler ${d.butler.de} → ${d.butler.para}`, "BUTLER", true]);
+  const linhas = {};
+  series.forEach((p) => p.pontos.forEach((r) => {
+    const l = (linhas[r.CD_MUNICIPIO] ||= { NM_MUNICIPIO: r.NM_MUNICIPIO });
+    Object.assign(l, { [`${p.partido}_A`]: r.A, [`${p.partido}_B`]: r.B, [`${p.partido}_DIF`]: r.DIF });
+  }));
+  if (d.butler) d.butler.pontos.forEach((r) => { if (linhas[r.CD_MUNICIPIO]) linhas[r.CD_MUNICIPIO].BUTLER = r.VALOR; });
+  const tabela = tabelaOrdenavel(cab, Object.values(linhas), (r, k) =>
+    k === "NM_MUNICIPIO" ? r[k] : k.endsWith("_DIF") || k === "BUTLER" ? fmtComp(r[k], "pp") : pct(r[k]));
+  out.replaceChildren(fichas, ...leituras,
+    el("h3", { class: "sub" }, `% dos válidos em ${d.ano_a} × ${d.ano_b} por município`), graficoVariacao(d, series),
+    el("h3", { class: "sub" }, `Variação por município (p.p.) — média e intervalo de 95%`), graficoSwing(d, series),
+    el("h3", { class: "sub" }, "Tabela"), el("div", { class: "tabela-rolagem" }, tabela));
+}
+
+function botoesBaixar(g, itensLeg) {
+  return el("div", { class: "nota baixar-serie" }, "Baixar gráfico: ",
+    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "svg") }, "SVG"), " ",
+    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "png") }, "PNG"));
+}
+
+function legendaLinha(itensLeg) {
+  return el("div", { class: "legenda-linha" }, itensLeg.map(([c, t]) => el("span", {},
+    el("span", { class: "amostra", style: { background: c } }), t)));
+}
+
+// dica do ponto mais próximo do mouse (alvo maior que o ponto); `alvos`: [{x, y, el, texto: () => [nós]}]
+function comDica(g, W, H, alvos) {
+  const dica = el("div", { class: "dica", hidden: true });
+  let ativo = null;
+  g.addEventListener("mousemove", (ev) => {
+    const r = g.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) * (W / r.width), my = (ev.clientY - r.top) * (H / r.height);
+    let k = -1, melhor = 14 ** 2;
+    alvos.forEach((a, i) => { const dd = (a.x - mx) ** 2 + (a.y - my) ** 2; if (dd < melhor) { melhor = dd; k = i; } });
+    if (ativo) ativo.classList.remove("ativo");
+    if (k < 0) { dica.hidden = true; ativo = null; return; }
+    ativo = alvos[k].el; ativo.classList.add("ativo");
+    dica.replaceChildren(...alvos[k].texto());
+    dica.hidden = false;
+    dica.style.left = `${Math.min(ev.clientX - r.left + 12, r.width - 230)}px`;
+    dica.style.top = `${Math.max(4, ev.clientY - r.top - 80)}px`;
+  });
+  g.addEventListener("mouseleave", () => { dica.hidden = true; if (ativo) ativo.classList.remove("ativo"); ativo = null; });
+  return el("div", { class: "serie-caixa" }, g, dica);
+}
+
+function graficoVariacao(d, series) {
+  const W = 640, H = 480, m = { l: 52, r: 40, t: 12, b: 46 };
+  const todos = series.flatMap((p) => p.pontos.flatMap((r) => [r.A, r.B]));
+  const passo = 5;
+  const lo = Math.max(0, Math.floor(Math.min(...todos) / passo) * passo);
+  const hi = Math.min(100, Math.ceil(Math.max(...todos) / passo) * passo);
+  const X = (v) => m.l + ((W - m.l - m.r) * (v - lo)) / (hi - lo);
+  const Y = (v) => m.t + (H - m.t - m.b) * (1 - (v - lo) / (hi - lo));
+  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "dispersao", role: "img",
+    "aria-label": `% dos válidos em ${d.ano_a} × ${d.ano_b} por município: ${series.map((p) => p.partido).join(", ")}` });
+  for (const t of passos(lo, hi, 8)) {
+    g.append(svg("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), class: "grade" }),
+      svg("text", { x: m.l - 6, y: Y(t) + 3, class: "eixo", "text-anchor": "end" }, `${fmtInt.format(t)}%`),
+      svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, class: "grade" }),
+      svg("text", { x: X(t), y: H - m.b + 14, class: "eixo", "text-anchor": "middle" }, `${fmtInt.format(t)}%`));
+  }
+  g.append(svg("line", { x1: X(lo), y1: Y(lo), x2: X(hi), y2: Y(hi), class: "diagonal" }),
+    svg("text", { x: (m.l + W - m.r) / 2, y: H - 8, class: "titulo-eixo", "text-anchor": "middle" }, `% dos válidos em ${d.ano_a}`),
+    svg("text", { x: 12, y: (m.t + H - m.b) / 2, class: "titulo-eixo", "text-anchor": "middle",
+      transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }, `% dos válidos em ${d.ano_b}`));
+  const vmax = Math.max(...series.flatMap((p) => p.pontos.map((r) => r.VALIDOS)));
+  const raio = (v) => 4 + 14 * Math.sqrt(v / vmax);  // área ∝ válidos; mínimo de 8 px de diâmetro
+  const pontos = series.flatMap((p) => p.pontos.map((r) => ({ p, r })))
+    .sort((a, b) => b.r.VALIDOS - a.r.VALIDOS);  // grandes atrás, pequenos na frente
+  const alvos = pontos.map(({ p, r }) => {
+    const c = svg("circle", { cx: X(r.A), cy: Y(r.B), r: raio(r.VALIDOS), class: "ponto", fill: p.cor });
+    g.append(c);
+    return { x: X(r.A), y: Y(r.B), el: c, texto: () => [el("strong", {}, r.NM_MUNICIPIO),
+      el("div", {}, el("span", { class: "amostra", style: { background: p.cor } }), p.partido),
+      el("div", {}, `${d.ano_a}: ${pct(r.A)} · ${d.ano_b}: ${pct(r.B)}`),
+      el("div", {}, `Variação: ${fmtComp(r.DIF, "pp")} · ${int(r.VALIDOS)} válidos em ${d.ano_b}`)] };
+  });
+  series.forEach((p) => {  // reta de cada partido no intervalo dos seus pontos + rótulo direto na ponta
+    const e = p.reta;
+    if (e.b === null) return;
+    const xs = p.pontos.map((r) => r.A);
+    const x1 = Math.min(...xs), x2 = Math.max(...xs);
+    g.append(svg("line", { x1: X(x1), y1: Y(e.a + e.b * x1), x2: X(x2), y2: Y(e.a + e.b * x2), class: "reta", stroke: p.cor }),
+      svg("text", { x: Math.min(X(x2) + 4, W - m.r + 2), y: Y(e.a + e.b * x2) + 4, class: "rotulo" }, p.partido));
+  });
+  const itensLeg = [...series.map((p) => [p.cor, `${p.partido} (reta: tendência${d.ponderado ? " ponderada" : ""})`]),
+    [cor("--texto-2"), "Diagonal: sem mudança (acima = ganhou, abaixo = perdeu)"]];
+  return el("div", {}, comDica(g, W, H, alvos), legendaLinha(itensLeg),
+    el("p", { class: "nota" }, `Área do ponto ∝ votos válidos em ${d.ano_b}.`), botoesBaixar(g, itensLeg));
+}
+
+function graficoSwing(d, series) {
+  const linhas = series.map((p) => ({ nome: p.partido, cor: p.cor, media: p.media, ic: p.ic_media,
+    pontos: p.pontos.map((r) => ({ v: r.DIF, nome: r.NM_MUNICIPIO, destaque: r.DESTAQUE, A: r.A, B: r.B })) }));
+  if (d.butler) {
+    linhas.push({ nome: `Butler ${d.butler.de}→${d.butler.para}`, cor: cor("--texto-2"), media: d.butler.media,
+      ic: d.butler.ic_media, pontos: d.butler.pontos.map((r) => ({ v: r.VALOR, nome: r.NM_MUNICIPIO })) });
+  }
+  const faixa = 70, W = 640, m = { l: 110, r: 16, t: 8, b: 40 };
+  const H = m.t + m.b + faixa * linhas.length;
+  const vs = linhas.flatMap((l) => l.pontos.map((p) => p.v));
+  const lim = Math.max(1, ...vs.map(Math.abs)) * 1.05;
+  const X = (v) => m.l + ((W - m.l - m.r) * (v + lim)) / (2 * lim);
+  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "dispersao", role: "img",
+    "aria-label": `Variação por município em pontos percentuais: ${linhas.map((l) => l.nome).join(", ")}` });
+  for (const t of passos(-lim, lim, 8)) {
+    g.append(svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, class: t === 0 ? "zero" : "grade" }),
+      svg("text", { x: X(t), y: H - m.b + 14, class: "eixo", "text-anchor": "middle" },
+        `${t > 0 ? "+" : t < 0 ? "−" : ""}${fmtInt.format(Math.abs(t))}`));
+  }
+  g.append(svg("text", { x: (m.l + W - m.r) / 2, y: H - 8, class: "titulo-eixo", "text-anchor": "middle" },
+    `Variação de ${d.ano_a} para ${d.ano_b} (p.p.)`));
+  const alvos = [];
+  linhas.forEach((l, i) => {
+    const y0 = m.t + faixa * i + faixa / 2;
+    g.append(svg("text", { x: m.l - 8, y: y0 + 4, class: "rotulo", "text-anchor": "end" }, l.nome));
+    // espalhamento vertical determinístico (pela ordem), para os pontos não se sobreporem todos
+    l.pontos.forEach((p, k) => {
+      const y = y0 + (((k * 7919) % 23) - 11) * 1.3;
+      const c = svg("circle", { cx: X(p.v), cy: y, r: 4, class: "ponto", fill: l.cor });
+      g.append(c);
+      alvos.push({ x: X(p.v), y, el: c, texto: () => [el("strong", {}, p.nome), el("div", {}, l.nome),
+        el("div", {}, `Variação: ${fmtComp(p.v, "pp")}`),
+        p.A !== undefined ? el("div", {}, `${d.ano_a}: ${pct(p.A)} → ${d.ano_b}: ${pct(p.B)}`) : null].filter(Boolean) });
+    });
+    g.append(svg("line", { x1: X(l.ic[0]), x2: X(l.ic[1]), y1: y0, y2: y0, class: "ic", stroke: l.cor }),
+      svg("line", { x1: X(l.media), x2: X(l.media), y1: y0 - 20, y2: y0 + 20, class: "media" }));
+    // rótulos dos destaques acima ou abaixo da faixa, onde couberem sem encostar no anterior (senão, só na dica)
+    const fim = [-Infinity, -Infinity];
+    l.pontos.filter((p) => p.destaque).sort((a, b) => a.v - b.v).forEach((p) => {
+      const meia = (p.nome.length * 5.6) / 2 + 4;
+      const x = Math.min(Math.max(X(p.v), m.l + meia), W - m.r - meia);
+      const lado = [0, 1].find((k) => x - meia > fim[k]);
+      if (lado === undefined) return;
+      fim[lado] = x + meia;
+      g.append(svg("text", { x, y: lado ? y0 + 30 : y0 - 23, class: "rotulo-mun", "text-anchor": "middle" }, p.nome));
+    });
+  });
+  const itensLeg = [...linhas.map((l) => [l.cor, `${l.nome}: um ponto por município`]),
+    [cor("--texto"), `Traço: média${d.ponderado ? " ponderada" : ""}; faixa: intervalo de 95% (bootstrap)`]];
+  return el("div", {}, comDica(g, W, H, alvos), legendaLinha(itensLeg), botoesBaixar(g, itensLeg));
+}
+
+function ajustarVar() {
+  const bairros = estado.compDetalhe === "bairros";
+  varCaixa.hidden = bairros;
+  if (varCaixa.open && !bairros) prepararVar().then(() => { gravarEnderecoComp(); desenharVar(); });
+}
+
+varCaixa.addEventListener("toggle", async () => {
+  if (varCaixa.open) await prepararVar();
+  gravarEnderecoComp();
+  if (varCaixa.open) desenharVar();
+});
+document.getElementById("form-var").addEventListener("submit", (e) => { e.preventDefault(); gravarEnderecoComp(); desenharVar(); });
+document.getElementById("var-ponderar").addEventListener("change", () => { gravarEnderecoComp(); desenharVar(); });
+compCargo.addEventListener("change", ajustarVar);
+compDetalhe.addEventListener("change", ajustarVar);
+
 
 async function desenharDivergente(mapa, d, legendaEl, camada = "municipios") {
   const geo = camada === "bairros" ? await malhaBairros() : await malha();
@@ -2507,10 +2858,11 @@ function abrirPorHash() {
       // a consulta preenche o nº da planilha com o do candidato; o endereço vem depois e prevalece
       consultarCandidato(q.get("cargo"), Number(q.get("numero")),
         q.get("municipio") ? Number(q.get("municipio")) : null, q.get("ordem"))
-        .then(() => { aplicarPlanilha(q); gravarEnderecoCandidato(); });
+        .then(() => { aplicarPlanilha(q); aplicarHistorico(q); gravarEnderecoCandidato(); });
     } else {
       mostrarAba("candidato");
       aplicarPlanilha(q);
+      aplicarHistorico(q);
     }
     return;
   }

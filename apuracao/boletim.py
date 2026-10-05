@@ -481,7 +481,7 @@ Os números são os mesmos do site da apuração no momento da geração.</foote
 # --------------------------------------------------------------------------
 def _aba(wb: xlsxwriter.Workbook, nome: str, colunas: list[tuple[str, str, str]], linhas: list[dict[str, Any]],
          formatos: dict[str, Any]) -> None:
-    """`colunas`: (chave, título, formato: "txt" | "int" | "pct" | "hora")."""
+    """`colunas`: (chave, título, formato: "txt" | "int" | "pct" | "var" (variação %, com sinal) | "pp" | "hora")."""
     ws = wb.add_worksheet(nome[:31])
     for j, (_, titulo, fmt) in enumerate(colunas):
         ws.write(0, j, titulo, formatos["cab"])
@@ -491,8 +491,10 @@ def _aba(wb: xlsxwriter.Workbook, nome: str, colunas: list[tuple[str, str, str]]
             val = r.get(chave)
             if val is None:
                 continue
-            if fmt == "pct":
-                ws.write_number(i, j, float(val) / 100, formatos["pct"])
+            if fmt in ("pct", "var"):
+                ws.write_number(i, j, float(val) / 100, formatos[fmt])
+            elif fmt == "pp":
+                ws.write_number(i, j, float(val), formatos["pp"])
             elif fmt == "int":
                 ws.write_number(i, j, float(val), formatos["int"])
             else:
@@ -510,7 +512,9 @@ def _nome_aba(c: dict[str, Any], sufixo: str = "") -> str:
 
 def formatos_planilha(wb: xlsxwriter.Workbook) -> dict[str, Any]:
     return {"cab": wb.add_format({"bold": True, "bg_color": "#E9EEF8"}),
-            "pct": wb.add_format({"num_format": "0.00%"}), "int": wb.add_format({"num_format": "#,##0"})}
+            "pct": wb.add_format({"num_format": "0.00%"}), "int": wb.add_format({"num_format": "#,##0"}),
+            "var": wb.add_format({"num_format": "+0.0%;-0.0%;0.0%"}),
+            "pp": wb.add_format({"num_format": '+0.00" p.p.";-0.00" p.p.";0.00" p.p."'})}
 
 
 def para_planilha(b: dict[str, Any], destino: Path) -> None:

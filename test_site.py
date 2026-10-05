@@ -142,3 +142,9 @@ def test_site_na_rede_so_atende_consultas_pesadas_da_propria_maquina(tse_cache: 
     assert TestClient(app, client=("127.0.0.1", 5000)).get("/api/mapa/locais?ano=2024&camada=x").status_code == 400
     assert de_fora.get("/api/mapa/locais?ano=2024&camada=x").status_code == 403
     assert eh_loopback("::1") and eh_loopback("localhost") and not eh_loopback("0.0.0.0")
+
+
+def test_pagina_sem_cache(site: TestClient) -> None:
+    """A página, o JS e o CSS são revalidados a cada carga (senão o navegador mostra a versão antiga do site)."""
+    for caminho in ("/", "/app.js", "/style.css"):
+        assert site.get(caminho).headers["cache-control"] == "no-cache"

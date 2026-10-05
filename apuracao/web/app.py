@@ -9,12 +9,15 @@ Rotas:
   GET /api/painel              totais + candidatos de cada cargo (Presidente BR/UF, Governador, Senador, Deputados)
   GET /api/candidatos          lista (número, nome, partido) de um cargo, para busca
   GET /api/candidato           um candidato: total na UF e votos por município
+  GET /api/candidato/historico um candidato por município nesta eleição e na de referência (mesmo nome civil),
+                               com a variação; /planilha devolve o mesmo em .xlsx (sem depender dos microdados)
   GET /api/mapa                valor por município (código IBGE) para uma métrica
   GET /api/mapa/locais         um ponto por local de votação: voto, perfil do eleitorado ou resíduo do Perfil × voto
   GET /api/planilha            .xlsx de um candidato em ano com microdados (reaproveita planilha_candidato)
   GET /geo/municipios.geojson  malha municipal do IBGE (baixada uma vez para o cache)
   GET /geo/locais.geojson      locais de votação com coordenadas (cadastro de eleitorado)
-  GET /api/comparacao[...]     comparação por município com uma eleição de referência (ex.: 2022)
+  GET /api/comparacao[...]     comparação por município com uma eleição de referência (ex.: 2022);
+                               /variacao: até 3 partidos, dispersão A × B e estatística da variação
   GET /api/projecao            projeção do resultado final (majoritários na UF) com margem calibrada em 2022
   GET /api/cadeiras            distribuição projetada das cadeiras de deputado (QE, QP, sobras) e eleitos
   GET /api/cadeiras/planilha   as listas de eleitos projetados em .xlsx (coluna "Destacado" para ?destacar=PL,PT)
@@ -182,6 +185,15 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None  # NaN/inf não existem em JSON
     return value
+
+
+def _limpar(obj: Any) -> Any:
+    """`_jsonable` em profundidade (dicts e listas aninhados), para respostas montadas no domínio."""
+    if isinstance(obj, dict):
+        return {k: _limpar(val) for k, val in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_limpar(val) for val in obj]
+    return _jsonable(obj)
 
 
 def _rows(df: pl.DataFrame) -> list[dict[str, Any]]:
@@ -596,6 +608,35 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
             abrs.insert(0, ("mun", municipio))
         return {"series": sr.serie_candidato(dados.diretorio, cargo, numero, abrs)}
 
+    def _historico(cargo: int, numero: int, cargo_ref: int | None, numero_ref: int | None) -> cp.HistoricoCandidato:
+        try:
+            return cp.historico_candidato(fonte_atual(), ref, uf, cargo, numero, cargo_ref, numero_ref)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/candidato/historico")
+    def candidato_historico(cargo: int, numero: int, cargo_ref: int | None = None,
+                            numero_ref: int | None = None) -> dict[str, Any]:
+        """O candidato por município nesta eleição e na de referência (`ref`), com a variação."""
+        h = _historico(cargo, numero, cargo_ref, numero_ref)
+        a, b = h.sufixos
+        return {"ano": h.ano, "ano_ref": h.ano_ref, "sufixos": [a, b], "criterio": h.criterio, "notas": h.notas,
+                "atual": {k: _jsonable(val) for k, val in h.atual.items()},
+                "anterior": {k: _jsonable(val) for k, val in h.anterior.items()} if h.anterior else None,
+                "opcoes": h.opcoes, "linhas": _rows(h.tabela)}
+
+    @app.get("/api/candidato/historico/planilha")
+    def candidato_historico_planilha(cargo: int, numero: int, cargo_ref: int | None = None,
+                                     numero_ref: int | None = None) -> Response:
+        h = _historico(cargo, numero, cargo_ref, numero_ref)
+        gerado = datetime.now(BRASILIA).strftime("%d/%m/%Y %H:%M")
+        nome = f"historico_{numero}_{uf}_{h.ano}x{h.ano_ref or 'sem_ref'}.xlsx"
+        return Response(cp.planilha_historico(h, uf, gerado),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
     @app.get("/api/mapa")
     def mapa(cargo: int, metrica: str, numero: int | None = None, momento: str | None = None) -> dict[str, Any]:
         """Valor por município agora ou, com `momento` (ISO), como estava naquela hora da apuração."""
@@ -673,6 +714,17 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         if ref is None:
             raise HTTPException(404, "sem eleição de referência (use --comparar-com)")
         return _rows(cp.partidos_disponiveis(ref, fonte_atual(), cargo))
+
+    @app.get("/api/comparacao/variacao")
+    def comparacao_variacao(cargo: int, partidos: str, ponderar: bool = False) -> dict[str, Any]:
+        """% dos válidos de até 3 partidos na referência × agora por município, com a estatística da variação."""
+        if ref is None:
+            raise HTTPException(404, "sem eleição de referência (use --comparar-com)")
+        try:
+            d = cp.variacao_partidos(ref, fonte_atual(), cargo, partidos.split(","), ponderar)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return _limpar(d)
 
     @app.get("/api/comparacao")
     def comparacao(cargo: int, metrica: str, partido: str | None = None, numero_a: int | None = None,
@@ -1081,6 +1133,16 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return vigia.lista(10**9)
+
+    @app.middleware("http")
+    async def sem_cache_da_pagina(request: Request, call_next: Any) -> Response:
+        # sem Cache-Control o navegador reaproveita index.html/app.js antigos depois de uma atualização do site;
+        # "no-cache" = sempre confere (ETag/304), então o custo é só a revalidação
+        resp = await call_next(request)
+        if not request.url.path.startswith(("/api/", "/geo/", "/vendor/")):
+            resp.headers.setdefault("Cache-Control", "no-cache")
+        return resp
+
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
     return app
 

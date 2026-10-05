@@ -218,3 +218,11 @@ Registrado em 04/10/2026 (pedido do usuário: "Registre no TODO a análise das p
   - linha do tempo opcional em PNG: % apurado no TSE × aqui.
 - **Uso:** `python analisar_coleta.py --dados dados_2026/oficial [--log <log do vigia>] [--saida saidas/coleta_4_10.xlsx]`. Funções sem I/O em `apuracao/divulgacao/analise.py`, com testes sobre um `raw/` sintético.
 - **Também no ensaio:** rodar sobre `dados_2026/ensaio_2022` e conferir que não há pausa nossa e que nenhuma versão anterior fica sem ser pedida de novo.
+
+## 22. Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção, após os microdados de 2026)
+
+- **Por quê:** o gráfico de variação por partido da aba Comparação ([RODADA_38](RODADA_38_2026-10-05_variacao_partidos.md)) é uma leitura ecológica. Ele fala de municípios, não de pessoas, e não diz que "eleitores de Lula votaram em Flávio".
+- **Ferramenta:** para estimar quem migrou para quem, o caminho certo é a inferência ecológica de `transferencia.py`, que hoje faz 1º → 2º turno.
+- **Extensão:** levar o cálculo para 2022 → 2026 por seção quando os microdados de 2026 saírem.
+- **Atenção ao casar as seções:** casar 2022 × 2026 pela seção (ou pelo local) com `locais.py`, por causa das seções remanejadas e dos locais novos e desativados.
+- **Leitura:** com unidade município, a leitura é FRÁGIL (viés de agregação medido em 2022). Validar fora da amostra como na rodada 30.

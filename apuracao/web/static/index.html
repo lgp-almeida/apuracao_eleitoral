@@ -86,6 +86,27 @@
       </form>
       <div id="cand-resultado"></div>
 
+      <details class="caixa" id="caixa-historico">
+        <summary>Resultado por município × eleição anterior (planilha com a variação)</summary>
+        <p class="nota">Dados da apuração (por município), sem esperar os microdados. O candidato da eleição anterior é o
+          de mesmo nome civil completo, em qualquer cargo; para um homônimo, indique o cargo e o número abaixo.</p>
+        <form id="form-historico" class="filtros">
+          <label>Cargo na eleição anterior
+            <select id="hist-cargo">
+              <option value="">o mesmo</option>
+              <option value="1">Presidente</option>
+              <option value="3">Governador</option>
+              <option value="5">Senador</option>
+              <option value="6">Deputado Federal</option>
+              <option value="7">Deputado Estadual</option>
+            </select>
+          </label>
+          <label>Número na eleição anterior <input id="hist-numero" type="number" placeholder="pelo nome"></label>
+          <button type="submit">Atualizar</button>
+        </form>
+        <div id="hist-resultado"></div>
+      </details>
+
       <details class="caixa" id="caixa-planilha">
         <summary>Planilha histórica (microdados por local, zona, bairro e seção)</summary>
         <form id="form-planilha" class="filtros">
@@ -232,6 +253,19 @@
       <p class="nota">Diferença = ano atual − ano de referência. Percentuais sobre o total de cada ano; senador:
         1 vaga em 2022 e 2 em 2026 (cada eleitor votou duas vezes), então os percentuais não são diretamente equivalentes.
         Partidos e números de candidato do ambiente de simulado são fictícios.</p>
+      <details class="caixa" id="comp-variacao">
+        <summary>Gráfico da variação por partido (dispersão, distribuição e estatística)</summary>
+        <form id="form-var" class="filtros">
+          <fieldset class="grupo"><legend>Partidos (até 3)</legend><div id="var-partidos" class="destaque-opcoes"></div></fieldset>
+          <label><input type="checkbox" id="var-ponderar"> Ponderar pelos válidos (a capital domina)</label>
+          <button type="submit">Desenhar</button>
+        </form>
+        <div id="var-resultado"></div>
+        <p class="nota">Cada ponto é um município. Leitura <strong>ecológica</strong>: fala de municípios, não de pessoas — não
+          diz que eleitores de um candidato votaram em outro. Os municípios são todos os do estado (não uma amostra): o
+          intervalo de 95% (bootstrap dos municípios) mede a dispersão entre eles. Partido = mesma sigla nos dois anos,
+          mesmo com candidato diferente.</p>
+      </details>
     </section>
     <section id="aba-perfil" class="aba" role="tabpanel" hidden>
       <form id="form-perfil" class="filtros">
