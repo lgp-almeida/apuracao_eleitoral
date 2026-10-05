@@ -28,6 +28,7 @@ Registrado em 30/09/2026, a 4 dias do 1º turno (4/10/2026). A ordem segue a pri
 | 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | pendente |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | pendente |
 | 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
+| 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | pendente (feita à mão na [RODADA_36](RODADA_36_2026-10-04_coleta_versao_anterior.md)) |
 
 ---
 
@@ -189,3 +190,31 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
 
 - **O quê:** abstenção, brancos/nulos e transferência de votos do 1º para o 2º turno lado a lado, entre UFs, sobre as análises que já existem (rodadas 19, 26 e 30).
 
+---
+
+Registrado em 04/10/2026 (pedido do usuário: "Registre no TODO a análise das parciais (analisar_coleta.py)").
+
+## 21. Análise das parciais da noite (`analisar_coleta.py`)
+
+- **Por quê:** a análise da noite de 4/10 ([RODADA_36](RODADA_36_2026-10-04_coleta_versao_anterior.md)) foi feita com scripts avulsos, num diretório temporário da sessão. Transformar em ferramenta permite refazê-la no 2º turno e comparar as noites.
+- **Entrada:** `<dados>/raw/` e `raw_brasil/`, com todas as versões gravadas pelo coletor (ou o espelho da cópia de segurança). Sem rede.
+- **Dados de cada versão:**
+  - geração no TSE (`dg`/`hg`);
+  - totalização anunciada (`dt`/`ht`) e % apurado;
+  - chegada aqui (data de gravação do arquivo).
+- **O que mede:**
+  - **atraso da coleta:** chegada × geração, por tipo de arquivo (acompanhamento EA14/EA15, resultado EA20 da UF e dos municípios);
+  - **anúncio × publicação:** para cada totalização municipal anunciada no EA15, quando chegou o EA20 gerado depois dela; quantas receberam primeiro a versão anterior; mediana, p95 e máximo. Em 4/10 foram 2.820 de 7.423 (38%);
+  - **atraso do próprio TSE:** EA20 gerado depois do anúncio (mediana e p95), por janela de 30 min;
+  - **pausas:**
+    - do TSE: acompanhamento sem nova geração por mais de N min;
+    - nossas: nenhuma versão gravada por mais de N min. Separar das do TSE e cruzar com o log do vigia e do site (reinícios, terminal fechado);
+  - **validação do critério do coletor:** quantas versões anteriores ele reconhece e quantas corretas aceita de primeira (em 4/10, 1.634 de 1.667 e 85.077 de 86.011);
+  - **peculiaridades:** `dt` do EA20 antes da hora anunciada (deputados) e hora no futuro no EA14 nacional;
+  - **fim da noite:** % e hora da última totalização em disco × no TSE.
+- **Saída:**
+  - resumo no terminal;
+  - planilha (`--saida x.xlsx`) com as versões, as totalizações e os indicadores;
+  - linha do tempo opcional em PNG: % apurado no TSE × aqui.
+- **Uso:** `python analisar_coleta.py --dados dados_2026/oficial [--log <log do vigia>] [--saida saidas/coleta_4_10.xlsx]`. Funções sem I/O em `apuracao/divulgacao/analise.py`, com testes sobre um `raw/` sintético.
+- **Também no ensaio:** rodar sobre `dados_2026/ensaio_2022` e conferir que não há pausa nossa e que nenhuma versão anterior fica sem ser pedida de novo.
