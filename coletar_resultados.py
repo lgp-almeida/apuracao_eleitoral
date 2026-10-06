@@ -19,6 +19,7 @@ import requests
 
 from apuracao.divulgacao.cliente import AMBIENTES, BloqueioTSE, ClienteDivulgacao, DivulgacaoIndisponivel
 from apuracao.divulgacao.coletor import Coletor, destino_padrao, tipo_do_erro
+from apuracao.ufs import dir_uf
 
 logger = logging.getLogger("coletar_resultados")
 
@@ -30,7 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--turno", type=int, default=1, choices=[1, 2])
     p.add_argument("--intervalo", type=float, default=60.0, help="segundos entre ciclos")
     p.add_argument("--max-rps", type=float, default=20.0, help="requisições por segundo (TSE: máx. 100)")
-    p.add_argument("--destino", help="diretório de dados (padrão: dados_2026/<ambiente>; no 2º turno, <ambiente>_t2)")
+    p.add_argument("--destino", help="diretório de dados (padrão: dados_2026/<ambiente>[_t2]_<UF>; no RJ, a pasta "
+                                     "antiga sem a UF, se existir)")
     p.add_argument("--sem-presidente-br", action="store_true", help="não baixar o arquivo nacional do presidente")
     p.add_argument("--sem-presidente-ufs", action="store_true", help="não baixar o presidente nas outras UFs")
     p.add_argument("--uma-vez", action="store_true", help="um único ciclo e sai")
@@ -42,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
-    destino = Path(args.destino) if args.destino else destino_padrao(args.ambiente, turno=args.turno)
+    destino = Path(args.destino) if args.destino else dir_uf(destino_padrao(args.ambiente, turno=args.turno), args.uf)
     coletor = Coletor(ClienteDivulgacao(args.ambiente, max_rps=args.max_rps), destino, args.uf, args.turno,
                       presidente_br=not args.sem_presidente_br, presidente_ufs=not args.sem_presidente_ufs)
     if not args.uma_vez:

@@ -136,6 +136,7 @@ def test_importar_e_abrir_no_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(h, "load_detalhe", lambda ano, cache: _detalhe())
     monkeypatch.setattr(h, "load_candidatos", lambda ano, cache: _cand())
     monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    monkeypatch.setattr(h, "fonte_padrao", lambda ano, uf, cache: "secao")  # os votos acima são da fonte "secao"
     monkeypatch.setattr(h, "municipios_tse_ibge", lambda uf, cache: pl.DataFrame(
         {"UF": ["RJ", "RJ"], "CD_MUNICIPIO": [RIO, NIT], "CD_MUNICIPIO_IBGE": [3304557, 3303302],
          "NM_MUNICIPIO": ["RIO DE JANEIRO", "NITERÓI"], "CAPITAL": [True, False], "ZONAS": ["4,5", "71"]}))
@@ -151,3 +152,87 @@ def test_importar_e_abrir_no_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert cartoes == {(1, "BRASIL"), (1, "RJ"), (3, "RJ"), (7, "RJ")}
     mapa = site.get("/api/mapa?cargo=3&metrica=vencedor").json()
     assert mapa["itens"]["3304557"]["valor"] == 22 and mapa["itens"]["3303302"]["valor"] == 40
+
+
+# --------------------------------------------------------------------------
+# Fonte "munzona" (rodada 39): os arquivos nacionais por município e zona dão o mesmo resultado
+# --------------------------------------------------------------------------
+def _zip_tse(destino: Path, membro: str, cab: list[str], linhas: list[list]) -> None:
+    import zipfile
+
+    texto = "\n".join(";".join(f'"{x}"' for x in r) for r in [cab, *linhas]) + "\n"
+    with zipfile.ZipFile(destino, "w") as z:
+        z.writestr(membro, texto.encode("latin-1"))
+
+
+def _munzona(cache: Path) -> None:
+    """VOTOS_UF + VOTOS_BR no layout dos arquivos por município e zona (cada voto dividido em duas zonas, para
+    conferir a soma), com uma eleição suplementar (CD_TIPO_ELEICAO 1) que tem de ser ignorada."""
+    cab_c = ["CD_TIPO_ELEICAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_CANDIDATO",
+             "QT_VOTOS_NOMINAIS"]
+    cab_p = ["CD_TIPO_ELEICAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_PARTIDO",
+             "QT_VOTOS_LEGENDA_VALIDOS", "QT_VOTOS_LEGENDA_ANUL_SUBJUD", "QT_VOTOS_LEGENDA_ANULADOS"]
+    cand, part = [], []
+    for t, uf, mun, cargo, votavel, q in VOTOS_UF + VOTOS_BR:
+        if votavel in h.ESPECIAIS:
+            continue
+        if cargo in h.PROPORCIONAIS and votavel < 100:  # legenda: válidos + anulados
+            part.append([2, t, uf, mun, 1, cargo, votavel, q - 10, 0, 10])
+        else:
+            cand += [[2, t, uf, mun, 1, cargo, votavel, q // 2], [2, t, uf, mun, 2, cargo, votavel, q - q // 2]]
+    cand.append([1, 1, "RJ", RIO, 1, 3, 22, 99999])  # suplementar: fora
+    _zip_tse(cache / "votacao_candidato_munzona_2022.zip", "votacao_candidato_munzona_2022_BRASIL.csv", cab_c, cand)
+    _zip_tse(cache / "votacao_partido_munzona_2022.zip", "votacao_partido_munzona_2022_BRASIL.csv", cab_p, part)
+
+
+@pytest.fixture()
+def sem_microdados(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(h, "load_detalhe", lambda ano, cache: _detalhe())
+    monkeypatch.setattr(h, "load_candidatos", lambda ano, cache: _cand())
+    monkeypatch.setattr(h, "municipios_tse_ibge", lambda uf, cache: pl.DataFrame(
+        {"UF": ["RJ"], "CD_MUNICIPIO": [RIO], "CD_MUNICIPIO_IBGE": [3304557], "NM_MUNICIPIO": ["RIO DE JANEIRO"],
+         "CAPITAL": [True], "ZONAS": ["4,5"]}))
+
+
+@pytest.mark.parametrize("turno", [1, 2])
+def test_fonte_munzona_igual_a_secao(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sem_microdados: None,
+                                     turno: int) -> None:
+    _munzona(tmp_path)
+    monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    assert h.fonte_padrao(2022, "RJ", tmp_path) == "munzona"  # sem o votacao_secao da UF no cache
+    h.importar(2022, "RJ", turno, tmp_path, tmp_path / "s", fonte="secao")
+    h.importar(2022, "RJ", turno, tmp_path, tmp_path / "m")
+    for tab, chave in (("candidatos", ["CARGO", "ABRANGENCIA", "CD_MUNICIPIO", "NUMERO"]),
+                       ("partidos", ["CARGO", "ABRANGENCIA", "CD_MUNICIPIO", "NR_PARTIDO"]), ("totais", ["CARGO", "ABRANGENCIA", "CD_MUNICIPIO"])):
+        a, b = (pl.read_parquet(tmp_path / d / "ultimo" / f"{tab}.parquet").sort(chave, nulls_last=True) for d in "sm")
+        assert a.drop("SEQ", strict=False).equals(b.drop("SEQ", strict=False)), tab
+    fontes = json.loads((tmp_path / "m" / "status.json").read_text())["fontes"]
+    assert "votacao_candidato_munzona_2022" in fontes and not any(f.startswith("votacao_secao") for f in fontes)
+    br = pl.read_parquet(tmp_path / "m" / "ultimo" / "candidatos.parquet").filter(
+        (pl.col("ABRANGENCIA") == "br") & (pl.col("NUMERO") == 13))
+    assert br["VOTOS"].item() == (1120 if turno == 1 else 1130)  # Brasil = todas as UFs + exterior
+
+
+def test_fonte_padrao_e_invalida(tmp_path: Path, sem_microdados: None) -> None:
+    (tmp_path / "votacao_secao_2022_RJ.zip").touch()
+    assert h.fonte_padrao(2022, "rj", tmp_path) == "secao" and h.fonte_padrao(2022, "SP", tmp_path) == "munzona"
+    with pytest.raises(ValueError, match="fonte"):
+        h.importar(2022, "RJ", 1, tmp_path, tmp_path / "x", fonte="outra")
+
+
+def test_municipios_cache_sem_a_uf_e_refeito(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cache gerado do EA12 de uma eleição municipal não tem o DF: é refeito uma vez (rodada 39)."""
+    cols = {"UF": ["RJ"], "CD_MUNICIPIO": [RIO], "CD_MUNICIPIO_IBGE": [3304557], "NM_MUNICIPIO": ["RIO DE JANEIRO"],
+            "CAPITAL": [True], "ZONAS": ["4"]}
+    pl.DataFrame(cols).write_parquet(tmp_path / h.MUNICIPIOS_CACHE)
+    feitos = []
+
+    def baixar(path: Path) -> None:
+        feitos.append(path)
+        pl.DataFrame({k: v + ([{"UF": "DF", "CD_MUNICIPIO": 97012, "CD_MUNICIPIO_IBGE": 5300108,
+                                "NM_MUNICIPIO": "BRASÍLIA", "CAPITAL": True, "ZONAS": "1"}[k]])
+                      for k, v in cols.items()}).write_parquet(path)
+
+    monkeypatch.setattr(h, "_baixar_municipios", baixar)
+    assert h.municipios_tse_ibge("RJ", tmp_path).height == 1 and not feitos  # UF no cache: sem rede
+    assert h.municipios_tse_ibge("df", tmp_path)["NM_MUNICIPIO"].to_list() == ["BRASÍLIA"] and len(feitos) == 1

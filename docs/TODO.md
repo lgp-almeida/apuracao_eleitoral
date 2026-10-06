@@ -170,16 +170,19 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
 
 Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para o 2º turno"). Na noite de 4/10, só o RJ, que está ensaiado.
 
-## 18. Várias UFs (para o 2º turno)
+## 18. Várias UFs (para o 2º turno) — PARCIAL (rodada 39)
 
-- **Já funciona trocando `--uf`:** coletor, site, boletim, alertas, cópia, vigia, cadeiras (validadas nas 27 UFs em 2022), mapas e Perfil × voto. Teste em 30/09: um ciclo do simulado do **Acre** baixou 116 arquivos em 11,5 s, com os 22 municípios.
+- **Feito na [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md):**
+  - pasta de dados com a UF (`ufs.dir_uf`; as pastas antigas, sem sufixo, continuam valendo para o RJ);
+  - limite de acessos ao TSE dividido entre as UFs: `baixar_ufs.py` e `site_apuracao.py --ufs --coletar`
+    usam UM limitador para todas;
+  - um site com seletor de UF (`site_apuracao.py --ufs`), em vez do portal agrupado;
+  - histórico de qualquer UF pela fonte munzona, sem baixar o votacao_secao de cada uma.
 - **Falta:**
-  - pasta de dados com a UF por padrão (hoje `dados_2026/oficial` serve a uma UF só: duas se misturam);
-  - **limite de acessos ao TSE dividido entre as UFs** (cada processo usa 20 req/s, e eles somam no mesmo IP): `--max-rps` no site ou um coletor para várias UFs com um limite só;
   - ensaio, prontidão e `validar_projecao.py` aceitando qualquer UF (hoje conferem só o RJ: Castro eleito, 46/70 cadeiras, arquivos `_RJ`);
   - calibração da margem de Governador/Senador e do erro das cadeiras por UF, com os microdados de 2022 dela (a margem do Presidente já foi medida nas 27 UFs);
-  - portal agrupado por UF.
-- **Hoje, para uma UF a mais:** `--dados dados_2026/oficial_<UF> --porta <outra>` e o limite de acessos dividido à mão.
+  - boletim, cópia de segurança e alertas no site de várias UFs (hoje só no de uma UF);
+  - no site de várias UFs, montar uma UF que ganhou dados sem reiniciar.
 
 ## 19. Painel nacional do Presidente
 

@@ -2871,6 +2871,25 @@ function abrirPorHash() {
 }
 window.addEventListener("hashchange", abrirPorHash);
 
+// ---------------------------------------------------------------- seletor de UF (site com várias UFs)
+// O site de várias UFs monta cada uma em /<uf>/ e lista as disponíveis em /ufs.json; no site de uma UF
+// esse arquivo não existe e o seletor fica escondido. Trocar de UF mantém a aba e o endereço (#…).
+async function iniciarSeletorUf() {
+  let d;
+  try {
+    const r = await fetch("../ufs.json", { cache: "no-store" });
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (_) { return; }
+  const atual = location.pathname.split("/").filter(Boolean).at(-1)?.toUpperCase();
+  const sel = document.getElementById("seletor-uf");
+  sel.replaceChildren(...d.ufs.map((u) => el("option", { value: u.uf, disabled: !u.disponivel, selected: u.uf === atual },
+    `${u.uf} — ${u.nome}${u.disponivel ? "" : " (sem dados)"}`)));
+  sel.addEventListener("change", () => { location.href = `../${sel.value.toLowerCase()}/${location.hash}`; });
+  document.getElementById("seletor-uf-rotulo").hidden = false;
+}
+iniciarSeletorUf();
+
 iniciarComparacao().then(tick).then(abrirPorHash);
 preencherLista(document.getElementById("cand-cargo").value, "cand-lista");
 setInterval(tick, REFRESH_MS);

@@ -25,6 +25,7 @@ def dirs(fake_tse: FakeTSE, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(h, "load_detalhe", lambda ano, cache: _detalhe())
     monkeypatch.setattr(h, "load_candidatos", lambda ano, cache: _cand())
     monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    monkeypatch.setattr(h, "fonte_padrao", lambda ano, uf, cache: "secao")  # os votos acima são da fonte "secao"
     monkeypatch.setattr(h, "municipios_tse_ibge", lambda uf, cache: pl.DataFrame(
         {"UF": ["RJ", "RJ"], "CD_MUNICIPIO": [RIO, NIT], "CD_MUNICIPIO_IBGE": [IBGE_RIO, IBGE_NIT],
          "NM_MUNICIPIO": ["RIO DE JANEIRO", "NITERÓI"], "CAPITAL": [True, False], "ZONAS": ["4,5", "71"]}))

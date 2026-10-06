@@ -24,6 +24,7 @@ import requests
 
 import votos_por_local_votacao as v
 from apuracao import microdados as md
+from apuracao.ufs import dir_uf
 
 logger = logging.getLogger("preparar_2026")
 
@@ -51,7 +52,7 @@ def ao_chegar(a: argparse.Namespace, todos_com_dados: set[str]):
         if set(md.PARA_IMPORTAR) <= tem and mudaram & set(md.PARA_IMPORTAR):
             from apuracao import historico
             for turno in (1, 2):
-                destino = a.raiz / f"historico_{a.ano}_t{turno}"
+                destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)  # cada UF na sua pasta
                 try:
                     n = historico.importar(a.ano, a.uf, turno, a.cache_dir, destino)
                     logger.info("resultado oficial de %s (%sº turno) importado em %s: %s", a.ano, turno, destino, n)

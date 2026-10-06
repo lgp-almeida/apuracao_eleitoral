@@ -18,6 +18,7 @@ import requests
 
 import votos_por_local_votacao as v
 from apuracao import historico
+from apuracao.ufs import dir_uf
 
 logger = logging.getLogger("importar_resultado_historico")
 
@@ -28,7 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--uf", default="RJ", type=str.upper)
     p.add_argument("--turno", type=int, nargs="+", default=[1], choices=[1, 2])
     p.add_argument("--cache-dir", default="cache_tse")
-    p.add_argument("--raiz", default="dados_2026", help="destino: <raiz>/historico_<ano>_t<turno>")
+    p.add_argument("--raiz", default="dados_2026", help="destino: <raiz>/historico_<ano>_t<turno>_<UF> "
+                   "(no RJ, a pasta antiga sem a UF, se existir)")
+    p.add_argument("--fonte", choices=historico.FONTES,
+                   help="votos: secao (votacao_secao da UF) ou munzona (arquivos nacionais por município); "
+                        "padrão: secao se estiver no cache, senão munzona")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -39,8 +44,8 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     try:
         for turno in args.turno:
-            destino = Path(args.raiz) / f"historico_{args.ano}_t{turno}"
-            n = historico.importar(args.ano, args.uf, turno, Path(args.cache_dir), destino)
+            destino = dir_uf(Path(args.raiz) / f"historico_{args.ano}_t{turno}", args.uf)
+            n = historico.importar(args.ano, args.uf, turno, Path(args.cache_dir), destino, args.fonte)
             print(f"{args.ano} {args.uf} {turno}º turno: {n} -> {destino}")
             print(f"  python site_apuracao.py --dados {destino}")
     except (v.TseDataError, requests.RequestException) as exc:

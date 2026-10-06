@@ -148,3 +148,49 @@ def test_pagina_sem_cache(site: TestClient) -> None:
     """A página, o JS e o CSS são revalidados a cada carga (senão o navegador mostra a versão antiga do site)."""
     for caminho in ("/", "/app.js", "/style.css"):
         assert site.get(caminho).headers["cache-control"] == "no-cache"
+
+
+# --------------------------------------------------------------------------
+# Site com várias UFs (rodada 39): o app de cada UF montado em /<uf>/
+# --------------------------------------------------------------------------
+@pytest.fixture()
+def multi(fake_tse: FakeTSE, tse_cache: Path, tmp_path: Path) -> TestClient:
+    import shutil
+
+    from apuracao.web.multi import EntradaUF, create_multi_app
+
+    rj = tmp_path / "oficial_RJ"
+    Coletor(ClienteDivulgacao("simulado", sessao=fake_tse, limitador=LimitadorTaxa(1e9)), rj).ciclo()
+    shutil.copytree(rj, tmp_path / "oficial_AC")  # outra UF: os mesmos arquivos bastam para o roteamento
+    entradas = [EntradaUF("RJ", rj), EntradaUF("AC", tmp_path / "oficial_AC"), EntradaUF("SP", tmp_path / "oficial_SP")]
+    app = create_multi_app(entradas, "rj", lambda e: create_app(e.dados, e.uf, tse_cache, pesadas_so_local=True))
+    return TestClient(app, follow_redirects=False)
+
+
+def test_multi_ufs_rotas(multi: TestClient) -> None:
+    d = multi.get("/ufs.json").json()
+    assert d["padrao"] == "RJ" and [(u["uf"], u["disponivel"]) for u in d["ufs"]] == [
+        ("RJ", True), ("AC", True), ("SP", False)]
+    assert d["ufs"][1]["nome"] == "Acre" and d["ufs"][1]["url"] == "ac/"
+    assert multi.get("/").headers["location"] == "/rj/"
+    assert multi.get("/ac").headers["location"] == "/ac/"
+    assert multi.get("/xx").headers["location"] == "/rj/"  # UF sem dados ou inexistente: a padrão
+    assert multi.get("/ac/").status_code == 200 and "seletor-uf" in multi.get("/ac/").text
+    assert multi.get("/ac/api/status").json()["uf"] == "AC" and multi.get("/rj/api/status").json()["uf"] == "RJ"
+    assert multi.get("/sp/api/status").status_code == 404
+
+
+def test_multi_ufs_regras_por_rota(multi: TestClient) -> None:
+    # as regras de cada app valem para o caminho DENTRO dele (sem o /<uf>): rota pesada só na própria máquina
+    # (o TestClient não é loopback) e página sem cache, API sem o cabeçalho
+    assert multi.get("/rj/api/planilha?ano=2022&cargo=governador&numero=22").status_code == 403
+    assert multi.get("/ac/api/status").status_code == 200
+    assert multi.get("/ac/").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in multi.get("/ac/api/status").headers
+
+
+def test_multi_ufs_sem_dados(tmp_path: Path, tse_cache: Path) -> None:
+    from apuracao.web.multi import EntradaUF, create_multi_app
+
+    with pytest.raises(ValueError, match="nenhuma"):
+        create_multi_app([EntradaUF("SP", tmp_path / "x")], "SP", lambda e: create_app(e.dados, e.uf, tse_cache))

@@ -19,6 +19,7 @@ from pathlib import Path
 from apuracao.boletim import Boletineiro
 from apuracao.divulgacao.cliente import AMBIENTES
 from apuracao.divulgacao.coletor import destino_padrao
+from apuracao.ufs import dir_uf
 from apuracao.web.app import create_app
 
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ambiente", choices=sorted(AMBIENTES), default="simulado")
     p.add_argument("--uf", default="RJ", type=str.upper)
     p.add_argument("--turno", type=int, default=1, choices=[1, 2])
-    p.add_argument("--dados", help="diretório de dados (padrão: dados_2026/<ambiente>)")
+    p.add_argument("--dados", help="diretório de dados (padrão: dados_2026/<ambiente>[_t2]_<UF>; no RJ, a pasta antiga)")
     p.add_argument("--saida", help="diretório dos boletins (padrão: <dados>/boletins)")
     p.add_argument("--cache-dir", default="cache_tse")
     p.add_argument("--destacar", nargs="+", default=[], metavar="SIGLA",
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%H:%M:%S")
-    dados = Path(a.dados) if a.dados else destino_padrao(a.ambiente, turno=a.turno)
+    dados = Path(a.dados) if a.dados else dir_uf(destino_padrao(a.ambiente, turno=a.turno), a.uf)
     if not (dados / "ultimo").exists():
         print(f"sem dados do coletor em {dados}", file=sys.stderr)
         return 1

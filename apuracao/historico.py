@@ -7,7 +7,11 @@ módulo monta as MESMAS tabelas a partir dos microdados da CDN:
   detalhe_votacao_munzona_<ano>  totais oficiais por município/zona e cargo (aptos,
                                  comparecimento, abstenção, válidos, legenda, brancos,
                                  nulos, anulados, anulados sub judice, seções)
-  votacao_secao_<ano>_<UF>/_BR   votos por votável; somados por município, UF e Brasil
+  votacao_secao_<ano>_<UF>/_BR   votos por votável; somados por município, UF e Brasil (fonte "secao")
+  votacao_{candidato,partido}_munzona_<ano>
+                                 os mesmos votos já somados por município e zona (fonte "munzona",
+                                 rodada 39): um arquivo nacional por ano serve às 27 UFs, sem baixar
+                                 o votacao_secao de cada UF (vários GB por ano)
   consulta_cand_<ano>            nome de urna, partido, federação/coligação, situação por turno
   EA12 da divulgação 2026        código TSE → código IBGE dos municípios (para os mapas)
 
@@ -31,7 +35,7 @@ from apuracao.divulgacao import modelo as m
 
 logger = logging.getLogger("apuracao.historico")
 
-CARGOS_UF = (3, 5, 6, 7)
+CARGOS_UF = (3, 5, 6, 7, 8)  # 8 = deputado distrital (só DF)
 CARGO_PRESIDENTE = 1
 PROPORCIONAIS = (6, 7, 8)
 ESPECIAIS = (95, 96, 97)  # branco, nulo, anulado em separado
@@ -74,28 +78,86 @@ def load_votos(ano: int, uf: str, cache: Path) -> tuple[pl.LazyFrame, pl.LazyFra
     return uf_votes, pl.scan_parquet(pq)
 
 
+FONTES = ("secao", "munzona")
+_COLS_MUNZONA = ["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "CD_CARGO"]
+# votos de legenda no votacao_secao = todos os digitados para o partido (válidos, anulados e anulados sub judice)
+_LEGENDA = ["QT_VOTOS_LEGENDA_VALIDOS", "QT_VOTOS_LEGENDA_ANUL_SUBJUD", "QT_VOTOS_LEGENDA_ANULADOS"]
+
+
+def fonte_padrao(ano: int, uf: str, cache: Path) -> str:
+    """"secao" se o votacao_secao da UF já está no cache (o RJ continua como sempre); senão "munzona"."""
+    return "secao" if (cache / f"votacao_secao_{ano}_{uf.upper()}.zip").exists() else "munzona"
+
+
+def _munzona_parquet(dataset: str, ano: int, cache: Path, colunas: list[str]) -> Path:
+    """O CSV _BRASIL do arquivo nacional (todas as UFs, presidente e exterior uma vez só) convertido para
+    Parquet uma vez; cada UF filtra depois."""
+    spec = v.DatasetSpec(f"{dataset}_{ano}", f"{v.CDN_BASE}/{dataset}/{dataset}_{ano}.zip", v.NATIONAL,
+                         member="_BRASIL.csv")
+    zp = v.download(spec, cache)
+    return v.zip_to_parquet(zp, spec, colunas, colunas[:4], cache)
+
+
+def load_votos_munzona(ano: int, uf: str, cache: Path) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """Os mesmos (votos da UF, votos nacionais) de `load_votos`, com as mesmas colunas, a partir dos arquivos
+    por município e zona: nominais = QT_VOTOS_NOMINAIS de cada candidato; legenda (votável = nº do partido,
+    só nos proporcionais) = votos de legenda válidos + anulados + anulados sub judice.
+
+    Diferença conhecida (RJ 2022, rodada 39): o arquivo por município NÃO lista candidato com candidatura
+    inapta (votos anulados — ex.: Daniel Silveira, senador, 1,57 milhão), nem o partido dele quando só ele
+    teve votos; os votos dos demais candidatos, os válidos, os percentuais e os eleitos são idênticos à
+    fonte "secao"."""
+    cand = pl.scan_parquet(_munzona_parquet("votacao_candidato_munzona", ano, cache,
+                                            _COLS_MUNZONA + ["NR_CANDIDATO", "QT_VOTOS_NOMINAIS"]))
+    part_pq = _munzona_parquet("votacao_partido_munzona", ano, cache, _COLS_MUNZONA + ["NR_PARTIDO"] + _LEGENDA)
+    part = pl.scan_parquet(part_pq)
+    tem = set(part.collect_schema().names())  # 2014/2018 não têm todas as colunas
+    inteiro = lambda c: pl.col(c).cast(pl.String).str.strip_chars().cast(pl.Int64, strict=False)  # noqa: E731
+    soma = lambda cs: pl.sum_horizontal([inteiro(c).fill_null(0) for c in cs if c in tem] or [pl.lit(0)])  # noqa: E731
+    nominais = cand.select(*_COLS_MUNZONA, inteiro("NR_CANDIDATO").alias("NR_VOTAVEL"),
+                           inteiro("QT_VOTOS_NOMINAIS").alias("QT_VOTOS"))
+    leg = (part.filter(pl.col("CD_CARGO").is_in(list(PROPORCIONAIS)))
+           .select(*_COLS_MUNZONA, inteiro("NR_PARTIDO").alias("NR_VOTAVEL"), soma(_LEGENDA).alias("QT_VOTOS")))
+    todos = (pl.concat([nominais, leg], how="vertical_relaxed").filter(pl.col("QT_VOTOS") > 0)
+             .group_by(_COLS_MUNZONA + ["NR_VOTAVEL"]).agg(pl.col("QT_VOTOS").sum()))
+    return (todos.filter((pl.col("SG_UF") == uf.upper()) & (pl.col("CD_CARGO") != CARGO_PRESIDENTE)),
+            todos.filter(pl.col("CD_CARGO") == CARGO_PRESIDENTE))
+
+
 def municipios_tse_ibge(uf: str, cache: Path) -> pl.DataFrame:
-    """Municípios da UF com código IBGE, a partir do EA12 da divulgação do TSE (em cache)."""
+    """Municípios da UF com código IBGE, a partir do EA12 da divulgação do TSE (em cache). UF ausente do cache
+    (ex.: DF num cache gerado do EA12 de uma eleição municipal, que não tem o DF): o cache é refeito uma vez."""
     path = cache / MUNICIPIOS_CACHE
     if not path.exists():
-        from apuracao.divulgacao.cliente import BloqueioTSE, ClienteDivulgacao, DivulgacaoIndisponivel
-        for ambiente in ("oficial", "simulado"):
-            cli = ClienteDivulgacao(ambiente)
-            try:
-                resp = cli.get_json(cli.caminho_config())
-                if resp is None:
-                    continue
-                cfg = m.parse_config(resp.dados)
-                e = cfg.por_cargo(3) or cfg.eleicoes[0]
-                cm = cli.get_json(cli.caminho_municipios(cfg, e.codigo))
-                if cm is not None:
-                    m.parse_municipios(cm.dados).write_parquet(path)
-                    break
-            except (DivulgacaoIndisponivel, BloqueioTSE, requests.RequestException) as exc:
-                logger.warning("EA12 indisponível no ambiente %s: %s", ambiente, exc)
-        else:
-            raise v.TseDataError("não foi possível obter a tabela de municípios (EA12) do TSE")
-    return pl.read_parquet(path).filter(pl.col("UF") == uf.upper())
+        _baixar_municipios(path)
+    df = pl.read_parquet(path).filter(pl.col("UF") == uf.upper())
+    if df.is_empty():
+        logger.warning("%s sem a UF %s: refazendo a tabela de municípios do TSE", path.name, uf.upper())
+        _baixar_municipios(path)
+        df = pl.read_parquet(path).filter(pl.col("UF") == uf.upper())
+    return df
+
+
+def _baixar_municipios(path: Path) -> None:
+    """EA12 da eleição estadual mais recente do `ele-c.json` (oficial; senão simulado), gravado em `path`."""
+    from apuracao.divulgacao.cliente import BloqueioTSE, ClienteDivulgacao, DivulgacaoIndisponivel
+    for ambiente in ("oficial", "simulado"):
+        cli = ClienteDivulgacao(ambiente)
+        try:
+            resp = cli.get_json(cli.caminho_config())
+            if resp is None:
+                continue
+            cfg = m.parse_config(resp.dados)
+            e = cfg.por_cargo(3) or cfg.eleicoes[0]
+            cm = cli.get_json(cli.caminho_municipios(cfg, e.codigo))
+            if cm is not None:
+                tmp = path.with_suffix(".parquet.tmp")
+                m.parse_municipios(cm.dados).write_parquet(tmp)
+                tmp.replace(path)
+                return
+        except (DivulgacaoIndisponivel, BloqueioTSE, requests.RequestException) as exc:
+            logger.warning("EA12 indisponível no ambiente %s: %s", ambiente, exc)
+    raise v.TseDataError("não foi possível obter a tabela de municípios (EA12) do TSE")
 
 
 # --------------------------------------------------------------------------
@@ -267,13 +329,18 @@ def vagas(tot: pl.DataFrame, candidatos: pl.DataFrame) -> pl.DataFrame:
 # --------------------------------------------------------------------------
 # Orquestração
 # --------------------------------------------------------------------------
-def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path) -> dict[str, int]:
-    """Grava destino/ultimo/*.parquet + status.json no formato lido pelo site."""
+def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path, fonte: str | None = None) -> dict[str, int]:
+    """Grava destino/ultimo/*.parquet + status.json no formato lido pelo site. `fonte` dos votos:
+    "secao" (votacao_secao da UF + BR) ou "munzona" (arquivos nacionais por município e zona);
+    padrão: `fonte_padrao`."""
+    fonte = fonte or fonte_padrao(ano, uf, cache)
+    if fonte not in FONTES:
+        raise ValueError(f"fonte desconhecida: {fonte} (use {' ou '.join(FONTES)})")
     det, cand = load_detalhe(ano, cache), load_candidatos(ano, cache)
     tot = totais(det, uf, turno)
     if tot.is_empty():
         raise v.TseDataError(f"sem totais para {uf} {ano}, {turno}º turno")
-    votos_uf, votos_br = load_votos(ano, uf, cache)
+    votos_uf, votos_br = (load_votos if fonte == "secao" else load_votos_munzona)(ano, uf, cache)
     candidatos, partidos = candidatos_e_partidos(votos_uf, votos_br, cand, tot, uf, turno)
     tot = vagas(tot, candidatos)
     municipios = municipios_tse_ibge(uf, cache)
@@ -289,7 +356,9 @@ def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path) -> dict[
     status = {
         "ambiente": f"{ano} · {turno}º turno (microdados)", "ano": ano, "uf": uf.upper(), "turno": turno,
         "ciclo_tse": f"microdados {ano}", "ultimo_ciclo_inicio": agora, "ultimo_ciclo_fim": agora, "erro": None,
-        "fontes": [f"detalhe_votacao_munzona_{ano}", f"votacao_secao_{ano}_{uf.upper()}", f"votacao_secao_{ano}_BR",
+        "fontes": [f"detalhe_votacao_munzona_{ano}",
+                   *([f"votacao_secao_{ano}_{uf.upper()}", f"votacao_secao_{ano}_BR"] if fonte == "secao"
+                     else [f"votacao_candidato_munzona_{ano}", f"votacao_partido_munzona_{ano}"]),
                    f"consulta_cand_{ano}", "EA12 (divulgação TSE 2026) para o código IBGE"],
     }
     (destino / "status.json").write_text(json.dumps(status, indent=2, ensure_ascii=False))

@@ -537,6 +537,7 @@ def site(tmp_path_factory: pytest.TempPathFactory):
         mp.setattr(h, "load_detalhe", lambda ano, c: _detalhe())
         mp.setattr(h, "load_candidatos", lambda ano, c: _cand())
         mp.setattr(h, "load_votos", lambda ano, uf, c: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+        mp.setattr(h, "fonte_padrao", lambda ano, uf, c: "secao")  # os votos acima são da fonte "secao"
         mp.setattr(h, "municipios_tse_ibge", lambda uf, c: pl.DataFrame(
             {"UF": ["RJ", "RJ"], "CD_MUNICIPIO": [RIO, NIT], "CD_MUNICIPIO_IBGE": [E2E_IBGE[RIO], E2E_IBGE[NIT]],
              "NM_MUNICIPIO": ["RIO DE JANEIRO", "NITERÓI"], "CAPITAL": [True, False], "ZONAS": ["4,5", "71"]}))
@@ -553,10 +554,45 @@ def site(tmp_path_factory: pytest.TempPathFactory):
         if servidor.started:
             break
         time.sleep(0.05)
-    yield {"url": f"http://127.0.0.1:{porta}/", "numero": numero, "app": app}
+    yield {"url": f"http://127.0.0.1:{porta}/", "numero": numero, "app": app, "dados": dados, "cache": cache,
+           "ref": raiz / "ref"}
     servidor.should_exit = True
     thread.join(timeout=5)
     sem_rede.undo()
+
+
+@pytest.fixture(scope="session")
+def site_multi(site: dict, tmp_path_factory: pytest.TempPathFactory):
+    """Site com várias UFs (rodada 39) sobre os dados da fixture `site`: RJ e uma cópia como "AC" (os arquivos
+    servem ao roteamento e ao seletor), mais SP sem dados."""
+    import shutil
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from apuracao.web.app import create_app
+    from apuracao.web.multi import EntradaUF, create_multi_app
+
+    raiz = tmp_path_factory.mktemp("multi")
+    shutil.copytree(site["dados"], raiz / "oficial_AC")
+    entradas = [EntradaUF("RJ", site["dados"], site["ref"]), EntradaUF("AC", raiz / "oficial_AC"),
+                EntradaUF("SP", raiz / "oficial_SP")]
+    app = create_multi_app(entradas, "RJ", lambda e: create_app(e.dados, e.uf, site["cache"], referencia=e.referencia))
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        porta = sk.getsockname()[1]
+    servidor = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=porta, log_level="warning"))
+    thread = threading.Thread(target=servidor.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if servidor.started:
+            break
+        time.sleep(0.05)
+    yield {"url": f"http://127.0.0.1:{porta}/", "numero": site["numero"]}
+    servidor.should_exit = True
+    thread.join(timeout=5)
 
 
 @pytest.fixture(scope="session")

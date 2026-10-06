@@ -188,3 +188,24 @@ def test_copiar_link(pagina: Page, site: dict, hash_: str, botao: str) -> None:
     pagina.click(botao)
     copiado = pagina.evaluate("navigator.clipboard.readText()")
     assert copiado == site["url"] + pagina.evaluate("location.hash")
+
+
+# --------------------------------------------------------------------------- várias UFs (rodada 39)
+def test_seletor_de_uf(pagina: Page, site: dict, site_multi: dict) -> None:
+    """O seletor só existe no site de várias UFs; trocar de UF mantém a aba e o endereço."""
+    abrir(pagina, site, "#painel")
+    pagina.wait_for_function("() => document.getElementById('titulo').textContent.includes('RJ')")
+    assert pagina.is_hidden("#seletor-uf-rotulo")  # site de uma UF: /ufs.json não existe
+
+    n = site_multi["numero"]
+    pagina.goto(site_multi["url"] + f"#candidato?cargo=3&numero={n}")
+    pagina.wait_for_url("**/rj/**")  # a raiz leva à UF padrão
+    pagina.wait_for_function("() => !document.getElementById('seletor-uf-rotulo').hidden")
+    opcoes = pagina.eval_on_selector_all("#seletor-uf option", "os => os.map(o => [o.value, o.disabled])")
+    assert opcoes == [["RJ", False], ["AC", False], ["SP", True]] and pagina.input_value("#seletor-uf") == "RJ"
+    pagina.select_option("#seletor-uf", "AC")
+    pagina.wait_for_url("**/ac/**")
+    pagina.wait_for_function("() => document.getElementById('titulo').textContent.includes('AC')")
+    assert pagina.input_value("#seletor-uf") == "AC"
+    aba, q = endereco(pagina)
+    assert aba == "candidato" and q["numero"] == str(n)

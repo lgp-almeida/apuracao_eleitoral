@@ -187,6 +187,13 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def caminho_no_app(request: Request) -> str:
+    """Caminho dentro deste app, sem o prefixo da montagem (`/sp`, no site com várias UFs): o Starlette mantém
+    o caminho inteiro em `url.path`, e as regras por rota (`ROTAS_SO_LOCAL`) valem para o app de cada UF."""
+    raiz, caminho = request.scope.get("root_path", ""), request.url.path
+    return caminho[len(raiz):] or "/" if raiz and caminho.startswith(raiz) else caminho
+
+
 def _limpar(obj: Any) -> Any:
     """`_jsonable` em profundidade (dicts e listas aninhados), para respostas montadas no domínio."""
     if isinstance(obj, dict):
@@ -262,7 +269,7 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         @app.middleware("http")
         async def so_local(request: Request, call_next: Any) -> Response:
             cliente = request.client.host if request.client else ""
-            if request.url.path.startswith(ROTAS_SO_LOCAL) and not eh_loopback(cliente):
+            if caminho_no_app(request).startswith(ROTAS_SO_LOCAL) and not eh_loopback(cliente):
                 return JSONResponse({"detail": "disponível só no computador do site (consulta pesada; o site "
                                                "está aberto na rede sem senha)"}, status_code=403)
             return await call_next(request)
@@ -1139,7 +1146,7 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         # sem Cache-Control o navegador reaproveita index.html/app.js antigos depois de uma atualização do site;
         # "no-cache" = sempre confere (ETag/304), então o custo é só a revalidação
         resp = await call_next(request)
-        if not request.url.path.startswith(("/api/", "/geo/", "/vendor/")):
+        if not caminho_no_app(request).startswith(("/api/", "/geo/", "/vendor/")):
             resp.headers.setdefault("Cache-Control", "no-cache")
         return resp
 
