@@ -258,6 +258,21 @@
         inclui os votos sub judice no denominador). Partido: o mesmo partido em cada ano (fusão soma os antecessores). Senador:
         1 vaga em 2022 e 2 em 2026 (cada eleitor votou duas vezes), então os percentuais não são diretamente equivalentes.
         Partidos e números de candidato do ambiente de simulado são fictícios.</p>
+      <details class="caixa" id="comp-bancadas">
+        <summary>Bancadas de deputado × eleição anterior (partidos, reeleitos, novatos)</summary>
+        <form id="form-banc" class="filtros">
+          <label>Cargo
+            <select id="banc-cargo">
+              <option value="6">Deputado Federal</option>
+              <option value="7" selected>Deputado Estadual</option>
+              <option value="8">Deputado Distrital</option>
+            </select>
+          </label>
+        </form>
+        <div id="banc-resultado"></div>
+        <p class="nota">Partido = o mesmo partido nos dois anos (fusão soma os antecessores; número reaproveitado por partido
+          novo não herda nada). Pessoa = o mesmo nome civil completo, em qualquer cargo.</p>
+      </details>
       <details class="caixa" id="comp-variacao">
         <summary>Gráfico da variação por partido (dispersão, distribuição e estatística)</summary>
         <form id="form-var" class="filtros">

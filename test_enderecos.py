@@ -134,6 +134,20 @@ def test_historico_nome_com_html(pagina: Page, site: dict) -> None:
 
 
 # --------------------------------------------------------------------------- comparação
+def test_bancadas_no_endereco(pagina: Page, site: dict) -> None:
+    """Rodada 45: bloco de bancadas aberto pelo endereço, com o cargo; fechar tira do endereço."""
+    abrir(pagina, site, "#comparacao?cargo=3&metrica=abstencao&banc=1&banc_cargo=6")
+    pagina.wait_for_function("() => document.getElementById('comp-bancadas').open "
+                             "&& document.getElementById('banc-resultado').textContent.length > 0 "
+                             "&& !document.getElementById('banc-resultado').textContent.includes('Carregando')")
+    assert pagina.input_value("#banc-cargo") == "6"
+    esperar_endereco(pagina, "h.includes('banc=1') && h.includes('banc_cargo=6')")
+    pagina.select_option("#banc-cargo", "7")
+    esperar_endereco(pagina, "h.includes('banc_cargo=7')")
+    pagina.click("#comp-bancadas summary")
+    esperar_endereco(pagina, "!h.includes('banc')")
+
+
 def test_variacao_partidos_no_endereco(pagina: Page, site: dict) -> None:
     """Bloco "Gráfico da variação por partido": escolha (na ordem do link) e no máximo 3 partidos."""
     abrir(pagina, site, "#comparacao?cargo=3&metrica=abstencao&var=1&var_partidos=PSB,PL&var_ponderar=1")

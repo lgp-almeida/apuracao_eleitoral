@@ -1842,6 +1842,10 @@ function enderecoComp() {
     }
   }
   if (estado.compOrdem) q.set("ordem", estado.compOrdem);
+  if (bancCaixa.open) {
+    q.set("banc", "1");
+    q.set("banc_cargo", document.getElementById("banc-cargo").value);
+  }
   if (varCaixa.open && estado.compDetalhe !== "bairros") {
     q.set("var", "1");
     const ps = partidosVar();
@@ -1876,6 +1880,10 @@ async function aplicarEnderecoComp(params) {
   estado.compFeito = true;  // mostrarAba não deve disparar a consulta padrão
   mostrarAba("comparacao");
   await atualizarComparacao();
+  if (["6", "7", "8"].includes(q.get("banc_cargo"))) document.getElementById("banc-cargo").value = q.get("banc_cargo");
+  const abrirBanc = q.get("banc") === "1";
+  if (bancCaixa.open !== abrirBanc) bancCaixa.open = abrirBanc;  // o "toggle" desenha
+  else if (abrirBanc) desenharBancadas();
   document.getElementById("var-ponderar").checked = q.get("var_ponderar") === "1";
   const abrir = q.get("var") === "1" && estado.compDetalhe !== "bairros";
   estado.varEscolha = abrir && q.get("var_partidos") ? q.get("var_partidos").split(",").slice(0, MAX_VAR) : null;
@@ -1885,6 +1893,47 @@ async function aplicarEnderecoComp(params) {
 
 document.getElementById("comp-copiar").addEventListener("click",
   () => copiarLink(enderecoComp(), document.getElementById("comp-copiar-msg")));
+
+// ---------------------------------------------------------------- bancadas × eleição anterior (aba Comparação)
+// Endereço: &banc=1&banc_cargo=7 (TODO 15, rodada 45)
+const bancCaixa = document.getElementById("comp-bancadas");
+
+async function desenharBancadas() {
+  const out = document.getElementById("banc-resultado");
+  if (!bancCaixa.open) return;
+  const cargo = document.getElementById("banc-cargo").value;
+  const pedido = (estado.bancPedido = cargo);
+  out.replaceChildren(el("p", { class: "nota" }, "Carregando…"));
+  let d;
+  try { d = await api(`api/bancadas?cargo=${cargo}`); } catch (e) {
+    if (estado.bancPedido === pedido) out.replaceChildren(el("p", { class: "aviso" }, e.message));
+    return;
+  }
+  if (estado.bancPedido !== pedido) return;
+  const r = d.resumo, a = d.ano, b = d.ano_ref;
+  const fichas = el("div", { class: "fichas" },
+    ficha(`Eleitos ${b} → ${a}`, `${int(r.eleitos_antes)} → ${int(r.eleitos_agora)}`),
+    ficha("Reeleitos", int(r.reeleito)), ficha("Novatos", int(r.novato)),
+    ficha("Já tinham concorrido", int(r["já concorreu, sem se eleger"])),
+    ficha("Eleitos antes para outro cargo", int(r["eleito antes para outro cargo"])),
+    ficha(`Eleitos em ${b} que saíram`, int(r.nao_reeleitos)));
+  const sinal = (x) => (x > 0 ? `+${x}` : String(x));
+  const tPart = tabelaOrdenavel([["Partido", "PARTIDO"], [`Em ${b} como`, "ANTES_COMO"], [`Eleitos ${b}`, "ELEITOS_ANTES", true],
+    [`Eleitos ${a}`, "ELEITOS_AGORA", true], ["Variação", "VARIACAO", true]], d.partidos,
+  (x, k) => (k === "VARIACAO" ? sinal(x[k]) : x[k] ?? "—"));
+  const tEl = tabelaOrdenavel([["Eleito", "NOME_URNA"], ["Partido", "PARTIDO"], ["Votos", "VOTOS", true],
+    ["Trajetória", "TRAJETORIA"], ["Detalhe", "DETALHE"]], d.eleitos, (x, k) => (k === "VOTOS" ? int(x[k]) : x[k] ?? "—"));
+  const tSa = tabelaOrdenavel([[`Eleito em ${b}`, "NOME_URNA"], ["Partido", "PARTIDO_ANTES"], [`Votos ${b}`, "VOTOS_ANTES", true],
+    [`Em ${a}`, "DESTINO"]], d.sairam, (x, k) => (k === "VOTOS_ANTES" ? int(x[k]) : x[k] ?? "—"));
+  out.replaceChildren(fichas,
+    el("a", { class: "botao-salvar", href: `api/bancadas/planilha?cargo=${cargo}`, download: "" }, "Salvar planilha (.xlsx)"),
+    el("h3", { class: "sub" }, `Por partido — ${d.ds_cargo}`), el("div", { class: "tabela-rolagem" }, tPart),
+    el("h3", { class: "sub" }, `Eleitos em ${a}`), el("div", { class: "tabela-rolagem" }, tEl),
+    el("h3", { class: "sub" }, `Eleitos em ${b} que não voltaram ao cargo`), el("div", { class: "tabela-rolagem" }, tSa));
+}
+
+bancCaixa.addEventListener("toggle", () => { gravarEnderecoComp(); desenharBancadas(); });
+document.getElementById("banc-cargo").addEventListener("change", () => { gravarEnderecoComp(); desenharBancadas(); });
 
 // ---------------------------------------------------------------- variação por partido (aba Comparação)
 // Dispersão A × B por município (diagonal = sem mudança), distribuição da variação e estatística

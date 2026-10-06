@@ -16,6 +16,7 @@ Rotas:
   GET /api/planilha            .xlsx de um candidato em ano com microdados (reaproveita planilha_candidato)
   GET /geo/municipios.geojson  malha municipal do IBGE (baixada uma vez para o cache)
   GET /geo/locais.geojson      locais de votação com coordenadas (cadastro de eleitorado)
+  GET /api/bancadas[/planilha] bancadas de deputado × a eleição de referência (partidos, reeleitos, novatos)
   GET /api/comparacao[...]     comparação por município com uma eleição de referência (ex.: 2022);
                                /variacao: até 3 partidos, dispersão A × B e estatística da variação
   GET /api/projecao            projeção do resultado final (majoritários na UF) com margem calibrada em 2022
@@ -730,6 +731,32 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         if ref is None:
             raise HTTPException(404, "sem eleição de referência (use --comparar-com)")
         return _rows(cp.partidos_disponiveis(ref, fonte_atual(), cargo))
+
+    @app.get("/api/bancadas")
+    def bancadas_api(cargo: int) -> dict[str, Any]:
+        """Bancadas de deputado desta eleição × a de referência (partidos pela entidade; reeleitos e novatos)."""
+        from apuracao import bancadas as bc
+        if ref is None:
+            raise HTTPException(404, "sem eleição de referência (use --comparar-com)")
+        try:
+            b = bc.bancadas(fonte_atual(), ref, uf, cargo)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ano": b.ano, "ano_ref": b.ano_ref, "cargo": cargo, "ds_cargo": bc.NOMES[cargo], "resumo": b.resumo,
+                "partidos": _rows(b.partidos), "eleitos": _rows(b.eleitos), "sairam": _rows(b.sairam)}
+
+    @app.get("/api/bancadas/planilha")
+    def bancadas_planilha(cargo: int) -> Response:
+        from apuracao import bancadas as bc
+        if ref is None:
+            raise HTTPException(404, "sem eleição de referência (use --comparar-com)")
+        try:
+            b = bc.bancadas(fonte_atual(), ref, uf, cargo)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        nome = f"bancadas_{cargo}_{uf}_{b.ano}x{b.ano_ref}.xlsx"
+        return Response(bc.planilha(b, uf), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
     @app.get("/api/comparacao/variacao")
     def comparacao_variacao(cargo: int, partidos: str, ponderar: bool = False) -> dict[str, Any]:

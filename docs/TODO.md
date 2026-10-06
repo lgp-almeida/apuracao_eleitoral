@@ -35,8 +35,8 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 12 | Cópia de segurança automática a cada hora (dados, séries e JSON brutos de todas as parciais) | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (copia.py / --copia-dir) |
 | 13 | Modo TV no painel (tela cheia, fonte grande, rotação automática dos cargos) | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (#painel?tv=1) |
 | 14 | "O que mudou" desde o boletim anterior, no boletim e no painel | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (boletim e painel) |
-| 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | pendente |
-| 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **parcial**: feita à mão para o RJ na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md) (totais, candidatos, cadeiras); falta a ferramenta |
+| 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (bancadas, reeleitos, novatos; a variação por local vai com o 17a) |
+| 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (`conferir_resultado.py`; roda sozinho após cada importação) |
 | 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | pendente |
 | 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **feito**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md), [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) e [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem por turno; Governador/Senador medidos nas UFs com votos por seção no cache — RJ e ES) |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
@@ -166,13 +166,13 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
   - quem entrou ou saiu da disputa.
 - **Onde:** no boletim e no painel.
 
-## 15. Bancadas 2026 × 2022 (após a apuração)
+## 15. Bancadas 2026 × 2022 (após a apuração) — FEITO (rodada 45)
 
 - **O quê:**
   - eleitos por partido e federação comparados com 2022: ganhos, perdas, reeleitos e novatos;
   - no mapa por local, a variação de voto de cada partido.
 
-## 16. Conferência do tempo real com os microdados (após a apuração) — PARCIAL (rodada 40)
+## 16. Conferência do tempo real com os microdados (após a apuração) — FEITO (rodada 45)
 
 - **O quê:** quando os microdados de 2026 saírem, conferir se os totais gravados pelo coletor na noite batem com os oficiais, por município e cargo, e registrar as diferenças.
 - **Feito à mão na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md), RJ, com os totais reconstruídos das seções:**

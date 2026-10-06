@@ -93,6 +93,7 @@ def importar(a: argparse.Namespace, totais_de: str) -> dict[int, str]:
         feitos[turno] = totais_de
         logger.info("resultado oficial de %s (%sº turno, totais %s) importado em %s: %s", a.ano, turno,
                     historico.DESCRICAO_TOTAIS[totais_de], destino, n)
+        conferir_com_a_noite(a, turno, destino)
         if antes is not None:
             conf = historico.conferir_totais(antes, pl.read_parquet(destino / "ultimo" / "totais.parquet"))
             a.saidas.mkdir(parents=True, exist_ok=True)
@@ -101,6 +102,26 @@ def importar(a: argparse.Namespace, totais_de: str) -> dict[int, str]:
             logger.info("totais reconstruídos × oficiais (%sº turno): %d linhas com diferença → %s",
                         turno, conf.height, alvo)
     return feitos
+
+
+def conferir_com_a_noite(a: argparse.Namespace, turno: int, importado: Path) -> None:
+    """Tempo real (o que o coletor gravou na noite) × o recém-importado — `saidas/conferencia_<ano>_t<turno>.xlsx`
+    (TODO 16, rodada 45). Sem a pasta da noite, nada a conferir."""
+    from apuracao import conferencia as cf
+    from apuracao.divulgacao.coletor import destino_padrao
+    from apuracao.ufs import tem_dados
+    noite = dir_uf(destino_padrao("oficial", a.raiz, turno), a.uf)
+    if not tem_dados(noite):
+        return
+    try:
+        c = cf.conferir(noite, importado, a.uf)
+        saida = cf.para_planilha(c, a.saidas / f"conferencia_{a.ano}_t{turno}.xlsx")
+    except Exception:  # a conferência nunca impede a importação
+        logger.exception("conferência com a noite falhou")
+        return
+    logger.info("conferência tempo real × importado (%sº turno): %s — %s", turno,
+                "tudo igual" if c.ok else f"{c.totais.height} totais e {c.candidatos.height} candidatos diferentes",
+                saida)
 
 
 def totais_importados(a: argparse.Namespace) -> str | None:
