@@ -65,6 +65,15 @@ def _ler_setores_csv(zp: Path, prefixo: str, colunas: list[str]) -> pl.DataFrame
     return df.select([c.upper() for c in colunas])
 
 
+def _pontos(g) -> pl.DataFrame:
+    """Malha de setores → CD_SETOR, CD_MUN, LON, LAT (ponto representativo, WGS 84). Setor sem município sai:
+    no RS, a Lagoa dos Patos e a Lagoa Mirim são setores sem CD_MUN (e sem população)."""
+    g = g[g["CD_MUN"].notna()].to_crs("EPSG:4326")
+    pt = g.geometry.representative_point()
+    return pl.DataFrame({"CD_SETOR": g["CD_SETOR"].astype(str).to_list(), "CD_MUN": g["CD_MUN"].astype(int).to_list(),
+                         "LON": pt.x.to_numpy(), "LAT": pt.y.to_numpy()})
+
+
 def setores(uf: str, cache: Path) -> pl.DataFrame:
     """Um setor por linha: CD_SETOR, CD_MUN (IBGE), LON, LAT (ponto representativo), TIPO, AREA_KM2,
     POP, DOMICILIOS, MORADORES_DOM, RESP (responsáveis com renda), RENDA_MEDIA, RENDA_MEDIANA,
@@ -76,10 +85,7 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
 
     prefixo = str(pf.UF_IBGE[uf.upper()])
     malha = _baixar("malha_setores", cache, uf)
-    g = gpd.read_file(f"zip://{malha}", columns=["CD_SETOR", "CD_MUN"]).to_crs("EPSG:4326")
-    pt = g.geometry.representative_point()
-    geo = pl.DataFrame({"CD_SETOR": g["CD_SETOR"].astype(str).to_list(), "CD_MUN": g["CD_MUN"].astype(int).to_list(),
-                        "LON": pt.x.to_numpy(), "LAT": pt.y.to_numpy()})
+    geo = _pontos(gpd.read_file(f"zip://{malha}", columns=["CD_SETOR", "CD_MUN"]))
     b = _ler_setores_csv(_baixar(AGREGADOS_SETOR["basico"], cache, uf), prefixo,
                          ["CD_SETOR", "CD_TIPO", "AREA_KM2", "v0001", "v0005", "v0007"])
     r = _ler_setores_csv(_baixar(AGREGADOS_SETOR["renda"], cache, uf), prefixo, ["CD_SETOR", "V06001", "V06004", "V06006"])

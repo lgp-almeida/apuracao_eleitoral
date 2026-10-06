@@ -31,6 +31,18 @@ def cache(tse_cache: Path) -> Path:
     return tse_cache
 
 
+# --------------------------------------------------------------------------- malha de setores
+def test_setor_sem_municipio_sai_da_malha() -> None:
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    g = gpd.GeoDataFrame({"CD_SETOR": ["430000100000000", "431490205000001"], "CD_MUN": [None, "4314902"]},
+                         geometry=[box(-53, -33, -52, -32), box(-51.3, -30.1, -51.2, -30.0)], crs="EPSG:4674")
+    geo = pfl._pontos(g)  # a 1ª linha é como a Lagoa Mirim na malha do RS: sem CD_MUN
+    assert geo["CD_SETOR"].to_list() == ["431490205000001"] and geo["CD_MUN"].to_list() == [4314902]
+    assert -51.3 < geo["LON"][0] < -51.2 and -30.1 < geo["LAT"][0] < -30.0
+
+
 # --------------------------------------------------------------------------- regressão múltipla
 def test_regressao_recupera_os_efeitos() -> None:
     rng = np.random.default_rng(3)
