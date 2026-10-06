@@ -22,6 +22,7 @@ import polars as pl
 import requests
 
 import votos_por_local_votacao as v
+from apuracao import partidos as pt
 from apuracao import eleitorado as el
 from apuracao import ibge
 
@@ -282,9 +283,10 @@ def numero_partido(nr: pl.Expr) -> pl.Expr:
             .otherwise(nr.cast(pl.String).str.slice(0, 2).cast(pl.Int64)))
 
 
-def valor_por_bairro(vb: pl.DataFrame, cargo: int, metrica_: str, partido: int | None = None,
+def valor_por_bairro(vb: pl.DataFrame, cargo: int, metrica_: str, partido: int | list[int] | None = None,
                      numero: int | None = None) -> pl.DataFrame:
-    """CD_BAIRRO, VALOR, NUM, DEN — com numerador/denominador para somar a área coberta (resumo)."""
+    """CD_BAIRRO, VALOR, NUM, DEN — com numerador/denominador para somar a área coberta (resumo).
+    `partido`: nº do partido, ou a lista de nºs que formam o mesmo partido naquele ano (fusão: PTB + PATRIOTA)."""
     valido = ~pl.col("NR_VOTAVEL").is_in(ESPECIAIS)
     if metrica_ in ("brancos_nulos", "brancos", "nulos"):
         num = pl.col("QT_VOTOS").filter(pl.col("NR_VOTAVEL").is_in(NAO_VALIDOS[metrica_])).sum()
@@ -292,7 +294,8 @@ def valor_por_bairro(vb: pl.DataFrame, cargo: int, metrica_: str, partido: int |
     elif metrica_ == "partido":
         if partido is None:
             raise ValueError("informe o partido")
-        num = pl.col("QT_VOTOS").filter(numero_partido(pl.col("NR_VOTAVEL")) == partido).sum()
+        nums = [partido] if isinstance(partido, int) else list(partido)
+        num = pl.col("QT_VOTOS").filter(numero_partido(pl.col("NR_VOTAVEL")).is_in(nums)).sum()
         den = pl.col("QT_VOTOS").filter(valido).sum()
     elif metrica_ == "candidato":
         if numero is None:
@@ -334,7 +337,23 @@ class ComparacaoBairros:
                 self._siglas[ano] = {}
         return self._siglas[ano]
 
-    def lado(self, ano: int, cargo: int, metrica_: str, partido: int | None, numero: int | None,
+    def numeros_do_partido(self, partido: int, ano_a: int, ano_b: int) -> tuple[list[int], list[int]]:
+        """(nºs em A, nºs em B) do MESMO partido (rodada 41: o nº é reaproveitado e o partido troca de nº).
+        `partido` é o nº no ano MAIS RECENTE (o da lista de `partidos`); se só existir no mais antigo
+        (partido extinto), é o nº de lá. Mesmo ano: o próprio nº nos dois lados."""
+        if ano_a == ano_b:
+            return [partido], [partido]
+        antigo, novo = sorted((ano_a, ano_b))
+        ma, mn = self.siglas(antigo), self.siglas(novo)
+        corr = pt.correspondencia(ma, mn, antigo, novo)
+        if partido in mn:
+            nums_antigo, nums_novo = corr[partido], [partido]
+        else:  # nº só do ano antigo: o partido de hoje que o sucedeu (pode não haver)
+            nums_novo = sorted(n for n, ants in corr.items() if partido in ants)
+            nums_antigo = sorted({a for n in nums_novo for a in corr[n]} or {partido})
+        return (nums_antigo, nums_novo) if ano_a == antigo else (nums_novo, nums_antigo)
+
+    def lado(self, ano: int, cargo: int, metrica_: str, partido: int | list[int] | None, numero: int | None,
              turno: int) -> pl.DataFrame:
         if metrica_ == "eleitorado":
             return self.eleitorado(ano)
@@ -348,8 +367,16 @@ class ComparacaoBairros:
         """(uma linha por bairro com VALOR_A, VALOR_B, DIF; resumo da área coberta)."""
         if metrica_ not in METRICAS_COMPARACAO:
             raise ValueError(f"métrica indisponível por bairro: {metrica_}")
-        a = self.lado(ano_a, cargo_a, metrica_, partido, numero_a, turno)
-        b = self.lado(ano_b, cargo_b, metrica_, partido, numero_b, turno)
+        pa = pb = partido
+        if metrica_ == "partido" and partido is not None:
+            pa, pb = self.numeros_do_partido(partido, ano_a, ano_b)
+        a = self.lado(ano_a, cargo_a, metrica_, pa, numero_a, turno)
+        b = self.lado(ano_b, cargo_b, metrica_, pb, numero_b, turno)
+        # partido sem correspondente num dos anos (ex.: MISSÃO, novo em 2026): "sem dado", não 0%
+        vazio = lambda x: x.with_columns(pl.lit(None, pl.Float64).alias("VALOR"), pl.lit(0).alias("NUM"),  # noqa: E731
+                                         pl.lit(0).alias("DEN"))
+        if metrica_ == "partido" and partido is not None:
+            a, b = (vazio(a) if not pa else a), (vazio(b) if not pb else b)
         var_pct = METRICAS_COMPARACAO[metrica_][1] == "var_pct"
         df = (a.select("CD_BAIRRO", pl.col("VALOR").alias("VALOR_A"))
               .join(b.select("CD_BAIRRO", pl.col("VALOR").alias("VALOR_B")), on="CD_BAIRRO", how="full", coalesce=True)
@@ -367,19 +394,42 @@ class ComparacaoBairros:
         return df, {"VALOR_A": ta, "VALOR_B": tb, "DIF": dif}
 
     def partidos(self, ano_a: int, cargo_a: int, ano_b: int, cargo_b: int, turno: int = 1) -> pl.DataFrame:
-        """Partidos (por NÚMERO, estável entre eleições) com votos em cada ano e a sigla de cada ano."""
-        def votos(ano: int, cargo: int, sufixo: str) -> pl.DataFrame:
+        """Partidos com votos em cada lado, ligados pela ENTIDADE (rodada 41), não pelo nº: o 14 de 2026 (MISSÃO)
+        não é o 14 de 2022 (PTB, que se fundiu no PRD). PARTIDO = nº no ano mais recente (no antigo, se o
+        partido acabou); SIGLA_A/SIGLA_B = siglas de cada lado ("PTB + PATRIOTA" numa fusão)."""
+        def votos(ano: int, cargo: int) -> dict[int, int]:
             try:
                 vb = self.b.votos(ano, cargo, turno)
             except (v.TseDataError, requests.RequestException):
-                return pl.DataFrame(schema={"PARTIDO": pl.Int64, f"VOTOS_{sufixo}": pl.Int64})
-            return (vb.with_columns(numero_partido(pl.col("NR_VOTAVEL")).alias("PARTIDO")).drop_nulls("PARTIDO")
-                    .group_by("PARTIDO").agg(pl.col("QT_VOTOS").sum().alias(f"VOTOS_{sufixo}")))
+                return {}
+            return dict(vb.with_columns(numero_partido(pl.col("NR_VOTAVEL")).alias("P")).drop_nulls("P")
+                        .group_by("P").agg(pl.col("QT_VOTOS").sum()).iter_rows())
+        va, vb_ = votos(ano_a, cargo_a), votos(ano_b, cargo_b)
         sa, sb = self.siglas(ano_a), self.siglas(ano_b)
-        return (votos(ano_a, cargo_a, "A").join(votos(ano_b, cargo_b, "B"), on="PARTIDO", how="full", coalesce=True)
-                .with_columns(pl.col("PARTIDO").replace_strict(sa, default=None, return_dtype=pl.String).alias("SIGLA_A"),
-                              pl.col("PARTIDO").replace_strict(sb, default=None, return_dtype=pl.String).alias("SIGLA_B"),
-                              (pl.col("VOTOS_A").is_not_null() & pl.col("VOTOS_B").is_not_null()).alias("NOS_DOIS"))
+        mesmo_ano = ano_a == ano_b
+        novo_e_b = ano_b >= ano_a
+        v_novo, v_antigo = (vb_, va) if novo_e_b else (va, vb_)
+        s_novo, s_antigo = (sb, sa) if novo_e_b else (sa, sb)
+        a_novo, a_antigo = (ano_b, ano_a) if novo_e_b else (ano_a, ano_b)
+        mapa_antigo = {n: s_antigo.get(n, str(n)) for n in v_antigo}
+        mapa_novo = {n: s_novo.get(n, str(n)) for n in v_novo}
+        corr = ({n: [n] if n in v_antigo else [] for n in v_novo} if mesmo_ano
+                else pt.correspondencia(mapa_antigo, mapa_novo, a_antigo, a_novo))
+        linhas, usados = [], set()
+        for n, ants in corr.items():
+            usados |= set(ants)
+            linhas.append({"PARTIDO": n, "S_NOVO": mapa_novo[n], "V_NOVO": v_novo[n],
+                           "S_ANTIGO": " + ".join(mapa_antigo[a] for a in ants) or None,
+                           "V_ANTIGO": sum(v_antigo[a] for a in ants) if ants else None})
+        for n in sorted(set(v_antigo) - usados):  # partido do ano antigo sem sucessor com voto no novo
+            linhas.append({"PARTIDO": n, "S_NOVO": None, "V_NOVO": None, "S_ANTIGO": mapa_antigo[n],
+                           "V_ANTIGO": v_antigo[n]})
+        df = pl.DataFrame(linhas, schema={"PARTIDO": pl.Int64, "S_NOVO": pl.String, "V_NOVO": pl.Int64,
+                                          "S_ANTIGO": pl.String, "V_ANTIGO": pl.Int64})
+        a, b = ("ANTIGO", "NOVO") if novo_e_b else ("NOVO", "ANTIGO")
+        return (df.select("PARTIDO", pl.col(f"S_{a}").alias("SIGLA_A"), pl.col(f"S_{b}").alias("SIGLA_B"),
+                          pl.col(f"V_{a}").alias("VOTOS_A"), pl.col(f"V_{b}").alias("VOTOS_B"))
+                .with_columns((pl.col("VOTOS_A").is_not_null() & pl.col("VOTOS_B").is_not_null()).alias("NOS_DOIS"))
                 .sort(["NOS_DOIS", "VOTOS_B", "VOTOS_A"], descending=True, nulls_last=True))
 
     def anos_cadastro(self) -> list[int]:

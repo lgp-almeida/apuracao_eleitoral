@@ -39,6 +39,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -276,6 +277,7 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
     geo_cache: dict[str, Any] = {}
 
     cadeiras_cache: dict[tuple, Any] = {}
+    falhas_munzona: dict[tuple, float] = {}  # (fonte, ano, cargo) → quando falhou (tenta de novo após 10 min)
     cadeiras_trava = threading.Lock()
 
     def distribuicao(cargo: int) -> tuple[cd.Distribuicao, str]:
@@ -288,11 +290,16 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         with cadeiras_trava:
             if st.get("ano") and st.get("turno", 1) == 1:
                 chave: tuple = ("munzona", st["ano"], cargo)
-                if chave not in cadeiras_cache:
+                falhou = falhas_munzona.get(chave)
+                recente = falhou is not None and time.monotonic() - falhou < br.ESPERA_APOS_FALHA_S
+                if chave not in cadeiras_cache and not recente:
                     try:
                         cadeiras_cache[chave] = (cd.distribuir(*cd.entrada_munzona(st["ano"], uf, cargo, cache_dir)),
                                                  f"microdados oficiais do TSE ({st['ano']})")
                     except (v.TseDataError, requests.RequestException) as exc:
+                        # ex.: 2026 antes de o TSE publicar o votacao_partido_munzona: sem isto, cada pedido
+                        # de cadeiras repetia o download (404) na CDN
+                        falhas_munzona[chave] = time.monotonic()
                         logger.warning("sem microdados oficiais de %s para as cadeiras: %s", st["ano"], exc)
                 if chave in cadeiras_cache:
                     return cadeiras_cache[chave]
@@ -746,7 +753,12 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         if metrica in cp.METRICAS_TOTAIS:
             rotulo, unidade = cp.METRICAS_TOTAIS[metrica][1], cp.METRICAS_TOTAIS[metrica][2]
         elif metrica == "partido":
-            rotulo, unidade = f"% dos válidos — {partido}", "pp"
+            sa, sb = cp.siglas_do_partido(ref, atual, partido)
+            mesmo = " + ".join(sa) == " + ".join(sb)
+            rotulo = (f"% dos válidos — {partido}" if mesmo else
+                      f"% dos válidos — {' + '.join(sb) or 'sem correspondente'} ({atual.ano}) × "
+                      f"{' + '.join(sa) or 'sem correspondente'} ({ref.ano})")
+            unidade = "pp"
         else:
             rotulo, unidade = f"% dos válidos — nº {numero_a} ({ref.ano}) × nº {numero_b} ({atual.ano})", "pp"
         uf_row = df.filter(pl.col("ABRANGENCIA") == "uf")

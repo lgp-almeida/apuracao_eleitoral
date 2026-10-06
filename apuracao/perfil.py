@@ -242,16 +242,21 @@ def regressao_multipla(y: Any, xs: dict[str, Any], peso: Any = None) -> dict[str
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Alvo:
-    """% dos válidos de um candidato (nº) ou de um partido (nº do partido) numa eleição."""
+    """% dos válidos de um candidato (nº) ou de um partido (nº do partido) numa eleição. `partido` também aceita
+    a tupla de nºs que formam o mesmo partido naquele ano (fusão: PTB + PATRIOTA ↔ PRD; rodada 41)."""
 
     ano: int
     cargo: int
     turno: int = 1
     numero: int | None = None
-    partido: int | None = None
+    partido: int | tuple[int, ...] | None = None
+
+    @property
+    def partidos(self) -> tuple[int, ...]:
+        return () if self.partido is None else (self.partido,) if isinstance(self.partido, int) else self.partido
 
     def __post_init__(self) -> None:
-        if (self.numero is None) == (self.partido is None):
+        if (self.numero is None) == (self.partido is None) or self.partido == ():
             raise ValueError("informe o número do candidato OU o do partido")
         if self.cargo not in br.CARGOS:
             raise ValueError(f"cargo desconhecido: {self.cargo}")
@@ -272,7 +277,7 @@ def voto_por_bairro(vb: pl.DataFrame, alvo: Alvo) -> pl.DataFrame:
     município inteiro) sai da conta: ali não há 0% de preferência, há ausência de candidatura."""
     valido = ~pl.col("NR_VOTAVEL").is_in(br.ESPECIAIS)
     sel = (pl.col("NR_VOTAVEL") == alvo.numero) if alvo.numero is not None else (
-        br.numero_partido(pl.col("NR_VOTAVEL")) == alvo.partido)
+        br.numero_partido(pl.col("NR_VOTAVEL")).is_in(list(alvo.partidos)))
     df = (vb.group_by("CD_BAIRRO").agg(pl.col("QT_VOTOS").filter(sel).sum().alias("VOTOS"),
                                        pl.col("QT_VOTOS").filter(valido).sum().alias("VALIDOS"))
           .filter(pl.col("VALIDOS") > 0))
@@ -348,8 +353,8 @@ class PerfilVoto:
                     f"nº {alvo.numero} ({len(nomes)} candidatos diferentes, um por município)" if nomes else
                     f"nº {alvo.numero}")
         else:
-            sigla = self.comp.siglas(alvo.ano).get(alvo.partido)
-            quem = f"partido {alvo.partido}{' ' + sigla if sigla else ''}"
+            siglas = self.comp.siglas(alvo.ano)
+            quem = "partido " + " + ".join(f"{n}{' ' + siglas[n] if n in siglas else ''}" for n in alvo.partidos)
         return f"% dos válidos — {quem} ({cargo} {alvo.ano}{turno})"
 
     def candidatos(self, ano: int, cargo: int, turno: int = 1, municipio: int | None = None,
@@ -407,26 +412,35 @@ class PerfilVoto:
 
     def transferencias(self, ano_x: int, ano_y: int, cargo: int, top: int = 3, turno: int = 1,
                        municipios: tuple[int | None, ...] = (None, 3304557), min_validos: int = 200) -> pl.DataFrame:
-        """Para os `top` candidatos de `ano_y`, a correlação por bairro com o voto no MESMO partido
-        (nº) no mesmo cargo em `ano_x` — a primeira leitura de "quem herdou a base de quem".
+        """Para os `top` candidatos de `ano_y`, a correlação por bairro com o voto no MESMO partido no mesmo
+        cargo em `ano_x` — a primeira leitura de "quem herdou a base de quem". O mesmo partido é a ENTIDADE
+        (rodada 41: o 14 de 2026 é o MISSÃO, sem antecessor, não o PTB de 2022; o PRD soma PTB + PATRIOTA).
         Escopo: todos os bairros (None) e cada município pedido (padrão: a capital do RJ)."""
         linhas = []
         for r in self.candidatos(ano_y, cargo, turno).head(top).iter_rows(named=True):
             n = r["NUMERO"]
             partido = n if n < 100 else int(str(n)[:2])
+            antes, _ = self.comp.numeros_do_partido(partido, ano_x, ano_y)
+            if not antes:
+                logger.info("transferência %s → %s: %s (%s) não tem antecessor em %s", ano_x, ano_y, r["NOME"],
+                            partido, ano_x)
+                continue
+            alvo_x = Alvo(ano_x, cargo, turno, partido=tuple(antes))
             try:
-                self.voto(Alvo(ano_x, cargo, turno, partido=partido))
+                self.voto(alvo_x)
             except (v.TseDataError, ValueError):
                 continue
+            siglas_x = self.comp.siglas(ano_x)
             for mun in municipios:
-                d = self.dispersao(Alvo(ano_y, cargo, turno, numero=n), Alvo(ano_x, cargo, turno, partido=partido),
-                                   min_validos, municipio=mun)
+                d = self.dispersao(Alvo(ano_y, cargo, turno, numero=n), alvo_x, min_validos, municipio=mun)
                 e = d["estatistica"]
                 linhas.append({"CARGO": cargo, "NUMERO": n, "CANDIDATO": r["NOME"], "PARTIDO": partido,
+                               "PARTIDO_ANTES": " + ".join(siglas_x.get(a, str(a)) for a in antes),
                                "ESCOPO": "todos os bairros" if mun is None else str(mun), "N": e["n"],
                                "PEARSON": e["pearson"], "SPEARMAN": e["spearman"], "INCLINACAO": e["b"], "R2": e["r2"]})
         return pl.DataFrame(linhas, schema={"CARGO": pl.Int64, "NUMERO": pl.Int64, "CANDIDATO": pl.String,
-                                            "PARTIDO": pl.Int64, "ESCOPO": pl.String, "N": pl.Int64,
+                                            "PARTIDO": pl.Int64, "PARTIDO_ANTES": pl.String, "ESCOPO": pl.String,
+                                            "N": pl.Int64,
                                             "PEARSON": pl.Float64, "SPEARMAN": pl.Float64, "INCLINACAO": pl.Float64,
                                             "R2": pl.Float64})
 

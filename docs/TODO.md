@@ -4,14 +4,27 @@ Lista viva das propostas aceitas e ainda não feitas. Quando uma proposta for fe
 
 Registrado em 30/09/2026, a 4 dias do 1º turno (4/10/2026). A ordem segue a prioridade: primeiro o que serve na noite da apuração, depois o que depende dos microdados de 2026, publicados dias após o pleito.
 
+**Plano de quitação (06/10/2026, aprovado pelo usuário):** um lote por rodada, nesta ordem.
+
+| Lote | Rodada | Itens | Quando |
+|---|---|---|---|
+| 1 | 42 | 21 (análise das parciais), 23 (denominador do %), limpeza (3 e 19 fechados) | antes do 2º turno |
+| 2 | 43 | 18: boletim/cópia/alertas no site de várias UFs, UF nova sem reiniciar, prontidão e ensaio do 2º turno por UF | antes do 2º turno |
+| 3 | 44 | 18 (margem do 2º turno por UF) + 4b (recalibração com 2026) | antes do 2º turno |
+| 4 | 45 | 16 (ferramenta de conferência) + 15 (bancadas 2026 × 2022) | depois |
+| 5 | 46 | 22 (migração 2022 → 2026 por seção) + 17a (variação no mapa por local) | depois |
+| 6 | 47 | 20 (comparação entre UFs) + 17b (destino dos eliminados) | depois dos microdados do 2º turno |
+
+Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `--vigiar`) e 24 (contínuo).
+
 | # | Proposta | Quando serve | Situação |
 |---|---|---|---|
 | 1 | Distribuição de cadeiras de deputado em tempo real | noite de 4/10 | **feito**: [RODADA_20](RODADA_20_2026-09-30_cadeiras_de_deputado.md) |
 | 2 | Projeção do resultado final durante a apuração | noite de 4/10 | **feito**: [RODADA_21](RODADA_21_2026-09-30_projecao_do_resultado.md) |
 | 2b | Projeção das cadeiras de deputado (consolidados × em disputa) | noite de 4/10 | **feito**: [RODADA_22](RODADA_22_2026-09-30_projecao_de_cadeiras.md) (pedido do usuário em 30/09) |
-| 3 | Ensaio geral e roteiro de prontidão | 3/10 e 4/10 | **feito**: [RODADA_23](RODADA_23_2026-09-30_ensaio_geral.md) e [roteiro](ROTEIRO_NOITE_DA_ELEICAO.md); falta só a checagem do oficial em 3/10 |
-| 4 | Preparar os dados de 2026 assim que o TSE publicar | dias após o pleito | **feito**: [RODADA_24](RODADA_24_2026-09-30_microdados_2026.md); depois de 4/10, rodar `preparar_2026.py --vigiar` |
-| 4b | Recalibrar margem da projeção e σ das cadeiras com 2026 | quando saírem os microdados de 2026 | pendente — procedimento pronto e ensaiado: [RECALIBRAR_MARGENS](RECALIBRAR_MARGENS.md), [RODADA_25](RODADA_25_2026-09-30_recalibracao.md) |
+| 3 | Ensaio geral e roteiro de prontidão | 3/10 e 4/10 | **feito**: [RODADA_23](RODADA_23_2026-09-30_ensaio_geral.md) e [roteiro](ROTEIRO_NOITE_DA_ELEICAO.md); a checagem do oficial foi cumprida na noite de 4/10, que rodou no oficial (fechado na rodada 42) |
+| 4 | Preparar os dados de 2026 assim que o TSE publicar | dias após o pleito | **feito**: [RODADA_24](RODADA_24_2026-09-30_microdados_2026.md); gatilho de importação corrigido e totais provisórios das seções na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md). RJ importado em 06/10 (provisório); falta o detalhe munzona do TSE |
+| 4b | Recalibrar margem da projeção e σ das cadeiras com 2026 | quando saírem os microdados de 2026 | pendente — procedimento pronto e ensaiado: [RECALIBRAR_MARGENS](RECALIBRAR_MARGENS.md), [RODADA_25](RODADA_25_2026-09-30_recalibracao.md); **dados disponíveis desde 06/10** (detalhe por seção de 2026 com a hora de cada seção, no cache) |
 | 5 | Perfil por local de votação no estado inteiro | pós-eleição | **feito**: [RODADA_26](RODADA_26_2026-09-30_perfil_por_local.md) (setores + regressão com vários indicadores) |
 | 6 | Revisão de código e de segurança do caminho da noite + versões fixadas | antes de 4/10 | **feito**: [RODADA_27](RODADA_27_2026-09-30_revisao_noite.md) (3 bloqueadores e 4 importantes corrigidos) |
 | 7 | Boletim automático para a equipe (HTML de um arquivo + planilha, a cada hora e no fim) | noite de 4/10 | **feito**: [RODADA_28](RODADA_28_2026-09-30_boletim.md) (gravado pelo site com `--coletar`; `gerar_boletim.py`) |
@@ -23,12 +36,15 @@ Registrado em 30/09/2026, a 4 dias do 1º turno (4/10/2026). A ordem segue a pri
 | 13 | Modo TV no painel (tela cheia, fonte grande, rotação automática dos cargos) | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (#painel?tv=1) |
 | 14 | "O que mudou" desde o boletim anterior, no boletim e no painel | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (boletim e painel) |
 | 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | pendente |
-| 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | pendente |
+| 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **parcial**: feita à mão para o RJ na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md) (totais, candidatos, cadeiras); falta a ferramenta |
 | 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | pendente |
-| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | pendente |
-| 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | pendente |
+| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **parcial**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md); o resto nas rodadas 43 e 44 (noite do 2º turno com várias UFs) |
+| 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
 | 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
-| 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | pendente (feita à mão na [RODADA_36](RODADA_36_2026-10-04_coleta_versao_anterior.md)) |
+| 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) |
+| 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | pendente |
+| 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
+| 24 | Manter `apuracao/partidos.py` (`EVENTOS`/`NOVOS`) a cada partido novo, fusão ou renomeação; conferir as datas para comparar com eleições municipais | a cada cadastro novo do TSE | contínuo — o teste com os cadastros reais acusa |
 
 ---
 
@@ -156,9 +172,17 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
   - eleitos por partido e federação comparados com 2022: ganhos, perdas, reeleitos e novatos;
   - no mapa por local, a variação de voto de cada partido.
 
-## 16. Conferência do tempo real com os microdados (após a apuração)
+## 16. Conferência do tempo real com os microdados (após a apuração) — PARCIAL (rodada 40)
 
 - **O quê:** quando os microdados de 2026 saírem, conferir se os totais gravados pelo coletor na noite batem com os oficiais, por município e cargo, e registrar as diferenças.
+- **Feito à mão na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md), RJ, com os totais reconstruídos das seções:**
+  - Governador, Senador e Deputados idênticos em totais, votos, situação e destinação;
+  - cadeiras 46/46 e 70/70;
+  - Presidente +387 válidos (destinação ainda não publicada).
+- **Falta:**
+  - a ferramenta (relatório por UF/cargo/município em `saidas/`);
+  - repetir com os totais oficiais quando o detalhe munzona sair (`preparar_2026` já grava a conferência
+    reconstruído × oficial).
 
 ## 17. Novas camadas no mapa por local (após a apuração)
 
@@ -184,7 +208,7 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
   - boletim, cópia de segurança e alertas no site de várias UFs (hoje só no de uma UF);
   - no site de várias UFs, montar uma UF que ganhou dados sem reiniciar.
 
-## 19. Painel nacional do Presidente
+## 19. Painel nacional do Presidente — FEITO (rodada 35)
 
 - **O quê:** mapa do Brasil por UF na noite, com % apurado e vencedor em cada estado.
 - **Custo de coleta:** 27 arquivos por ciclo (o resultado de cada UF), não os de todos os municípios do país.
@@ -197,7 +221,7 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
 
 Registrado em 04/10/2026 (pedido do usuário: "Registre no TODO a análise das parciais (analisar_coleta.py)").
 
-## 21. Análise das parciais da noite (`analisar_coleta.py`)
+## 21. Análise das parciais da noite (`analisar_coleta.py`) — FEITO (rodada 42)
 
 - **Por quê:** a análise da noite de 4/10 ([RODADA_36](RODADA_36_2026-10-04_coleta_versao_anterior.md)) foi feita com scripts avulsos, num diretório temporário da sessão. Transformar em ferramenta permite refazê-la no 2º turno e comparar as noites.
 - **Entrada:** `<dados>/raw/` e `raw_brasil/`, com todas as versões gravadas pelo coletor (ou o espelho da cópia de segurança). Sem rede.
@@ -229,3 +253,29 @@ Registrado em 04/10/2026 (pedido do usuário: "Registre no TODO a análise das p
 - **Extensão:** levar o cálculo para 2022 → 2026 por seção quando os microdados de 2026 saírem.
 - **Atenção ao casar as seções:** casar 2022 × 2026 pela seção (ou pelo local) com `locais.py`, por causa das seções remanejadas e dos locais novos e desativados.
 - **Leitura:** com unidade município, a leitura é FRÁGIL (viés de agregação medido em 2022). Validar fora da amostra como na rodada 30.
+
+---
+
+Registrado em 06/10/2026 (rodada 40).
+
+## 23. Mesmo denominador do "% dos válidos" no tempo real e no histórico — FEITO (rodada 42)
+
+- **Achado:** a divulgação em tempo real (JSON do TSE, gravado pelo coletor) dá o percentual do candidato sobre
+  **válidos + anulados sub judice**. A conferência da [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md) deu
+  diferença < 10⁻⁹ em todos os cargos. O histórico importado dos microdados usa os **válidos oficiais**.
+- **Efeito:**
+  - o mesmo candidato tem % diferente conforme a fonte quando há candidatura sub judice no cargo: até 10,8 p.p. num
+    município, para Governador RJ 2026, com 274 mil votos sub judice;
+  - a Comparação 2022 × 2026, as variações (rodadas 37 e 38) e a planilha do candidato misturam as duas
+    convenções.
+- **O quê:**
+  - escolher uma convenção para o site (sugestão: a oficial, válidos) e aplicar às duas fontes;
+  - ou mostrar as duas, com o rótulo de qual é qual.
+
+## 24. Manter a tabela de partidos entre eleições
+
+- **Contexto:** [RODADA_41](RODADA_41_2026-10-06_partidos_entre_eleicoes.md).
+- **Quando:** `test_partidos.py::test_tabela_explica_os_cadastros_reais` falha ao chegar um cadastro novo (partido
+  novo, fusão, incorporação ou renomeação). Registre o evento em `EVENTOS` (ou em `NOVOS`) com a fonte.
+- **Eleições municipais:** a tabela usa a 1ª eleição GERAL em que cada mudança vale. Para comparar com 2020/2024,
+  confirmar as datas de PMN → MOBILIZA, PMB → DEMOCRATA e PC do B → PCDOB.

@@ -204,9 +204,9 @@ def test_comparar_partido_e_brancos(comp: br.ComparacaoBairros) -> None:
     df_nulos, nulos = comp.comparar(2024, 13, 2024, 13, "nulos")
     assert brancos["VALOR_A"] == pytest.approx(100 * 7 / 209) and nulos["VALOR_B"] == pytest.approx(100 * 13 / 209)
     assert brancos["VALOR_A"] + nulos["VALOR_A"] == pytest.approx(bn["VALOR_A"])  # as partes somam o todo
-    ps = comp.partidos(2024, 13, 2026, 13)  # 2026 sem microdados: partido fica "só 2024"
+    ps = comp.partidos(2024, 13, 2026, 13)  # 2026 sem microdados: partido fica "só 2024" (sem sigla em B)
     pl22 = ps.filter(pl.col("PARTIDO") == 22).row(0, named=True)
-    assert (pl22["SIGLA_A"], pl22["SIGLA_B"], pl22["NOS_DOIS"], pl22["VOTOS_B"]) == ("PL", "PR", False, None)
+    assert (pl22["SIGLA_A"], pl22["SIGLA_B"], pl22["NOS_DOIS"], pl22["VOTOS_B"]) == ("PL", None, False, None)
     with pytest.raises(ValueError):
         comp.comparar(2024, 13, 2024, 13, "secoes_totalizadas")
 
@@ -236,3 +236,25 @@ def test_api_comparacao_bairros(site: TestClient, monkeypatch: pytest.MonkeyPatc
     assert site.get("/api/comparacao/bairros?ano_a=2024&cargo_a=13&ano_b=2024&cargo_b=13&metrica=partido"
                     ).status_code == 400
     assert site.get("/api/comparacao/bairros/partidos?ano_a=2024&cargo_a=13&ano_b=2024&cargo_b=13").json()[0]["PARTIDO"]
+
+
+
+def test_partido_entre_anos_pela_entidade(comp: br.ComparacaoBairros, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rodada 41: o nº é reaproveitado (14 = PTB em 2022, MISSÃO em 2026) e o partido muda de nº (Podemos 19 → 20).
+    Aqui 2024 faz o papel do ano antigo e 2026 do novo, com os votos de 2024 nos dois lados."""
+    monkeypatch.setattr(comp, "siglas", lambda ano: {55: "PTB", 22: "PATRIOTA"} if ano == 2024 else {55: "PRD", 22: "MISSÃO"})
+    votos_2024 = comp.b.votos(2024, 13, 1)
+    monkeypatch.setattr(comp.b, "votos", lambda ano, cargo, turno: votos_2024)
+    from apuracao import partidos as pt
+    monkeypatch.setattr(pt, "EVENTOS", (pt.Evento(2026, ("PTB", "PATRIOTA"), "PRD", "fusão"),))
+    ps = {r["PARTIDO"]: r for r in comp.partidos(2024, 13, 2026, 13).iter_rows(named=True)}
+    assert ps[55]["SIGLA_A"] == "PATRIOTA + PTB" and ps[55]["NOS_DOIS"]           # PRD ← PATRIOTA (22) + PTB (55)
+    assert ps[22]["SIGLA_B"] == "MISSÃO" and not ps[22]["NOS_DOIS"]                # 22 reaproveitado: sem par
+    assert comp.numeros_do_partido(55, 2024, 2026) == ([22, 55], [55])
+    assert comp.numeros_do_partido(22, 2024, 2026) == ([], [22])
+    _, r = comp.comparar(2024, 13, 2026, 13, "partido", partido=22)
+    assert r["VALOR_A"] is None and r["VALOR_B"] is not None and r["DIF"] is None  # sem dado, não 0%
+    _, r = comp.comparar(2024, 13, 2026, 13, "partido", partido=55)
+    _, so55 = comp.comparar(2024, 13, 2024, 13, "partido", partido=55)
+    _, so22 = comp.comparar(2024, 13, 2024, 13, "partido", partido=22)
+    assert r["VALOR_A"] == pytest.approx(so55["VALOR_A"] + so22["VALOR_A"])  # o lado antigo soma a fusão

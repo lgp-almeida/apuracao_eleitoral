@@ -7,7 +7,8 @@ Etapas (cada uma idempotente: o que já está completo é pulado, a menos que `r
               pela fonte "munzona", que serve às 27 UFs com um arquivo nacional por ano)
   eleitorado  cadastro de eleitorado (seções → locais) e perfil do eleitorado por seção
   ibge        malhas e Censo 2022 da UF (`ibge.preparar`)
-  microdados  votação por seção de 2026, quando o TSE publicar (`microdados.preparar`); antes disso, "aguardando"
+  microdados  votação por seção de 2026, quando o TSE publicar (`microdados.preparar`) e importação do resultado;
+              "aguardando" até o resultado estar importado com os totais OFICIAIS (provisório não conta)
 
 O estado de cada UF × etapa fica em `<raiz>/lote_ufs.json`: uma falha numa UF não para as outras, e rodar de
 novo retoma do que faltou. Bloqueio do TSE interrompe só a etapa da divulgação (as outras usam a CDN).
@@ -209,13 +210,23 @@ class Lote:
         args = argparse.Namespace(ano=ano, uf=uf, cache_dir=self.cfg.cache, raiz=self.cfg.raiz,
                                   saidas=Path("saidas") / uf)
         try:
-            estados = md.preparar(self.cfg.cache, ano, uf, self.sessao or requests, ao_chegar=p26.ao_chegar(args, set()))
+            estados = md.preparar(self.cfg.cache, ano, uf, self.sessao or requests, ao_chegar=p26.ao_chegar(args))
         except requests.RequestException as exc:
             return Resultado(ERRO, f"rede: {exc}")
-        com = md.com_dados(estados)
-        if {"votos_uf", "votos_br", "detalhe_secao"} <= com:
-            return Resultado(OK, f"publicados e preparados: {', '.join(sorted(com))}")
-        return Resultado(AGUARDANDO, f"TSE ainda não publicou ({', '.join(sorted(com)) or 'nada'} com dados)")
+        totais = p26.garantir_importacao(args)
+        com = md.no_cache(self.cfg.cache, ano, uf)
+        faltam = sorted(md.FINAL - com)
+        if erros := md.com_erro(estados):  # o que chegou já foi preparado; rodar de novo pede só estes
+            return Resultado(ERRO, "falha em " + "; ".join(f"{e.zip}: {e.situacao}" for e in erros))
+        # OK só com os totais OFICIAIS importados: provisório (reconstruído das seções) segue "aguardando",
+        # para o --vigiar e a próxima execução trocarem pelo oficial quando o TSE publicar (rodada 40)
+        if totais == "munzona" and not faltam:
+            return Resultado(OK, f"importado com os totais oficiais; no cache: {', '.join(sorted(com))}")
+        if totais == "secoes":
+            return Resultado(AGUARDANDO, f"importado com totais PROVISÓRIOS (reconstruídos das seções); "
+                                         f"falta no TSE: {', '.join(faltam)}")
+        return Resultado(AGUARDANDO, f"TSE ainda não publicou o necessário ({', '.join(sorted(com)) or 'nada'} "
+                                     f"com dados; falta: {', '.join(faltam)})")
 
 
 # --------------------------------------------------------------------------

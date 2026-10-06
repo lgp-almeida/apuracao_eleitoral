@@ -119,24 +119,126 @@ def test_converte_o_que_chegou(tse_cache: Path) -> None:
     assert md.converter(tse_cache, 2024, "RJ", {"detalhe_munzona"}) == []  # lido direto do ZIP, sem Parquet
 
 
-def test_cli_vigia_encerra_quando_os_votos_chegam(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+MEMBRO = {"votos_uf": "x_RJ.csv", "votos_br": "x.csv", "detalhe_secao": "x_BRASIL.csv", "candidatos": "x_RJ.csv",
+          "candidato_munzona": "x_RJ.csv", "detalhe_munzona": "x_RJ.csv", "partido_munzona": "x_RJ.csv",
+          "perfil": "x_RJ.csv"}
+PROVISORIO = ("votos_uf", "votos_br", "detalhe_secao", "candidatos", "candidato_munzona")
+OFICIAL = ("detalhe_munzona", "partido_munzona")
+
+
+def publicar(cdn: CDN, chaves: tuple[str, ...], lm: str = LM1) -> None:
+    for chave in chaves:
+        a = next(x for x in md.ARQUIVOS if x.chave == chave)
+        cdn.arquivos[a.url(2026, "RJ")] = (_zip(MEMBRO[chave], ['"1";"2"']), lm)
+
+
+@pytest.fixture()
+def cli_falso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """preparar_2026 sem converter nem importar de verdade: registra as chamadas; a importação grava só o
+    status.json (é por ele que se sabe o que já foi importado)."""
     import preparar_2026 as cli
-    cdn = CDN()
+    from apuracao import ibge
+    from apuracao.ufs import dir_uf
+
     chamadas: list[tuple] = []
     monkeypatch.setattr(md, "converter", lambda c, a, u, chaves: chamadas.append(("converter", frozenset(chaves))) or [])
     monkeypatch.setattr(cli, "transferencia", lambda a: chamadas.append(("transferencia",)))
-    from apuracao import ibge
     monkeypatch.setattr(ibge, "preparar", lambda c, uf: chamadas.append(("ibge",)) or [])
+
+    def importar(a, totais_de):
+        chamadas.append(("importar", totais_de))
+        destino = dir_uf(a.raiz / f"historico_{a.ano}_t1", a.uf)
+        destino.mkdir(parents=True, exist_ok=True)
+        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
+        return {1: totais_de}
+    monkeypatch.setattr(cli, "importar", importar)
+    args = ["--cache-dir", str(tmp_path / "cache"), "--raiz", str(tmp_path / "dados"), "--saidas", str(tmp_path / "s")]
+    return cli, chamadas, args
+
+
+def test_cli_vigia_importa_provisorio_e_so_encerra_com_os_totais_oficiais(cli_falso, monkeypatch) -> None:
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    fases = iter([PROVISORIO, OFICIAL])
     dormiu: list[float] = []
-    monkeypatch.setattr(cli.time, "sleep", lambda s: (dormiu.append(s), publicar(cdn)))
-    args = ["--vigiar", "--intervalo", "10", "--cache-dir", str(tmp_path), "--saidas", str(tmp_path / "s")]
-    assert cli.main(args, sessao=cdn) == 0
-    assert dormiu == [600]  # 1ª verificação sem nada; espera (nunca menos de 10 min) e na 2ª chegou tudo
-    assert chamadas[0] == ("converter", frozenset({"votos_uf", "votos_br", "detalhe_secao"}))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: (dormiu.append(s), publicar(cdn, next(fases))))
+    assert cli.main(["--vigiar", "--intervalo", "10", *args], sessao=cdn) == 0
+    # nada → (10 min) votos + detalhe por seção + destinação: provisório → (10 min) totais oficiais: fim
+    assert dormiu == [600, 600]
+    assert [c for c in chamadas if c[0] == "importar"] == [("importar", "secoes"), ("importar", "munzona")]
+    assert chamadas[0] == ("converter", frozenset(PROVISORIO))
     assert chamadas.index(("ibge",)) < chamadas.index(("transferencia",))  # malhas/Censo antes das análises
 
 
-def publicar(cdn: CDN) -> None:
-    for chave, membro in (("votos_uf", "x_RJ.csv"), ("votos_br", "x.csv"), ("detalhe_secao", "x_BRASIL.csv")):
-        a = next(x for x in md.ARQUIVOS if x.chave == chave)
-        cdn.arquivos[a.url(2026, "RJ")] = (_zip(membro, ['"1";"2"']), LM1)
+def test_execucao_nova_importa_quando_so_falta_o_detalhe_munzona(cli_falso) -> None:
+    """O defeito da rodada 40: uma execução NOVA (memória vazia) em que só o detalhe munzona chega."""
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    publicar(cdn, PROVISORIO + ("partido_munzona",))
+    assert cli.main(args, sessao=cdn) == 0
+    assert [c for c in chamadas if c[0] == "importar"] == [("importar", "secoes")]
+    chamadas.clear()
+    publicar(cdn, ("detalhe_munzona",))
+    assert cli.main(args, sessao=cdn) == 0       # outro processo: o resto vem do cache, não da memória
+    assert chamadas == [("converter", frozenset({"detalhe_munzona"})), ("importar", "munzona")]
+    chamadas.clear()
+    assert cli.main(args, sessao=cdn) == 0       # nada mudou: nada a importar
+    assert chamadas == []
+
+
+def test_dados_no_cache_sem_importacao_sao_importados(cli_falso, tmp_path: Path) -> None:
+    """Arquivos baixados por uma execução que não importou (versão antiga, queda): a próxima importa."""
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    publicar(cdn, PROVISORIO + OFICIAL)
+    md.preparar(tmp_path / "cache", 2026, "RJ", cdn)  # baixa sem reagir
+    assert cli.main(args, sessao=cdn) == 0
+    assert chamadas == [("importar", "munzona")]
+
+
+def test_fonte_dos_totais() -> None:
+    assert md.fonte_dos_totais(set()) is None
+    assert md.fonte_dos_totais(set(PROVISORIO)) == "secoes"
+    assert md.fonte_dos_totais(set(PROVISORIO) - {"candidato_munzona"}) is None  # sem a destinação, não dá
+    assert md.fonte_dos_totais({"votos_uf", "votos_br", "candidatos", "detalhe_munzona"}) == "munzona"
+    assert md.FINAL >= {"detalhe_munzona", "partido_munzona"}
+
+
+def test_falha_num_download_nao_perde_os_outros(cli_falso, tmp_path: Path) -> None:
+    """Conexão caindo no meio (06/10/2026, "Connection reset by peer"): o que já chegou é preparado e o
+    arquivo que falhou é pedido de novo na próxima vez."""
+    import requests
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    publicar(cdn, PROVISORIO)
+    url_dest = next(a for a in md.ARQUIVOS if a.chave == "candidato_munzona").url(2026, "RJ")
+    get_original = cdn.get
+
+    def get(url, **kw):
+        if url == url_dest:
+            raise requests.ConnectionError("Connection reset by peer")
+        return get_original(url, **kw)
+    cdn.get = get
+    estados = md.preparar(tmp_path / "cache", 2026, "RJ", cdn, ao_chegar=cli.ao_chegar(
+        __import__("argparse").Namespace(ano=2026, uf="RJ", cache_dir=tmp_path / "cache", raiz=tmp_path / "dados",
+                                         saidas=tmp_path / "s")))
+    assert [e.chave for e in md.com_erro(estados)] == ["candidato_munzona"]
+    assert chamadas[0] == ("converter", frozenset(set(PROVISORIO) - {"candidato_munzona"}))  # o resto foi preparado
+    assert not any(c[0] == "importar" for c in chamadas)  # sem a destinação, ainda não dá para importar
+    cdn.get = get_original
+    chamadas.clear()
+    assert cli.main(args, sessao=cdn) == 0
+    assert chamadas == [("converter", frozenset({"candidato_munzona"})), ("importar", "secoes")]
+
+
+def test_so_verificar_nao_baixa_nem_importa(cli_falso, capsys) -> None:
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    publicar(cdn, PROVISORIO)
+    assert cli.main(["--so-verificar", *args], sessao=cdn) == 0
+    saida = capsys.readouterr().out
+    assert cdn.gets == 0 and cdn.heads == len(md.ARQUIVOS) and chamadas == []
+    assert "detalhe_votacao_munzona_2026.zip" in saida and "importado: nada" in saida
+    assert "rode sem --so-verificar" in saida
+    with pytest.raises(SystemExit):
+        cli.main(["--so-verificar", "--vigiar", *args], sessao=cdn)

@@ -140,8 +140,9 @@ def test_variacao_partidos_no_endereco(pagina: Page, site: dict) -> None:
     pagina.wait_for_function("() => document.querySelectorAll('#var-partidos input').length >= 4")
     assert pagina.evaluate("() => partidosVar()") == ["PSB", "PL"]
     assert pagina.is_checked("#var-ponderar")
-    # 2022 sintético só tem 2 municípios: a API explica por que não há gráfico
-    pagina.wait_for_function("() => document.querySelector('#var-resultado .aviso')?.textContent.includes('menos de 3')")
+    # 2022 sintético × TSE falso: os partidos não se correspondem (ou têm < 3 municípios) — a API explica o motivo
+    pagina.wait_for_function("() => /sem correspondente|menos de 3/.test("
+                             "document.querySelector('#var-resultado .aviso')?.textContent || '')")
     esperar_endereco(pagina, "h.includes('var_partidos=PSB,PL') && h.includes('var_ponderar=1')")
     pagina.locator("#var-partidos input:not(:checked)").nth(0).check()
     assert pagina.locator("#var-partidos input:disabled").count() == pagina.locator("#var-partidos input").count() - 3

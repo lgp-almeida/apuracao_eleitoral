@@ -14,7 +14,9 @@ EXISTEM na CDN só com o cabeçalho (em 30/09/2026: `detalhe_votacao_munzona_202
 Quando os dados chegam: converte para Parquet (o que os mapas por bairro, a comparação e o Perfil ×
 voto usam, sem intervenção), importa o resultado oficial para `dados_2026/historico_2026_t<turno>/`
 (o mesmo formato do coletor: o site abre com --dados) e, com os votos por seção, calcula a primeira
-análise: a transferência 2022 → 2026 por bairro.
+análise: a transferência 2022 → 2026 por bairro. A importação usa os totais oficiais
+(`detalhe_votacao_munzona`) ou, até ele sair, os reconstruídos das seções (`fonte_dos_totais`), e é
+refeita quando um arquivo dela muda — o oficial chegando substitui o provisório (rodada 40).
 """
 
 from __future__ import annotations
@@ -73,7 +75,24 @@ ARQUIVOS = [
     Arquivo("perfil", "perfil_eleitor_secao", "perfil_eleitor_secao_{ano}_{uf}.zip", "_{uf}.csv",
             "perfil do eleitorado por seção (Perfil × voto)"),
 ]
-PARA_IMPORTAR = ("votos_uf", "votos_br", "detalhe_munzona", "candidatos")
+# Importar o resultado oficial (historico.importar) precisa dos votos, do cadastro e dos TOTAIS: os oficiais
+# (detalhe_munzona) ou, enquanto ele não sai, os reconstruídos das seções (detalhe por seção + destinação de
+# cada candidato no candidato_munzona; rodada 40 — iguais ao oficial nas 732 zonas × cargo do RJ 2022).
+BASE_IMPORTAR = frozenset({"votos_uf", "votos_br", "candidatos"})
+TOTAIS_OFICIAIS = frozenset({"detalhe_munzona"})
+TOTAIS_DE_SECOES = frozenset({"detalhe_secao", "candidato_munzona"})
+PARA_IMPORTAR = BASE_IMPORTAR | TOTAIS_OFICIAIS | TOTAIS_DE_SECOES  # o que, ao mudar, pede nova importação
+# o vigia só encerra com o que a importação DEFINITIVA usa (totais oficiais e votos de partido das cadeiras)
+FINAL = BASE_IMPORTAR | TOTAIS_OFICIAIS | {"partido_munzona"}
+
+
+def fonte_dos_totais(com_dados: set[str]) -> str | None:
+    """"munzona" (oficiais), "secoes" (reconstruídos, provisórios) ou None (ainda não dá para importar)."""
+    if BASE_IMPORTAR | TOTAIS_OFICIAIS <= com_dados:
+        return "munzona"
+    if BASE_IMPORTAR | TOTAIS_DE_SECOES <= com_dados:
+        return "secoes"
+    return None
 
 
 @dataclass
@@ -181,7 +200,8 @@ def derivados(cache: Path, nome_zip: str) -> list[Path]:
 def preparar(cache: Path, ano: int, uf: str, sessao: Any = requests,
              ao_chegar: Callable[[set[str]], None] | None = None) -> list[Estado]:
     """Verifica, baixa o que é novo ou foi atualizado e, se há dados, apaga os Parquet derivados e
-    avisa `ao_chegar` com as chaves que passaram a ter dados (ou mudaram) nesta rodada."""
+    avisa `ao_chegar` com as chaves que passaram a ter dados (ou mudaram) nesta rodada. Uma falha de rede num
+    arquivo não perde os outros: ele fica "tentar de novo" (`com_erro`) e a reação roda com o que chegou."""
     estados = verificar(cache, ano, uf, sessao)
     mudaram: set[str] = set()
     por_chave = {a.chave: a for a in ARQUIVOS}
@@ -189,7 +209,12 @@ def preparar(cache: Path, ano: int, uf: str, sessao: Any = requests,
         if e.acao not in ("baixar", "baixar de novo"):
             continue
         a = por_chave[e.chave]
-        zp = baixar(e.url, cache / e.zip, sessao)
+        try:
+            zp = baixar(e.url, cache / e.zip, sessao)
+        except (requests.RequestException, v.TseDataError) as exc:
+            e.situacao, e.acao = f"falha no download ({exc.__class__.__name__}: {exc})"[:200], "tentar de novo"
+            logger.error("%s: %s", e.zip, e.situacao)
+            continue
         for d in derivados(cache, e.zip):
             d.unlink()
         e.local_modificado = _proveniencia(cache, e.zip).get("last_modified")
@@ -207,6 +232,7 @@ def preparar(cache: Path, ano: int, uf: str, sessao: Any = requests,
 
 def gravar_estado(cache: Path, ano: int, estados: list[Estado]) -> Path:
     alvo = cache / ESTADO.format(ano=ano)
+    alvo.parent.mkdir(parents=True, exist_ok=True)
     tmp = alvo.with_suffix(".tmp")
     tmp.write_text(json.dumps({"verificado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                "arquivos": [asdict(e) for e in estados]}, indent=2, ensure_ascii=False))
@@ -216,6 +242,25 @@ def gravar_estado(cache: Path, ano: int, estados: list[Estado]) -> Path:
 
 def com_dados(estados: list[Estado]) -> set[str]:
     return {e.chave for e in estados if e.tem_dados}
+
+
+def com_erro(estados: list[Estado]) -> list[Estado]:
+    """Arquivos a pedir de novo na próxima verificação (erro de rede no HEAD ou no download, HTTP inesperado)."""
+    return [e for e in estados if e.acao == "tentar de novo"]
+
+
+def no_cache(cache: Path, ano: int, uf: str) -> set[str]:
+    """Chaves cujo ZIP está no cache COM dados — o "já chegou" vem do disco, não da memória do processo
+    (antes, uma execução nova esquecia o que a anterior baixou e não importava quando faltava só um arquivo)."""
+    tem = set()
+    for a in ARQUIVOS:
+        zp = cache / a.zip(ano, uf)
+        try:
+            if zp.exists() and tem_dados(zp, a.membro.format(uf=uf.upper())):
+                tem.add(a.chave)
+        except (zipfile.BadZipFile, OSError) as exc:
+            logger.warning("%s ilegível no cache: %s", zp.name, exc)
+    return tem
 
 
 def converter(cache: Path, ano: int, uf: str, chaves: set[str]) -> list[str]:

@@ -1697,15 +1697,14 @@ async function ajustarCamposComp() {
   const sel = document.getElementById("comp-partido");
   if (!bairros) {
     const ps = await api(`api/comparacao/partidos?cargo=${compCargo.value}`);
-    sel.replaceChildren(...ps.map((p) => el("option", { value: p.PARTIDO },
-      `${p.PARTIDO}${p.NOS_DOIS ? "" : p.VOTOS_A ? ` (só ${a})` : ` (só ${b})`}`)));
+    sel.replaceChildren(...ps.map((p) => el("option", { value: p.PARTIDO }, rotuloEntidade(p, a, b))));
     return;
   }
-  // bairros: partido pelo NÚMERO (estável entre eleições), com a sigla de cada ano
+  // bairros: partido pelo NÚMERO do ano mais recente, ligado pela entidade (o 14 de 2026 não é o de 2022)
   const ps = await api(`api/comparacao/bairros/partidos?ano_a=${a}&cargo_a=${compCargoA.value}` +
     `&ano_b=${b}&cargo_b=${compCargoB.value}&turno=${estado.turno || 1}`);
   sel.replaceChildren(...ps.map((p) => {
-    const sigla = p.SIGLA_A && p.SIGLA_B && p.SIGLA_A !== p.SIGLA_B ? `${p.SIGLA_A}→${p.SIGLA_B}` : (p.SIGLA_A || p.SIGLA_B || "");
+    const sigla = p.SIGLA_A && p.SIGLA_B && p.SIGLA_A !== p.SIGLA_B ? `${p.SIGLA_B} (${p.SIGLA_A} em ${a})` : (p.SIGLA_A || p.SIGLA_B || "");
     return el("option", { value: p.PARTIDO },
       `${p.PARTIDO} ${sigla}${p.NOS_DOIS ? "" : p.VOTOS_A ? ` (só ${a})` : ` (só ${b})`}`);
   }));
@@ -1758,6 +1757,14 @@ compAnoA.addEventListener("change", () => { cargosDoAno(compCargoA, compAnoA.val
 compAnoB.addEventListener("change", () => { cargosDoAno(compCargoB, compAnoB.value); ajustarCamposComp(); });
 compCargoA.addEventListener("change", ajustarCamposComp);
 compCargoB.addEventListener("change", ajustarCamposComp);
+
+// rótulo de um partido ligado entre dois anos pela entidade (rodada 41): "PRD (PTB + PATRIOTA em 2022)",
+// "PCDOB (PC do B em 2022)", "MISSÃO (só 2026: sem antecessor)"
+function rotuloEntidade(p, a, b) {
+  const siglaA = p.SIGLAS_A ?? p.SIGLA_A, siglaB = p.SIGLAS_B ?? p.SIGLA_B;
+  if (!p.NOS_DOIS) return `${p.PARTIDO}${p.VOTOS_A ? ` (só ${a})` : ` (só ${b})`}`;
+  return siglaA && siglaA !== p.PARTIDO ? `${p.PARTIDO} (${siglaA} em ${a})` : String(p.PARTIDO);
+}
 
 function fmtComp(v, unidade) {
   if (v === null || v === undefined) return "—";
@@ -1917,7 +1924,7 @@ async function prepararVar(escolhidos = null) {
   estado.varOrdem = [...marcados];
   caixa.replaceChildren(...ps.map((x) => el("label", {}, el("input", { type: "checkbox", value: x.PARTIDO,
     checked: marcados.has(x.PARTIDO), onchange: () => { limitarVar(); gravarEnderecoComp(); } }),
-  `${x.PARTIDO}${x.NOS_DOIS ? "" : x.VOTOS_A ? ` (só ${estado.comp.ano_a})` : ` (só ${estado.comp.ano_b})`}`)));
+  rotuloEntidade(x, estado.comp.ano_a, estado.comp.ano_b))));
   limitarVar();
 }
 
@@ -2252,10 +2259,14 @@ async function preencherAlvo(p) {
   if (!ano || !cargo) return;
   if (partido) {
     const ps = await listaPerfil("partidos", ano, cargo, turno);
-    const atual = pf(`${p}partido`).value;
-    pf(`${p}partido`).replaceChildren(...ps.map((x) => el("option", { value: x.PARTIDO },
+    const atual = pf(`${p}partido`).value, siglaAtual = pf(`${p}partido`).selectedOptions[0]?.dataset.sigla;
+    pf(`${p}partido`).replaceChildren(...ps.map((x) => el("option", { value: x.PARTIDO, "data-sigla": x.SIGLA ?? "" },
       `${x.PARTIDO}${x.SIGLA ? " " + x.SIGLA : ""} — ${int(x.VOTOS)} votos`)));
-    if (ps.some((x) => String(x.PARTIDO) === atual)) pf(`${p}partido`).value = atual;
+    // mantém a escolha ao trocar de ano só se for o MESMO partido: o nº é reaproveitado (14 = PTB em 2022,
+    // MISSÃO em 2026); escolha vinda do endereço (sem sigla anterior) vale pelo nº
+    if (ps.some((x) => String(x.PARTIDO) === atual && (siglaAtual === undefined || (x.SIGLA ?? "") === siglaAtual))) {
+      pf(`${p}partido`).value = atual;
+    }
   } else {
     const cs = await listaPerfil("candidatos", ano, cargo, turno);
     pf(`${p}lista`).replaceChildren(...cs.map((c) => el("option", { value: String(c.NUMERO) }, c.NOME)));

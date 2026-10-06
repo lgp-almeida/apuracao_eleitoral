@@ -56,7 +56,8 @@ def test_comparar_partido_e_candidato(dirs: tuple[Path, Path]) -> None:
     ps = cp.partidos_disponiveis(a, b, 3)
     assert {"PL", "PSB"} <= set(ps["PARTIDO"]) and not ps.filter(pl.col("PARTIDO") == "PL")["NOS_DOIS"].item()
     pl_rio = cp.comparar(a, b, 3, "partido", partido="PL").filter(pl.col("CD_MUNICIPIO") == RIO).row(0, named=True)
-    assert pl_rio["VALOR_A"] == pytest.approx(100 * 700 / 1050) and pl_rio["VALOR_B"] == 0.0  # ausente em 2026 = 0%
+    # sem o partido em 2026 (nem sucessor): "sem dado", não 0% (rodada 41)
+    assert pl_rio["VALOR_A"] == pytest.approx(100 * 700 / 1050) and pl_rio["VALOR_B"] is None and pl_rio["DIF"] is None
     cand = cp.comparar(a, b, 3, "candidato", numero_a=22, numero_b=66).filter(pl.col("ABRANGENCIA") == "uf").row(0, named=True)
     assert cand["VALOR_A"] == pytest.approx(60.0) and cand["VALOR_B"] > 0
     with pytest.raises(ValueError):
@@ -271,9 +272,47 @@ def test_api_variacao(dirs: tuple[Path, Path], tmp_path: Path) -> None:
     assert [p["partido"] for p in d["partidos"]] == ["PT", "PL"] and d["butler"]["uf"] == pytest.approx(1.0)
     assert d["partidos"][0]["pontos"][0]["CD_MUNICIPIO_IBGE"] == 3300001
     assert site.get("/api/comparacao/variacao?cargo=1&partidos=XYZ").status_code == 400
-    # 2022 sintético × TSE falso: nenhum partido nos dois anos com 3 municípios → 400 com o motivo
+    # 2022 sintético × TSE falso: o PL não tem correspondente em 2026 → 400 com o motivo (rodada 41)
     real = TestClient(create_app(dirs[1], "RJ", tmp_path, referencia=dirs[0]))
     r = real.get("/api/comparacao/variacao?cargo=3&partidos=PL")
-    assert r.status_code == 400 and "menos de 3" in r.json()["detail"]
+    assert r.status_code == 400 and "sem correspondente em 2026" in r.json()["detail"]
     assert TestClient(create_app(dirs[1], "RJ", tmp_path)).get(
         "/api/comparacao/variacao?cargo=3&partidos=PL").status_code == 404
+
+
+
+def test_partido_entre_anos_pela_entidade() -> None:
+    """Rodada 41: "PC do B" (2022) = "PCDOB" (2026); PRD (2026) = PTB + PATRIOTA (2022); MISSÃO (14, 2026) não é o
+    PTB (14, 2022); e a sigla com minúscula funciona no gráfico de variação (antes, .upper() a quebrava)."""
+    def fonte(ano: int, pct: dict[tuple[int, str], list[float]]) -> cp.Fonte:
+        f = _fonte_partidos(ano, {s_: v for (_, s_), v in pct.items()}, VALIDOS_V)
+        nr = {s_: n for n, s_ in pct}
+        cand = f.candidatos.with_columns(pl.col("PARTIDO").replace_strict(nr, return_dtype=pl.Int64).alias("NR_PARTIDO"))
+        return cp.Fonte(ano=ano, totais=f.totais, candidatos=cand, partidos=f.partidos, municipios=f.municipios)
+    a = fonte(2022, {(65, "PC do B"): [10.0] * 6, (14, "PTB"): [5.0] * 6, (51, "PATRIOTA"): [3.0] * 6})
+    b = fonte(2026, {(65, "PCDOB"): [12.0] * 6, (25, "PRD"): [6.0] * 6, (14, "MISSÃO"): [4.0] * 6})
+    assert cp.siglas_do_partido(a, b, "PCDOB") == (["PC do B"], ["PCDOB"])
+    assert cp.siglas_do_partido(a, b, "PRD") == (["PTB", "PATRIOTA"], ["PRD"])
+    assert cp.siglas_do_partido(a, b, "PTB") == (["PTB", "PATRIOTA"], ["PRD"])   # pela sigla antiga também
+    assert cp.siglas_do_partido(a, b, "MISSÃO") == ([], ["MISSÃO"])
+    ps = {r["PARTIDO"]: r for r in cp.partidos_disponiveis(a, b, 1).iter_rows(named=True)}
+    assert ps["PRD"]["SIGLAS_A"] == "PTB + PATRIOTA" and ps["PRD"]["NOS_DOIS"] and not ps["MISSÃO"]["NOS_DOIS"]
+    uf = cp.comparar(a, b, 1, "partido", partido="PRD").filter(pl.col("ABRANGENCIA") == "uf").row(0, named=True)
+    assert uf["VALOR_A"] == pytest.approx(8.0, abs=0.01) and uf["VALOR_B"] == pytest.approx(6.0, abs=0.01)
+    d = cp.variacao_partidos(a, b, 1, ["PC do B"])["partidos"][0]
+    assert (d["siglas_a"], d["siglas_b"], d["media"]) == (["PC do B"], ["PCDOB"], pytest.approx(2.0, abs=0.01))
+    with pytest.raises(ValueError, match="sem correspondente"):
+        cp.variacao_partidos(a, b, 1, ["MISSÃO"])
+
+
+def test_percentual_sobre_os_validos_oficiais_nas_duas_fontes(fontes: tuple[cp.Fonte, cp.Fonte]) -> None:
+    """Rodada 42 (TODO 23): o tempo real grava o % do TSE (válidos + sub judice no denominador); comparar fontes
+    usa SEMPRE votos ÷ válidos oficiais, recalculado."""
+    atual, ref = fontes
+    tempo_real = cp.Fonte(atual.ano, atual.totais, atual.candidatos.with_columns(
+        (100 * pl.col("VOTOS") / 1100).alias("PCT_VALIDOS")), atual.partidos, atual.municipios)  # 100 sub judice
+    uf = cp.comparar(ref, tempo_real, 6, "candidato", numero_a=77777, numero_b=1234).filter(
+        pl.col("ABRANGENCIA") == "uf").row(0, named=True)
+    assert uf["VALOR_B"] == pytest.approx(30.0)            # 300 / 1000, não 300 / 1100
+    h = cp.historico_candidato(tempo_real, ref, "RJ", 6, 1234)
+    assert h.atual["PCT_VALIDOS"] == pytest.approx(30.0) and h.tabela.row(0, named=True)["PCT_VALIDOS_2026"] == pytest.approx(30.0)

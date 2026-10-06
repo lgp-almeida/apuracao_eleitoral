@@ -121,7 +121,12 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
 
 - **Cópia de segurança:** `tar czf oficial_4out.tgz dados_2026/oficial`. Os JSON brutos em `raw/` são o histórico da apuração, que o TSE sobrescreve.
 - **Microdados de 2026:** saem dias depois. Deixe rodando `python preparar_2026.py --vigiar`, que verifica a cada hora com um HEAD por arquivo.
-  - Quando os votos por seção chegam, ele converte e importa o resultado oficial para `dados_2026/historico_2026_t1`.
+  - Para só olhar, sem baixar nem importar: `python preparar_2026.py --so-verificar` (tabela com o que respondeu 200/404, tamanho e data no TSE, e se o resultado já está importado com totais provisórios ou oficiais).
+  - Quando os votos por seção chegam, ele converte. Importa o resultado para `dados_2026/historico_2026_t1` (no RJ; nas outras UFs, `historico_2026_t1_<UF>`):
+    - com os totais **provisórios**, reconstruídos das seções, assim que houver o detalhe por seção e o `votacao_candidato_munzona`;
+    - de novo, com os **oficiais**, quando o TSE publicar o `detalhe_votacao_munzona`. Grava também a conferência entre os dois em `saidas/`.
+  - Só encerra quando os totais oficiais e o `votacao_partido_munzona` chegarem (rodada 40).
+  - Para várias UFs: `python baixar_ufs.py --etapas microdados --ufs RJ SP … [--vigiar]`. É a mesma preparação, e a etapa só fica "ok" com os totais oficiais.
   - Também grava `saidas/transferencia_2022_2026.csv`.
   - Mapas por bairro e por local de votação, comparação e Perfil × voto passam a oferecer 2026 sozinhos.
   - Se o TSE atualizar um arquivo, ele baixa de novo. Nesse caso reinicie o site para ele reler os dados.

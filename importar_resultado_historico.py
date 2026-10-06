@@ -34,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fonte", choices=historico.FONTES,
                    help="votos: secao (votacao_secao da UF) ou munzona (arquivos nacionais por município); "
                         "padrão: secao se estiver no cache, senão munzona")
+    p.add_argument("--totais", choices=historico.TOTAIS, default="munzona",
+                   help="munzona: os oficiais (detalhe_votacao_munzona); secoes: reconstruídos dos votos e do detalhe "
+                        "por seção + destinação do candidato_munzona — provisórios, enquanto o TSE não publica o "
+                        "detalhe munzona (rodada 40)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -45,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for turno in args.turno:
             destino = dir_uf(Path(args.raiz) / f"historico_{args.ano}_t{turno}", args.uf)
-            n = historico.importar(args.ano, args.uf, turno, Path(args.cache_dir), destino, args.fonte)
+            n = historico.importar(args.ano, args.uf, turno, Path(args.cache_dir), destino, args.fonte,
+                                   totais_de=args.totais)
             print(f"{args.ano} {args.uf} {turno}º turno: {n} -> {destino}")
             print(f"  python site_apuracao.py --dados {destino}")
     except (v.TseDataError, requests.RequestException) as exc:

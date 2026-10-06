@@ -110,3 +110,41 @@ def test_so_plano_nao_acessa_nada(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert baixar_ufs.main(["--ufs", "XX", "--so-plano"]) == 2
     assert lt.resumo({"AC": {"x": {"situacao": "ok"}}}, ["AC", "RR"]).to_dicts() == [
         {"UF": "AC", "x": "ok"}, {"UF": "RR", "x": "—"}]
+
+
+def test_microdados_provisorio_aguarda_e_oficial_fica_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rodada 40: importado com totais reconstruídos (provisório) segue "aguardando" e é refeito; com os
+    oficiais (e o resto do FINAL) fica OK e deixa de ser repetido."""
+    import preparar_2026 as p26
+    from apuracao import ibge
+    from apuracao import microdados as md
+    from apuracao.ufs import dir_uf
+    from test_microdados import CDN, OFICIAL, PROVISORIO, publicar
+
+    importados: list[str] = []
+
+    def importar(a, totais_de):
+        importados.append(totais_de)
+        destino = dir_uf(a.raiz / f"historico_{a.ano}_t1", a.uf)
+        destino.mkdir(parents=True, exist_ok=True)
+        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
+        return {1: totais_de}
+    monkeypatch.setattr(p26, "importar", importar)
+    monkeypatch.setattr(p26, "transferencia", lambda a: None)
+    monkeypatch.setattr(md, "converter", lambda *a: [])
+    monkeypatch.setattr(ibge, "preparar", lambda *a, **k: [])
+    cdn = CDN()
+
+    def rodar() -> dict:
+        cfg = lt.Config(ufs=["RJ"], etapas=("microdados",), raiz=tmp_path, cache=tmp_path / "cache")
+        return lt.Lote(cfg, sessao=cdn).executar()["RJ"]["microdados_2026"]
+
+    assert rodar()["situacao"] == lt.AGUARDANDO and importados == []
+    publicar(cdn, PROVISORIO)
+    e = rodar()
+    assert e["situacao"] == lt.AGUARDANDO and "PROVISÓRIOS" in e["detalhe"] and importados == ["secoes"]
+    publicar(cdn, OFICIAL)
+    e = rodar()
+    assert e["situacao"] == lt.OK and importados == ["secoes", "munzona"]
+    heads = cdn.heads
+    assert rodar()["situacao"] == lt.OK and cdn.heads == heads  # completo: pulado, sem acessar a CDN

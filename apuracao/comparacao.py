@@ -11,6 +11,9 @@ Métricas (A = ano de referência, B = ano atual; DIF = B − A):
   partido    % dos votos válidos do partido (nominais + legenda nos proporcionais) → p.p.
   candidato  % dos válidos de um candidato em A × outro (ou o mesmo) em B → p.p.
 
+Percentuais: sempre sobre os válidos OFICIAIS (`pct_dos_validos`), recalculados dos votos — o tempo real do TSE
+inclui os anulados sub judice no denominador e o histórico não (rodada 42, TODO 23).
+
 Senador: em 2022 havia 1 vaga e em 2026 há 2 (cada eleitor vota duas vezes); os
 percentuais continuam sobre os válidos de cada ano, mas não são diretamente equivalentes.
 """
@@ -23,6 +26,8 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+
+from apuracao import partidos as pt
 
 PROPORCIONAIS = (6, 7, 8)
 METRICAS_TOTAIS = {
@@ -63,20 +68,78 @@ def _votos_partido(f: Fonte, cargo: int) -> pl.DataFrame:
     return src.filter(pl.col("ABRANGENCIA").is_in(["uf", "mun"])).group_by(CHAVE + ["PARTIDO"]).agg(pl.col("V").sum())
 
 
-def _pct_partido(f: Fonte, cargo: int, partido: str) -> pl.DataFrame:
+def _mapa_partidos(f: Fonte) -> dict[int, str]:
+    """nº → sigla do partido nesta fonte (um ano), das tabelas de candidatos e de partidos."""
+    partes = [t.select(pl.col("NR_PARTIDO").cast(pl.Int64), pl.col("PARTIDO").cast(pl.String))
+              for t in (f.candidatos, f.partidos) if {"NR_PARTIDO", "PARTIDO"} <= set(t.columns)]
+    if not partes:  # tabela sem o nº do partido: a ligação entre anos cai para a sigla exata
+        return {}
+    return dict(pl.concat(partes, how="vertical_relaxed").drop_nulls().unique("NR_PARTIDO", keep="first").iter_rows())
+
+
+def _canonica(partido: str, *fontes: Fonte) -> str:
+    """A sigla como está nos dados, aceitando outra grafia ("pt", "pc do b" → "PT", "PC do B")."""
+    k = pt.chave(partido)
+    for f in fontes:
+        for t in (f.partidos, f.candidatos):
+            if "PARTIDO" in t.columns:
+                for s_ in t["PARTIDO"].drop_nulls().unique().to_list():
+                    if pt.chave(s_) == k:
+                        return s_
+    return partido
+
+
+def siglas_do_partido(a: Fonte, b: Fonte, partido: str) -> tuple[list[str], list[str]]:
+    """(siglas em A, siglas em B) do MESMO partido (rodada 41) — pela entidade, não pela sigla exata nem pelo nº:
+    "PCDOB" (2026) ↔ "PC do B" (2022); "PRD" (2026) ↔ "PTB" + "PATRIOTA" (2022); "PODE" ↔ "PODE" + "PSC";
+    "MISSÃO" (2026, nº 14 reaproveitado) ↔ nenhum. `partido` é a sigla em qualquer dos dois anos."""
+    partido = _canonica(partido, b, a)
+    if a.ano == b.ano:
+        return [partido], [partido]
+    antigo, novo = (a, b) if a.ano < b.ano else (b, a)
+    mo, mn = _mapa_partidos(antigo), _mapa_partidos(novo)
+    corr = pt.correspondencia(mo, mn, antigo.ano, novo.ano)
+    k = pt.chave(partido)
+    nums_n = [n for n, s_ in mn.items() if pt.chave(s_) == k]
+    if nums_n:
+        nums_o = sorted({x for n in nums_n for x in corr[n]})
+    else:  # sigla só do ano antigo: o(s) partido(s) que o sucederam
+        velhos = {n for n, s_ in mo.items() if pt.chave(s_) == k}
+        nums_n = sorted(n for n, ants in corr.items() if velhos & set(ants))
+        nums_o = sorted({x for n in nums_n for x in corr[n]} | velhos)
+    so, sn = [mo[n] for n in nums_o], [mn[n] for n in nums_n]
+    if not so and not sn:  # sigla desconhecida nos dois: fica como veio (a validação de quem chama acusa)
+        so = sn = [partido]
+    return (so, sn) if antigo is a else (sn, so)
+
+
+def _pct_partido(f: Fonte, cargo: int, partido: str | list[str]) -> pl.DataFrame:
+    """% dos válidos do partido (lista: as siglas que formam o mesmo partido nesse ano). Lista vazia = o
+    partido não tem correspondente nesse ano: VALOR nulo ("sem dado"), não 0%."""
+    siglas = [partido] if isinstance(partido, str) else list(partido)
     validos = f.totais.filter(pl.col("CARGO") == cargo).select(CHAVE + ["VALIDOS"])
-    v = _votos_partido(f, cargo).filter(pl.col("PARTIDO") == partido)
+    v = (_votos_partido(f, cargo).filter(pl.col("PARTIDO").is_in(siglas)).group_by(CHAVE)
+         .agg(pl.col("V").sum()))
     return (validos.join(v, on=CHAVE, how="left", nulls_equal=True)
             .filter(pl.col("ABRANGENCIA").is_in(["uf", "mun"]))
-            .select(CHAVE + [pl.when(pl.col("VALIDOS") > 0).then(100 * pl.col("V").fill_null(0) / pl.col("VALIDOS"))
-                             .otherwise(None).alias("VALOR")]))
+            .select(CHAVE + [pl.when((pl.col("VALIDOS") > 0) & pl.lit(bool(siglas)))
+                             .then(100 * pl.col("V").fill_null(0) / pl.col("VALIDOS"))
+                             .otherwise(None).cast(pl.Float64).alias("VALOR")]))
+
+
+def pct_dos_validos(votos: pl.Expr, validos: pl.Expr) -> pl.Expr:
+    """% dos válidos OFICIAIS — a convenção de toda comparação entre fontes (rodada 42, TODO 23). O tempo real
+    (JSON do TSE) traz o % sobre válidos + anulados sub judice, e o histórico (microdados), sobre os válidos: o
+    `PCT_VALIDOS` gravado não é comparável entre as duas fontes quando há candidatura sub judice no cargo."""
+    return pl.when(validos > 0).then(100 * votos.fill_null(0) / validos).otherwise(None)
 
 
 def _pct_candidato(f: Fonte, cargo: int, numero: int) -> pl.DataFrame:
-    base = f.totais.filter((pl.col("CARGO") == cargo) & pl.col("ABRANGENCIA").is_in(["uf", "mun"])).select(CHAVE)
-    c = f.candidatos.filter((pl.col("CARGO") == cargo) & (pl.col("NUMERO") == numero)).select(
-        CHAVE + [pl.col("PCT_VALIDOS").alias("VALOR")])
-    return base.join(c, on=CHAVE, how="left", nulls_equal=True).with_columns(pl.col("VALOR").fill_null(0.0))
+    base = f.totais.filter((pl.col("CARGO") == cargo) & pl.col("ABRANGENCIA").is_in(["uf", "mun"])).select(
+        CHAVE + ["VALIDOS"])
+    c = f.candidatos.filter((pl.col("CARGO") == cargo) & (pl.col("NUMERO") == numero)).select(CHAVE + ["VOTOS"])
+    return (base.join(c, on=CHAVE, how="left", nulls_equal=True)
+            .select(CHAVE + [pct_dos_validos(pl.col("VOTOS"), pl.col("VALIDOS")).alias("VALOR")]))
 
 
 def comparar(a: Fonte, b: Fonte, cargo: int, metrica: str, partido: str | None = None,
@@ -88,7 +151,8 @@ def comparar(a: Fonte, b: Fonte, cargo: int, metrica: str, partido: str | None =
     elif metrica == "partido":
         if not partido:
             raise ValueError("informe o partido")
-        va, vb, var_pct = _pct_partido(a, cargo, partido), _pct_partido(b, cargo, partido), False
+        sa, sb = siglas_do_partido(a, b, partido)
+        va, vb, var_pct = _pct_partido(a, cargo, sa), _pct_partido(b, cargo, sb), False
     elif metrica == "candidato":
         if numero_a is None or numero_b is None:
             raise ValueError("informe o número do candidato em cada ano")
@@ -111,11 +175,29 @@ def comparar(a: Fonte, b: Fonte, cargo: int, metrica: str, partido: str | None =
 
 
 def partidos_disponiveis(a: Fonte, b: Fonte, cargo: int) -> pl.DataFrame:
-    """Partidos do cargo na UF em cada ano (votos), para o seletor; os presentes nos dois vêm primeiro."""
-    def uf(f: Fonte, sufixo: str) -> pl.DataFrame:
-        return (_votos_partido(f, cargo).filter(pl.col("ABRANGENCIA") == "uf")
-                .select("PARTIDO", pl.col("V").alias(f"VOTOS_{sufixo}")))
-    return (uf(a, "A").join(uf(b, "B"), on="PARTIDO", how="full", coalesce=True)
+    """Partidos do cargo na UF em cada ano (votos), para o seletor, ligados pela ENTIDADE (rodada 41).
+    PARTIDO = sigla no ano mais recente (no antigo, se o partido acabou sem sucessor); SIGLAS_A/SIGLAS_B =
+    as siglas de cada lado ("PTB + PATRIOTA" numa fusão). Os presentes nos dois vêm primeiro."""
+    def uf(f: Fonte) -> dict[str, int]:
+        return dict(_votos_partido(f, cargo).filter(pl.col("ABRANGENCIA") == "uf").select("PARTIDO", "V").iter_rows())
+    va, vb = uf(a), uf(b)
+    novo_e_b = b.ano >= a.ano
+    v_novo, v_antigo = (vb, va) if novo_e_b else (va, vb)
+    linhas, usadas = [], set()
+    for sigla in v_novo:
+        sa, sb = siglas_do_partido(a, b, sigla)
+        s_antigo = [s_ for s_ in (sa if novo_e_b else sb) if s_ in v_antigo]
+        usadas |= set(s_antigo)
+        linhas.append({"PARTIDO": sigla, "S_NOVO": sigla, "V_NOVO": v_novo[sigla],
+                       "S_ANTIGO": " + ".join(s_antigo) or None,
+                       "V_ANTIGO": sum(v_antigo[s_] for s_ in s_antigo) if s_antigo else None})
+    for sigla in sorted(set(v_antigo) - usadas):
+        linhas.append({"PARTIDO": sigla, "S_NOVO": None, "V_NOVO": None, "S_ANTIGO": sigla, "V_ANTIGO": v_antigo[sigla]})
+    df = pl.DataFrame(linhas, schema={"PARTIDO": pl.String, "S_NOVO": pl.String, "V_NOVO": pl.Int64,
+                                      "S_ANTIGO": pl.String, "V_ANTIGO": pl.Int64})
+    x, y = ("ANTIGO", "NOVO") if novo_e_b else ("NOVO", "ANTIGO")
+    return (df.select("PARTIDO", pl.col(f"S_{x}").alias("SIGLAS_A"), pl.col(f"S_{y}").alias("SIGLAS_B"),
+                      pl.col(f"V_{x}").alias("VOTOS_A"), pl.col(f"V_{y}").alias("VOTOS_B"))
             .with_columns((pl.col("VOTOS_A").is_not_null() & pl.col("VOTOS_B").is_not_null()).alias("NOS_DOIS"))
             .sort(["NOS_DOIS", "VOTOS_B", "VOTOS_A"], descending=True, nulls_last=True))
 
@@ -193,7 +275,8 @@ def variacao_partidos(a: Fonte, b: Fonte, cargo: int, partidos: list[str], ponde
     Sem `ponderar` (padrão, como no Perfil × voto) cada município é uma observação; ponderando pelos
     válidos de B a capital domina (no RJ, n efetivo ≈ 7 de 92). A variação no ESTADO vem à parte (`uf`).
     Leitura ECOLÓGICA (municípios, não pessoas); os municípios são a população, não uma amostra."""
-    partidos = [p for p in dict.fromkeys(x.strip().upper() for x in partidos) if p]
+    # a sigla como o TSE a escreve ("PC do B"): sem .upper() (rodada 41); a ligação entre anos é pela entidade
+    partidos = [p for p in dict.fromkeys(_canonica(x.strip(), b, a) for x in partidos if x.strip()) if p]
     if not partidos or len(partidos) > MAX_PARTIDOS_VARIACAO:
         raise ValueError(f"escolha de 1 a {MAX_PARTIDOS_VARIACAO} partidos")
     rng = np.random.default_rng(semente)
@@ -201,13 +284,19 @@ def variacao_partidos(a: Fonte, b: Fonte, cargo: int, partidos: list[str], ponde
         "CD_MUNICIPIO", pl.col("VALIDOS").alias("PESO"))
     nomes = pl.concat([b.municipios, a.municipios], how="diagonal_relaxed").unique(
         subset=["CD_MUNICIPIO"], keep="first").select("CD_MUNICIPIO", "CD_MUNICIPIO_IBGE", "NM_MUNICIPIO")
-    existentes = set(_votos_partido(a, cargo)["PARTIDO"].to_list()) | set(_votos_partido(b, cargo)["PARTIDO"].to_list())
+    existentes_a = set(_votos_partido(a, cargo)["PARTIDO"].to_list())
+    existentes_b = set(_votos_partido(b, cargo)["PARTIDO"].to_list())
     saida, difs = [], {}
     for p in partidos:
-        if p not in existentes:
+        sa, sb = siglas_do_partido(a, b, p)
+        sa, sb = [x for x in sa if x in existentes_a], [x for x in sb if x in existentes_b]
+        if not sa and not sb:
             raise ValueError(f"partido {p} sem votos no cargo {cargo} em {a.ano} e em {b.ano}")
-        df = (_pct_partido(a, cargo, p).rename({"VALOR": "A"})
-              .join(_pct_partido(b, cargo, p).rename({"VALOR": "B"}), on=CHAVE, how="inner", nulls_equal=True)
+        if not sa or not sb:
+            raise ValueError(f"partido {p} sem correspondente em {b.ano if sa else a.ano} "
+                             f"({pt.rotulo(sa or sb, a.ano if sa else b.ano)}): não há variação a medir")
+        df = (_pct_partido(a, cargo, sa).rename({"VALOR": "A"})
+              .join(_pct_partido(b, cargo, sb).rename({"VALOR": "B"}), on=CHAVE, how="inner", nulls_equal=True)
               .with_columns((pl.col("B") - pl.col("A")).alias("DIF")))
         uf = df.filter(pl.col("ABRANGENCIA") == "uf")
         mun = (df.filter((pl.col("ABRANGENCIA") == "mun") & pl.col("DIF").is_not_null())
@@ -223,7 +312,8 @@ def variacao_partidos(a: Fonte, b: Fonte, cargo: int, partidos: list[str], ponde
         destaque = set(np.argsort(-np.abs(d - media))[:N_DESTAQUES].tolist())
         difs[p] = mun.select("CD_MUNICIPIO", "NM_MUNICIPIO", "CD_MUNICIPIO_IBGE", "DIF", "PESO")
         saida.append({
-            "partido": p, "uf": uf.select("A", "B", "DIF").row(0, named=True) if uf.height else None,
+            "partido": p, "siglas_a": sa, "siglas_b": sb,
+            "uf": uf.select("A", "B", "DIF").row(0, named=True) if uf.height else None,
             "media": media, "dp": dp, "ic_media": ic, "reta": reta, "leitura": _leitura(reta),
             "pontos": [{**r, "DESTAQUE": i in destaque} for i, r in enumerate(mun.select(
                 "CD_MUNICIPIO", "CD_MUNICIPIO_IBGE", "NM_MUNICIPIO", "A", "B", "DIF", pl.col("PESO").alias("VALIDOS"))
@@ -287,7 +377,8 @@ def _ficha(f: Fonte, uf: str, linha: dict) -> dict:
     ds = f.totais.filter((pl.col("CARGO") == linha["CARGO"]) & (pl.col("ABRANGENCIA") == "uf")
                          & (pl.col("UF") == uf))
     t = ds.row(0, named=True) if ds.height else {}
-    return {**{k: linha.get(k) for k in COLUNAS_CANDIDATO}, "DS_CARGO": t.get("DS_CARGO"),
+    pct = 100 * linha["VOTOS"] / t["VALIDOS"] if t.get("VALIDOS") else linha.get("PCT_VALIDOS")  # válidos oficiais
+    return {**{k: linha.get(k) for k in COLUNAS_CANDIDATO}, "PCT_VALIDOS": pct, "DS_CARGO": t.get("DS_CARGO"),
             "POSICAO_UF": todos.filter(pl.col("VOTOS") > linha["VOTOS"]).height + 1, "N_CANDIDATOS_UF": todos.height,
             "PCT_SECOES_TOTALIZADAS": t.get("PCT_SECOES_TOTALIZADAS"), "TOTALIZACAO_FINAL": t.get("TOTALIZACAO_FINAL")}
 
@@ -301,11 +392,10 @@ def _por_municipio(f: Fonte, uf: str, cargo: int, numero: int) -> pl.DataFrame:
     cand = (f.candidatos.filter((pl.col("CARGO") == cargo) & (pl.col("UF") == uf)
                                 & pl.col("ABRANGENCIA").is_in(["uf", "mun"]))
             .with_columns(pl.col("VOTOS").rank("min", descending=True).over(CHAVE).cast(pl.Int64).alias("POSICAO"))
-            .filter(pl.col("NUMERO") == numero).select(CHAVE + ["VOTOS", "PCT_VALIDOS", "POSICAO"]))
+            .filter(pl.col("NUMERO") == numero).select(CHAVE + ["VOTOS", "POSICAO"]))
     return (base.join(cand, on=CHAVE, how="left", nulls_equal=True)
             .with_columns(pl.col("VOTOS").fill_null(0),
-                          pl.when(pl.col("PCT_VALIDOS").is_not_null()).then(pl.col("PCT_VALIDOS"))
-                          .when(pl.col("VALIDOS") > 0).then(pl.lit(0.0)).otherwise(None).alias("PCT_VALIDOS"))
+                          pct_dos_validos(pl.col("VOTOS"), pl.col("VALIDOS")).alias("PCT_VALIDOS"))
             .drop("VALIDOS"))
 
 

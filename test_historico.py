@@ -9,6 +9,7 @@ import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
+import votos_por_local_votacao as v
 from apuracao import historico as h
 from apuracao.web.app import create_app
 
@@ -169,7 +170,9 @@ def _munzona(cache: Path) -> None:
     """VOTOS_UF + VOTOS_BR no layout dos arquivos por município e zona (cada voto dividido em duas zonas, para
     conferir a soma), com uma eleição suplementar (CD_TIPO_ELEICAO 1) que tem de ser ignorada."""
     cab_c = ["CD_TIPO_ELEICAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_CANDIDATO",
-             "QT_VOTOS_NOMINAIS"]
+             "QT_VOTOS_NOMINAIS", "NR_PARTIDO", "CD_ELEICAO", "NM_TIPO_DESTINACAO_VOTOS", "DS_SIT_TOT_TURNO"]
+    # situação NA TOTALIZAÇÃO (a do consulta_cand sintético; Castro: INAPTO no cadastro, mas Válido/ELEITO aqui)
+    sit = {(t, c, n): st for t, _, c, n, _, _, _, apto, st in CAND if st and apto == "APTO" or n == 22 and c == 3}
     cab_p = ["CD_TIPO_ELEICAO", "NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_PARTIDO",
              "QT_VOTOS_LEGENDA_VALIDOS", "QT_VOTOS_LEGENDA_ANUL_SUBJUD", "QT_VOTOS_LEGENDA_ANULADOS"]
     cand, part = [], []
@@ -179,8 +182,10 @@ def _munzona(cache: Path) -> None:
         if cargo in h.PROPORCIONAIS and votavel < 100:  # legenda: válidos + anulados
             part.append([2, t, uf, mun, 1, cargo, votavel, q - 10, 0, 10])
         else:
-            cand += [[2, t, uf, mun, 1, cargo, votavel, q // 2], [2, t, uf, mun, 2, cargo, votavel, q - q // 2]]
-    cand.append([1, 1, "RJ", RIO, 1, 3, 22, 99999])  # suplementar: fora
+            extra = [votavel if votavel < 100 else votavel // 1000, 546 if cargo != 1 else 544 + t - 1, "Válido",
+                     sit.get((t, cargo, votavel), "NÃO ELEITO")]
+            cand += [[2, t, uf, mun, 1, cargo, votavel, q // 2, *extra], [2, t, uf, mun, 2, cargo, votavel, q - q // 2, *extra]]
+    cand.append([1, 1, "RJ", RIO, 1, 3, 22, 99999, 22, 999, "Válido", "ELEITO"])  # suplementar: fora
     _zip_tse(cache / "votacao_candidato_munzona_2022.zip", "votacao_candidato_munzona_2022_BRASIL.csv", cab_c, cand)
     _zip_tse(cache / "votacao_partido_munzona_2022.zip", "votacao_partido_munzona_2022_BRASIL.csv", cab_p, part)
 
@@ -211,6 +216,10 @@ def test_fonte_munzona_igual_a_secao(tmp_path: Path, monkeypatch: pytest.MonkeyP
     br = pl.read_parquet(tmp_path / "m" / "ultimo" / "candidatos.parquet").filter(
         (pl.col("ABRANGENCIA") == "br") & (pl.col("NUMERO") == 13))
     assert br["VOTOS"].item() == (1120 if turno == 1 else 1130)  # Brasil = todas as UFs + exterior
+    if turno == 1:  # destinação e situação da TOTALIZAÇÃO (candidato_munzona), não as do consulta_cand regerado
+        castro = pl.read_parquet(tmp_path / "m" / "ultimo" / "candidatos.parquet").filter(
+            (pl.col("ABRANGENCIA") == "uf") & (pl.col("CARGO") == 3) & (pl.col("NUMERO") == 22)).row(0, named=True)
+        assert (castro["DESTINACAO"], castro["SITUACAO"], castro["ELEITO"]) == ("Válido", "Eleito", True)
 
 
 def test_fonte_padrao_e_invalida(tmp_path: Path, sem_microdados: None) -> None:
@@ -236,3 +245,150 @@ def test_municipios_cache_sem_a_uf_e_refeito(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(h, "_baixar_municipios", baixar)
     assert h.municipios_tse_ibge("RJ", tmp_path).height == 1 and not feitos  # UF no cache: sem rede
     assert h.municipios_tse_ibge("df", tmp_path)["NM_MUNICIPIO"].to_list() == ["BRASÍLIA"] and len(feitos) == 1
+
+
+# --------------------------------------------------------------------------
+# Totais reconstruídos das seções (rodada 40): enquanto o TSE não publica o detalhe_votacao_munzona
+# --------------------------------------------------------------------------
+def _dest(linhas: list[tuple]) -> pl.DataFrame:
+    """(turno, uf, cargo, número, nº partido, destinação) → o formato de `destinacao_oficial`."""
+    return pl.DataFrame(linhas, schema=["NR_TURNO", "SG_UF", "CD_CARGO", "NUMERO", "NR_PARTIDO", "DESTINACAO_TSE"],
+                        orient="row").with_columns(pl.lit(546).alias("CD_ELEICAO"), pl.lit("ELEITO").alias("SITUACAO_TSE"))
+
+
+def _secoes(votos: list[tuple], detalhe: list[tuple]) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """votos: (turno, uf, mun, zona, seção, cargo, votável, qtd); detalhe: (turno, uf, mun, zona, seção, cargo,
+    aptos, comparecimento, hora de entrada na totalização)."""
+    vs = pl.DataFrame(votos, schema=["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "NR_SECAO", "CD_CARGO",
+                                     "NR_VOTAVEL", "QT_VOTOS"], orient="row")
+    det = pl.DataFrame(detalhe, schema=["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "NR_SECAO", "CD_CARGO",
+                                        "QT_APTOS", "QT_COMPARECIMENTO", "DT_PRIM_TOT_PARCIAL_HOR_TSE"], orient="row")
+    det = det.with_columns((pl.col("QT_APTOS") - pl.col("QT_COMPARECIMENTO")).alias("QT_ABSTENCOES"),
+                           pl.lit("Deputado Estadual").alias("DS_CARGO"))
+    return vs.lazy(), det.lazy()
+
+
+def test_detalhe_de_secoes_categorias() -> None:
+    """Cada regra da reconstrução (iguais ao oficial nas 732 zonas × cargo do RJ 2022)."""
+    votos, det = _secoes(
+        [(1, "RJ", RIO, 4, 1, 7, 55123, 100),   # destinação Válido → nominal válido
+         (1, "RJ", RIO, 4, 2, 7, 55123, 50),
+         (1, "RJ", RIO, 4, 1, 7, 55789, 10),    # Anulado
+         (1, "RJ", RIO, 4, 1, 7, 55999, 5),     # Anulado sub judice
+         (1, "RJ", RIO, 4, 1, 7, 66111, 7),     # fora do candidato_munzona (negado antes da eleição) → nulo técnico
+         (1, "RJ", RIO, 4, 1, 7, 55, 20),       # legenda de partido com candidato → válida
+         (1, "RJ", RIO, 4, 2, 7, 77, 3),        # legenda de partido SEM candidato no cargo → nulo técnico
+         (1, "RJ", RIO, 4, 1, 7, 95, 4), (1, "RJ", RIO, 4, 1, 7, 96, 6), (1, "RJ", RIO, 4, 2, 7, 97, 2),
+         (1, "SP", SP, 1, 1, 1, 13, 30)],       # presidente: destinação nacional (a linha está no RJ)
+        [(1, "RJ", RIO, 4, 1, 7, 300, 200, "31/10/2022 23:59:00"),
+         (1, "RJ", RIO, 4, 2, 7, 100, 50, "01/11/2022 00:10:00"),   # virada do mês: a hora é a MAIOR data
+         (1, "SP", SP, 1, 1, 1, 40, 30, "02/10/2022 18:00:00")])
+    dest = _dest([(1, "RJ", 7, 55123, 55, "Válido"), (1, "RJ", 7, 55789, 55, "Anulado"),
+                  (1, "RJ", 7, 55999, 55, "Anulado sub judice"), (1, "RJ", 1, 13, 13, "Válido")])
+    d = h.detalhe_de_secoes(votos, det, dest)
+    rj = d.filter(pl.col("SG_UF") == "RJ").row(0, named=True)
+    assert (rj["QT_VOTOS_NOMINAIS_VALIDOS"], rj["QT_TOTAL_VOTOS_LEG_VALIDOS"], rj["QT_TOTAL_VOTOS_VALIDOS"]) == (150, 20, 170)
+    assert (rj["QT_TOTAL_VOTOS_ANULADOS"], rj["QT_TOTAL_VOTOS_ANUL_SUBJUD"]) == (10, 5)
+    assert (rj["QT_VOTOS_NULOS"], rj["QT_VOTOS_NULOS_TECNICOS"], rj["QT_TOTAL_VOTOS_NULOS"]) == (6, 10, 16)
+    assert (rj["QT_VOTOS_BRANCOS"], rj["QT_VOTOS_ANULADOS_APU_SEP"], rj["QT_VOTOS"]) == (4, 2, 207)
+    assert (rj["QT_APTOS"], rj["QT_COMPARECIMENTO"], rj["QT_ABSTENCOES"], rj["QT_TOTAL_SECOES"]) == (400, 250, 150, 2)
+    assert (rj["DT_ULTIMA_TOTALIZACAO"], rj["HH_ULTIMA_TOTALIZACAO"], rj["CD_ELEICAO"]) == ("01/11/2022", "00:10:00", 546)
+    sp = d.filter(pl.col("SG_UF") == "SP").row(0, named=True)
+    assert sp["QT_TOTAL_VOTOS_VALIDOS"] == 30 and sp["QT_VOTOS_NULOS_TECNICOS"] == 0
+
+
+def test_importar_com_totais_reconstruidos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sem_microdados: None) -> None:
+    """Os totais reconstruídos alimentam as mesmas tabelas; o status.json marca o resultado como provisório."""
+    votos, det = _secoes([(1, "RJ", RIO, 4, 1, 3, 22, 700), (1, "RJ", RIO, 4, 1, 3, 40, 300), (1, "RJ", RIO, 4, 1, 3, 96, 20)],
+                         [(1, "RJ", RIO, 4, 1, 3, 1200, 1020, "02/10/2022 19:00:00")])
+    dest = _dest([(1, "RJ", 3, 22, 22, "Válido"), (1, "RJ", 3, 40, 40, "Válido")])
+    monkeypatch.setattr(h, "load_detalhe_secoes", lambda ano, uf, cache: h.detalhe_de_secoes(votos, det, dest))
+    monkeypatch.setattr(h, "destinacao_oficial", lambda ano, cache: dest)
+    monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    h.importar(2022, "RJ", 1, tmp_path, tmp_path / "r", totais_de="secoes")
+    st = json.loads((tmp_path / "r" / "status.json").read_text())
+    assert st["totais_de"] == "secoes" and "provisório" in st["totais"] and "totais provisórios" in st["ambiente"]
+    assert "detalhe_votacao_munzona_2022" not in st["fontes"] and "detalhe_votacao_secao_2022" in st["fontes"]
+    gov = pl.read_parquet(tmp_path / "r" / "ultimo" / "totais.parquet").filter(
+        (pl.col("CARGO") == 3) & (pl.col("ABRANGENCIA") == "uf")).row(0, named=True)
+    assert (gov["VALIDOS"], gov["NULOS"], gov["ELEITORADO"], gov["ABSTENCAO"]) == (1000, 20, 1200, 180)
+    with pytest.raises(ValueError, match="secao"):
+        h.importar(2022, "RJ", 1, tmp_path, tmp_path / "x", fonte="munzona", totais_de="secoes")
+    with pytest.raises(ValueError, match="totais"):
+        h.importar(2022, "RJ", 1, tmp_path, tmp_path / "x", totais_de="outro")
+
+
+def test_conferir_totais() -> None:
+    base = pl.DataFrame({"CARGO": [3, 3], "ABRANGENCIA": ["uf", "mun"], "UF": ["RJ", "RJ"], "CD_MUNICIPIO": [None, RIO],
+                         "VALIDOS": [1000, 600], "NULOS": [20, 10]})
+    oficial = base.with_columns(pl.when(pl.col("ABRANGENCIA") == "mun").then(pl.col("NULOS") + 2)
+                                .otherwise(pl.col("NULOS")).alias("NULOS"))
+    d = h.conferir_totais(base, oficial)
+    assert d.height == 1 and d.row(0, named=True)["DIF_NULOS"] == 2 and d.row(0, named=True)["DIF_VALIDOS"] == 0
+    assert h.conferir_totais(base, base).is_empty()
+
+
+def test_destinacao_so_do_cache(tmp_path: Path) -> None:
+    with pytest.raises(v.TseDataError, match="cache"):
+        h.destinacao_oficial(2026, tmp_path)  # sem o ZIP: erro claro, nada de rede
+
+
+def test_cadeiras_sem_partido_munzona_nao_repetem_o_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                            sem_microdados: None) -> None:
+    """Eleição importada sem o votacao_partido_munzona (2026 antes da publicação): as cadeiras caem para o
+    `ultimo/` e a falha fica memorizada (antes, cada pedido de cadeiras repetia o 404 na CDN)."""
+    from apuracao import cadeiras as cd
+    monkeypatch.setattr(h, "load_votos", lambda ano, uf, cache: (_votos(VOTOS_UF), _votos(VOTOS_BR)))
+    monkeypatch.setattr(h, "fonte_padrao", lambda ano, uf, cache: "secao")
+    destino = tmp_path / "historico_2022_t1"
+    h.importar(2022, "RJ", 1, tmp_path, destino)
+    tentativas = []
+
+    def falha(*a, **k):
+        tentativas.append(a)
+        raise v.TseDataError("404 em votacao_partido_munzona_2022.zip")
+    monkeypatch.setattr(cd, "entrada_munzona", falha)
+    site = TestClient(create_app(destino, "RJ", tmp_path))
+    for _ in range(3):
+        r = site.get("/api/cadeiras?cargo=7")
+        assert r.status_code == 200 and r.json()["fonte"] == "divulgação do TSE"
+    assert len(tentativas) == 1
+
+
+def test_cargo_sem_destinacao_publicada_conta_como_valido() -> None:
+    """Presidente 2026 em 06/10: o candidato_munzona ainda sem nenhuma linha do cargo. Não é nulo técnico."""
+    votos, det = _secoes([(1, "RJ", RIO, 4, 1, 1, 13, 40), (1, "RJ", RIO, 4, 1, 1, 22, 50), (1, "RJ", RIO, 4, 1, 1, 96, 5),
+                          (1, "RJ", RIO, 4, 1, 3, 22, 30), (1, "RJ", RIO, 4, 1, 3, 99, 7)],
+                         [(1, "RJ", RIO, 4, 1, 1, 100, 95, "02/10/2022 19:00:00"),
+                          (1, "RJ", RIO, 4, 1, 3, 100, 37, "02/10/2022 19:00:00")])
+    dest = _dest([(1, "RJ", 3, 22, 22, "Válido")])  # só governador publicado
+    d = h.detalhe_de_secoes(votos, det, dest)
+    pres = d.filter(pl.col("CD_CARGO") == 1).row(0, named=True)
+    gov = d.filter(pl.col("CD_CARGO") == 3).row(0, named=True)
+    assert (pres["QT_TOTAL_VOTOS_VALIDOS"], pres["QT_VOTOS_NULOS_TECNICOS"], pres["QT_TOTAL_VOTOS_NULOS"]) == (90, 0, 5)
+    assert (gov["QT_TOTAL_VOTOS_VALIDOS"], gov["QT_VOTOS_NULOS_TECNICOS"]) == (30, 7)  # governador: regra normal
+    assert h.cargos_sem_destinacao(dest, "RJ", 1, [1, 3]) == [1] and h.cargos_sem_destinacao(None, "RJ", 1, [3]) == [3]
+
+
+def test_partido_soma_so_nominais_validos() -> None:
+    """Voto em candidato anulado não é do partido (com a destinação oficial); sem ela, como antes: todos."""
+    tot = h.totais(_detalhe(), "RJ", 1)
+    dest = _dest([(1, "RJ", 7, 55123, 55, "Válido"), (1, "RJ", 7, 55456, 55, "Anulado")])
+    _, part = h.candidatos_e_partidos(_votos(VOTOS_UF), _votos(VOTOS_BR), _cand(), tot, "RJ", 1, dest)
+    _, sem = h.candidatos_e_partidos(_votos(VOTOS_UF), _votos(VOTOS_BR), _cand(), tot, "RJ", 1)
+    uf = lambda p: p.filter((pl.col("ABRANGENCIA") == "uf") & (pl.col("NR_PARTIDO") == 55)).row(0, named=True)  # noqa: E731
+    assert (uf(part)["VOTOS_NOMINAIS"], uf(part)["VOTOS_LEGENDA"], uf(part)["VOTOS_TOTAL"]) == (500, 40, 540)
+    assert uf(sem)["VOTOS_NOMINAIS"] == 700
+
+
+def test_agremiacao_da_federacao_e_formato_2026() -> None:
+    """Rodada 41: federação sozinha tinha AGREMIACAO = "FEDERAÇÃO" (genérico); o cadastro de 2026 traz "13-PT/…"."""
+    c = _cand().with_columns(
+        pl.when(pl.col("NR_CANDIDATO").is_in(["55123", "55456"])).then(pl.lit("FEDERAÇÃO"))
+        .otherwise(pl.col("NM_COLIGACAO")).alias("NM_COLIGACAO"),
+        pl.when(pl.col("NR_CANDIDATO").is_in(["55123", "55456"])).then(pl.lit("55-PSD/10-REPUBLICANOS"))
+        .otherwise(pl.col("SG_FEDERACAO")).alias("SG_FEDERACAO"))
+    cad = h.cadastro(c, "RJ", 1).filter(pl.col("CARGO") == 7)
+    assert set(cad["FEDERACAO"]) == {"PSD/REPUBLICANOS"} and set(cad["AGREMIACAO"]) == {"PSD/REPUBLICANOS"}
+    gov = h.cadastro(_cand(), "RJ", 1).filter((pl.col("CARGO") == 3) & (pl.col("NUMERO") == 40)).row(0, named=True)
+    assert gov["AGREMIACAO"] == "PSB"  # partido isolado: a sigla

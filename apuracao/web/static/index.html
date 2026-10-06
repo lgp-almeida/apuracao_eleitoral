@@ -90,7 +90,8 @@
 
       <details class="caixa" id="caixa-historico">
         <summary>Resultado por município × eleição anterior (planilha com a variação)</summary>
-        <p class="nota">Dados da apuração (por município), sem esperar os microdados. O candidato da eleição anterior é o
+        <p class="nota">Dados da apuração (por município), sem esperar os microdados. % sobre os votos válidos oficiais
+          nos dois anos. O candidato da eleição anterior é o
           de mesmo nome civil completo, em qualquer cargo; para um homônimo, indique o cargo e o número abaixo.</p>
         <form id="form-historico" class="filtros">
           <label>Cargo na eleição anterior
@@ -252,7 +253,9 @@
       </div>
       <h3 class="sub" id="comp-titulo-tabela">Por município (clique no cabeçalho para ordenar)</h3>
       <div id="comp-tabela" class="tabela-rolagem"></div>
-      <p class="nota">Diferença = ano atual − ano de referência. Percentuais sobre o total de cada ano; senador:
+      <p class="nota">Diferença = ano atual − ano de referência. Percentuais sobre o total de cada ano; o % de candidato
+        ou partido é sempre sobre os votos válidos oficiais nos dois anos (o painel em tempo real mostra o % do TSE, que
+        inclui os votos sub judice no denominador). Partido: o mesmo partido em cada ano (fusão soma os antecessores). Senador:
         1 vaga em 2022 e 2 em 2026 (cada eleitor votou duas vezes), então os percentuais não são diretamente equivalentes.
         Partidos e números de candidato do ambiente de simulado são fictícios.</p>
       <details class="caixa" id="comp-variacao">
