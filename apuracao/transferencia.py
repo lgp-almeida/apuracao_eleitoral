@@ -109,6 +109,9 @@ class Unidades:
     nivel: str
     descricao: str
     finalistas: list[str] = field(default_factory=list)
+    # índice da categoria do 1º lado que "é a mesma" de cada categoria do 2º, para o swing uniforme da validação.
+    # None = pelo nome (1º → 2º turno: A→A, B→B…); entre anos diferentes (migracao.py) vem pela entidade do partido
+    mapa_swing: list[int] | None = None
 
     def matrizes(self, t: pl.DataFrame | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         t = self.tabela if t is None else t
@@ -485,7 +488,7 @@ def validacao_cruzada(u: Unidades, estrato: str | None = None, dobras: int = 5, 
     grupos, idx = np.unique(u.tabela["GRUPO"].to_numpy(), return_inverse=True)
     dobra = np.random.default_rng(semente).permutation(len(grupos))[idx] % dobras
     e, rotulos = estratos(u, estrato)
-    mapa = [u.cat1.index(c) for c in u.cat2]      # A→A, B→B, branco/nulo→branco/nulo, abstenção→abstenção
+    mapa = u.mapa_swing or [u.cat1.index(c) for c in u.cat2]  # A→A, B→B, branco/nulo→branco/nulo, abstenção→abstenção
     erros: dict[str, list] = {"modelo": [], "matriz_unica": [], "swing": []}
     for k in range(dobras):
         tr_, te = dobra != k, dobra == k
@@ -577,16 +580,18 @@ def comparar_niveis(secoes: pl.DataFrame, votos: pl.DataFrame, nomes: dict[int, 
 # --------------------------------------------------------------------------
 # Planilha
 # --------------------------------------------------------------------------
-def para_planilha(r: dict[str, Any], por_unidade: pl.DataFrame, destino: Path) -> None:
+def para_planilha(r: dict[str, Any], por_unidade: pl.DataFrame, destino: Path,
+                  lados: tuple[str, str] = ("1º turno", "2º turno")) -> None:
+    """`lados`: como chamar o lado 1 e o 2 (a migração entre anos usa "2022" e "2026")."""
     import xlsxwriter
 
     wb = xlsxwriter.Workbook(str(destino))
     cab = wb.add_format({"bold": True, "bg_color": "#E9EEF8"})
     pct = wb.add_format({"num_format": "0.0"})
     ws = wb.add_worksheet("Matriz")
-    ws.write(0, 0, f"Transferência do 1º para o 2º turno — {r['descricao']} ({r['unidades']} unidades)", cab)
+    ws.write(0, 0, f"Transferência de votos {lados[0]} → {lados[1]} — {r['descricao']} ({r['unidades']} unidades)", cab)
     linha = 2
-    ws.write_row(linha, 0, ["Origem (1º turno)", "Eleitores no 1º turno"]
+    ws.write_row(linha, 0, [f"Origem ({lados[0]})", f"Eleitores ({lados[0]})"]
                  + [f"{c} (%)" for c in r["categorias_2t"]] + [f"{c} IC 95%" for c in r["categorias_2t"]]
                  + [f"{c} (eleitores)" for c in r["categorias_2t"]], cab)
     for m in r["matriz"]:
@@ -598,7 +603,7 @@ def para_planilha(r: dict[str, Any], por_unidade: pl.DataFrame, destino: Path) -
             ws.write(linha, 2 + len(m["destinos"]) + j, f"{d['baixo']:.1f}–{d['alto']:.1f}")
             ws.write_number(linha, 2 + 2 * len(m["destinos"]) + j, d["eleitores"])
     linha += 2
-    ws.write(linha, 0, "Leia: da linha 'origem', que % foi para cada opção do 2º turno. Inferência ECOLÓGICA "
+    ws.write(linha, 0, f"Leia: da linha 'origem', que % foi para cada opção ({lados[1]}). Inferência ECOLÓGICA "
                        "(unidades, não pessoas); o IC mede só a variação amostral (bootstrap por local).")
     if r.get("validacao"):
         val = r["validacao"]

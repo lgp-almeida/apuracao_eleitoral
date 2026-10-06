@@ -1,11 +1,15 @@
 """Mapa por local de votação: um ponto por local (estado inteiro, coordenada do cadastro de eleitorado).
 
-Três camadas, todas sobre os caches de `PerfilVotoLocal` (apuracao/perfil_local.py) — nada é recalculado:
+Quatro camadas, todas sobre os caches de `PerfilVotoLocal` (apuracao/perfil_local.py) — nada é recalculado:
   * "voto": as métricas do mapa por bairro (mais votado, % e votos de um candidato, brancos/nulos,
     abstenção/comparecimento), dos microdados por seção somados por local;
   * "perfil": um indicador do eleitorado (TSE do ano) ou do entorno (Censo 2022 por setor, raio de 800 m);
   * "residuo": o resíduo do Perfil × voto (p.p.) — quanto o candidato/partido foi melhor (+) ou pior (−)
-    no local do que a reta voto × indicador prevê. É o "onde o voto foge do perfil".
+    no local do que a reta voto × indicador prevê. É o "onde o voto foge do perfil";
+  * "variacao" (rodada 46, TODO 17a): quanto a métrica mudou no local desde a eleição de referência (padrão: a
+    geral anterior, ano − 4), em p.p. — % dos válidos do PARTIDO (pela entidade, `apuracao/partidos.py`: o nº de
+    um candidato vale pelo partido dele; Flávio/PL 2026 × Bolsonaro/PL 2022), abstenção, comparecimento,
+    brancos/nulos. Locais casados pela UNIDADE (município + zona + nº do local): local novo ou desativado sai.
 
 Só com microdados (resultado final, por seção): o tempo real vai no máximo até o município.
 """
@@ -18,9 +22,15 @@ import polars as pl
 
 import votos_por_local_votacao as v
 from apuracao import bairros as br
+from apuracao import partidos as pt
 from apuracao import perfil as pf
 
-CAMADAS = {"voto": "Voto", "perfil": "Perfil do eleitorado", "residuo": "Resíduo do Perfil × voto"}
+CAMADAS = {"voto": "Voto", "perfil": "Perfil do eleitorado", "residuo": "Resíduo do Perfil × voto",
+           "variacao": "Variação desde a eleição anterior"}
+# métricas da camada "variacao" → métrica de `bairros.valor_por_bairro`/`metrica_participacao`
+METRICAS_VARIACAO = {"pct_candidato": "partido", "abstencao_pct": "abstencao_pct",
+                     "comparecimento_pct": "comparecimento_pct", "brancos_nulos_pct": "brancos_nulos",
+                     "brancos_pct": "brancos", "nulos_pct": "nulos"}
 
 
 def alvo(ano: int, cargo: int, turno: int, numero: int) -> pf.Alvo:
@@ -30,9 +40,57 @@ def alvo(ano: int, cargo: int, turno: int, numero: int) -> pf.Alvo:
     return pf.Alvo(ano, cargo, turno, numero, None)
 
 
+def _participacao(plocal: Any, ano: int, cargo: int, turno: int, metrica: str) -> pl.DataFrame:
+    """CD_BAIRRO (= UNIDADE do local), VALOR, NUM, DEN — abstenção ou comparecimento por local."""
+    det = plocal.b._carregar(("detalhe", ano), lambda: v.load_section_details(ano, plocal.b.uf, plocal.b.cache))
+    pb = br.participacao_por_bairro(det, cargo, turno, plocal.locais(ano).select(
+        v.LOCAL_KEY + [pl.col("UNIDADE").alias("CD_BAIRRO")]))
+    if pb.is_empty():
+        raise v.TseDataError(f"sem comparecimento de {br.CARGOS[cargo].title()} ({turno}º turno) em {ano}")
+    return br.metrica_participacao(pb, metrica)
+
+
+def variacao(plocal: Any, ano: int, ano_ref: int, cargo: int, turno: int, metrica: str,
+             numero: int | None = None, municipio: int | None = None) -> tuple[pl.DataFrame, str]:
+    """(CD_BAIRRO, VALOR = B − A em p.p., ANTES, DEPOIS; rótulo). `numero`: candidato ou partido (2 dígitos) em
+    `ano`; vale o PARTIDO dele, e em `ano_ref` os nºs do mesmo partido (entidade). Partido sem correspondente
+    na referência (novo) → ValueError: a variação não existe, não é "subiu do zero"."""
+    if metrica not in METRICAS_VARIACAO:
+        raise ValueError(f"variação por local: {', '.join(METRICAS_VARIACAO)}")
+    m = METRICAS_VARIACAO[metrica]
+    if m in br.PARTICIPACAO:
+        a, b = (_participacao(plocal, x, cargo, turno, m) for x in (ano_ref, ano))
+        rotulo = br.METRICAS[metrica]
+    else:
+        nums_a = nums_b = None
+        rotulo = br.METRICAS[metrica]
+        if m == "partido":
+            if numero is None:
+                raise ValueError("informe o número do candidato (ou 2 dígitos para o partido)")
+            partido = numero if numero < 100 else int(str(numero)[:2])
+            comp = plocal.comp
+            nums_a, nums_b = comp.numeros_do_partido(partido, ano_ref, ano)
+            if not nums_a:
+                raise ValueError(f"o partido {comp.siglas(ano).get(partido, partido)} não tem correspondente em "
+                                 f"{ano_ref} (partido novo): sem variação")
+            sa, sb = comp.siglas(ano_ref), comp.siglas(ano)
+            nome_b = sb.get(partido, str(partido))
+            nome_a = " + ".join(sa.get(n, str(n)) for n in nums_a)
+            rotulo = f"% dos válidos do {nome_b}" + (f" ({nome_a} em {ano_ref})" if pt.chave(nome_a) != pt.chave(nome_b) else "")
+        a = br.valor_por_bairro(plocal._vb(ano_ref, cargo, turno), cargo, m, nums_a)
+        b = br.valor_por_bairro(plocal._vb(ano, cargo, turno), cargo, m, nums_b)
+    df = (a.select("CD_BAIRRO", pl.col("VALOR").alias("ANTES"))
+          .join(b.select("CD_BAIRRO", pl.col("VALOR").alias("DEPOIS")), on="CD_BAIRRO", how="inner")
+          .drop_nulls(["ANTES", "DEPOIS"])
+          .with_columns((pl.col("DEPOIS") - pl.col("ANTES")).alias("VALOR")))
+    if municipio is not None:
+        df = df.filter(pf.municipio_do_bairro() == municipio)
+    return df, f"Variação (p.p.) de {rotulo} — {br.CARGOS[cargo].title()}, {ano_ref} → {ano}"
+
+
 def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, metrica: str | None = None,
            numero: int | None = None, indicador: str | None = None, municipio: int | None = None,
-           min_validos: int = 50) -> dict[str, Any]:
+           min_validos: int = 50, ano_ref: int | None = None) -> dict[str, Any]:
     """Os pontos do mapa. `municipio`: código IBGE (como no Perfil × voto por local). Levanta ValueError
     (pedido inválido) ou TseDataError (microdados ausentes)."""
     if camada not in CAMADAS:
@@ -43,11 +101,7 @@ def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, m
         if metrica not in br.METRICAS:
             raise ValueError(f"métrica indisponível por local: {metrica}. Use: {', '.join(br.METRICAS)}")
         if metrica in br.PARTICIPACAO:
-            det = plocal.b._carregar(("detalhe", ano), lambda: v.load_section_details(ano, plocal.b.uf, plocal.b.cache))
-            pb = br.participacao_por_bairro(det, cargo, turno, loc.select(v.LOCAL_KEY + [pl.col("UNIDADE").alias("CD_BAIRRO")]))
-            if pb.is_empty():
-                raise v.TseDataError(f"sem comparecimento de {br.CARGOS[cargo].title()} ({turno}º turno) em {ano}")
-            df = br.metrica_participacao(pb, metrica).select("CD_BAIRRO", "VALOR")
+            df = _participacao(plocal, ano, cargo, turno, metrica).select("CD_BAIRRO", "VALOR")
             rotulo = f"{br.METRICAS[metrica]} — {br.CARGOS[cargo].title()} {ano}"
         else:
             vb = plocal._vb(ano, cargo, turno)
@@ -70,6 +124,13 @@ def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, m
         rotulo, tipo = f"{indicadores[indicador]['rotulo']} — {ano}", "sequencial"
         unidade = "%" if indicador.startswith("pct_") else ""
         extra["fonte_indicador"] = indicadores[indicador].get("fonte")
+    elif camada == "variacao":
+        ano_ref = ano_ref or ano - 4
+        if ano_ref >= ano:
+            raise ValueError("a eleição de referência deve ser anterior")
+        df, rotulo = variacao(plocal, ano, ano_ref, cargo, turno, metrica, numero, municipio)
+        tipo, unidade = "divergente", "p.p."
+        extra["ano_ref"] = ano_ref
     else:
         if numero is None or indicador is None:
             raise ValueError("o resíduo precisa do número (candidato; 2 dígitos = partido) e do indicador")
@@ -82,7 +143,7 @@ def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, m
                      rotulo_x=d["rotulo_x"], rotulo_y=d["rotulo_y"], min_validos=min_validos)
     base = loc if municipio is None else loc.filter(pl.col("CD_MUN").cast(pl.Int64) == municipio)
     j = base.join(df.rename({"CD_BAIRRO": "UNIDADE"}), on="UNIDADE", how="inner").drop_nulls("VALOR")
-    extras = [c for c in ("VOTO", "INDICADOR", "ROTULO") if c in j.columns]
+    extras = [c for c in ("VOTO", "INDICADOR", "ROTULO", "ANTES", "DEPOIS") if c in j.columns]
     itens = [{"u": r["UNIDADE"], "lat": r["LAT"], "lon": r["LON"], "nome": r["NM_LOCAL_VOTACAO"], "mun": r["NM_MUN"],
               "zona": r["NR_ZONA"], "local": r["NR_LOCAL_VOTACAO"], "eleitores": r["QT_ELEITORES"],
               "valor": r["VALOR"], **{c.lower(): r[c] for c in extras}}

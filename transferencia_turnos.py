@@ -52,19 +52,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def imprimir(r: dict) -> None:
+def imprimir(r: dict, lados: tuple[str, str] = ("1º turno", "2º turno")) -> None:
+    """`lados`: como chamar o lado 1 e o 2 (`migracao_votos.py` usa os anos)."""
     eleitores = f"{r['eleitores_1t']:,}".replace(",", ".")
     print(f"\n{r['descricao']} — {r['unidades']} unidades, {eleitores} eleitores")
-    linhas = [{"origem (1º turno)": m["origem"], "% do eleitorado": round(m["pct_1t"], 1),
+    linhas = [{f"origem ({lados[0]})": m["origem"], "% do eleitorado": round(m["pct_1t"], 1),
                **{d["destino"]: f"{d['pct']:.1f} ({d['baixo']:.1f}–{d['alto']:.1f})" for d in m["destinos"]}}
               for m in r["matriz"]]
     with pl.Config(tbl_rows=30, tbl_cols=12, tbl_width_chars=200, fmt_str_lengths=40):
-        print("\nPara onde foi cada grupo do 1º turno (% e IC 95% do bootstrap):")
+        print(f"\nPara onde foi cada grupo ({lados[0]} → {lados[1]}; % e IC 95% do bootstrap):")
         print(pl.DataFrame(linhas))
     a = r["abstencao"]
-    print(f"\nAbstenção: {a['pct_1t']:.2f}% no 1º turno → {a['pct_2t']:.2f}% no 2º ({a['extra_pp']:+.2f} p.p.)")
+    print(f"\nAbstenção: {a['pct_1t']:.2f}% ({lados[0]}) → {a['pct_2t']:.2f}% ({lados[1]}) ({a['extra_pp']:+.2f} p.p.)")
     novos = ", ".join(f"{n['origem']}: {n['eleitores']:,}".replace(",", ".") for n in a["novos_abstencionistas"])
-    print(f"Quem votou no 1º e se absteve no 2º (estimado): {novos}")
+    print(f"Quem votou ({lados[0]}) e se absteve ({lados[1]}) (estimado): {novos}")
     print("Ajuste (R² ponderado): " + ", ".join(f"{k} {x:.3f}" for k, x in r["r2"].items()))
     val = r.get("validacao")
     if val:
@@ -72,7 +73,7 @@ def imprimir(r: dict) -> None:
               f"{val['rmse_modelo_medio_pp']:.2f} p.p. × matriz única {val['rmse_matriz_unica_medio_pp']:.2f} × "
               f"swing uniforme {val['rmse_swing_medio_pp']:.2f} p.p.")
     print("\nInferência ECOLÓGICA: padrão médio entre unidades, não o voto de pessoas; o IC não inclui o viés de "
-          "agregação (compare os níveis com --comparar-niveis).")
+          "agregação" + (" (compare os níveis com --comparar-niveis)." if lados[0] == "1º turno" else "."))
 
 
 def main(argv: list[str] | None = None) -> int:

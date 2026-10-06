@@ -1383,7 +1383,9 @@ detalheSel.addEventListener("change", async () => {
 anoBairrosSel.addEventListener("change", async () => { await prepararDetalhe(anoBairrosSel.value); atualizarMapa(); });
 
 // ---------------------------------------------------------------- mapa por local de votação (rodada 32)
-// Um ponto por local (microdados): voto, perfil do eleitorado ou resíduo do Perfil × voto. Área do ponto ∝ eleitorado.
+// Um ponto por local (microdados): voto, perfil do eleitorado, resíduo do Perfil × voto ou variação desde a eleição
+// anterior (rodada 46: partido pela entidade, abstenção, brancos/nulos). Área do ponto ∝ eleitorado.
+const METRICAS_VARIACAO = ["pct_candidato", "abstencao_pct", "comparecimento_pct", "brancos_nulos_pct", "brancos_pct", "nulos_pct"];
 const camadaSel = document.getElementById("mapa-camada");
 const indicadorSel = document.getElementById("mapa-indicador");
 const municipioLocSel = document.getElementById("mapa-municipio");
@@ -1405,11 +1407,18 @@ function ajustarControlesLocais() {
   const camada = camadaSel.value;
   document.getElementById("mapa-l-camada").hidden = !locais;
   document.getElementById("mapa-l-municipio").hidden = !locais;
-  document.getElementById("mapa-l-indicador").hidden = !locais || camada === "voto";
-  document.getElementById("mapa-l-metrica").hidden = locais && camada !== "voto";
-  numeroMapa.disabled = locais ? !(camada === "residuo" || (camada === "voto" && metricaSel.value.endsWith("_candidato")))
+  const comMetrica = ["voto", "variacao"].includes(camada);
+  document.getElementById("mapa-l-indicador").hidden = !locais || comMetrica;
+  document.getElementById("mapa-l-metrica").hidden = locais && !comMetrica;
+  if (locais) {
+    const permitidas = camada === "variacao" ? METRICAS_VARIACAO : METRICAS_BAIRRO;
+    for (const op of metricaSel.options) op.disabled = !permitidas.includes(op.value);
+    if (metricaSel.selectedOptions[0]?.disabled) metricaSel.value = camada === "variacao" ? "pct_candidato" : "vencedor";
+  }
+  numeroMapa.disabled = locais ? !(camada === "residuo" || (comMetrica && metricaSel.value.endsWith("_candidato")))
     : !metricaSel.value.endsWith("_candidato");
-  numeroMapa.placeholder = locais && camada === "residuo" ? "número (2 dígitos = partido)" : "número";
+  numeroMapa.placeholder = !locais ? "número" : camada === "residuo" ? "número (2 dígitos = partido)"
+    : camada === "variacao" ? "número (vale o partido)" : "número";
 }
 camadaSel.addEventListener("change", () => { ajustarControlesLocais(); atualizarMapa(); });
 indicadorSel.addEventListener("change", () => atualizarMapa());
@@ -1421,10 +1430,13 @@ async function atualizarMapaLocais(cargo, legenda) {
   const camada = camadaSel.value;
   const q = new URLSearchParams({ ano: anoBairrosSel.value, camada, cargo, turno: estado.turno || 1 });
   const num = numeroMapa.value.trim();
-  if (camada === "voto") {
+  if (camada === "voto" || camada === "variacao") {
     q.set("metrica", metricaSel.value);
     if (metricaSel.value.endsWith("_candidato")) {
-      if (!/^\d+$/.test(num)) { legenda.replaceChildren(el("p", {}, "Informe o número de um candidato.")); return; }
+      if (!/^\d+$/.test(num)) {
+        legenda.replaceChildren(el("p", {}, camada === "variacao" ? "Informe o número de um candidato ou partido (vale o partido)."
+          : "Informe o número de um candidato.")); return;
+      }
       q.set("numero", num);
     }
   } else {
@@ -1448,6 +1460,8 @@ async function atualizarMapaLocais(cargo, legenda) {
       (est && est.pearson !== null ? ` Reta voto × indicador: r = ${est.pearson.toFixed(2).replace(".", ",")}, ` +
         `R² = ${est.r2.toFixed(2).replace(".", ",")}, ${int(est.n)} locais com ≥ ${int(d.min_validos)} votos válidos. ` +
         "Azul: o voto foi MAIOR que o esperado pelo indicador; vermelho: menor. Correlação ecológica." : "") +
+      (camada === "variacao" ? ` Só os locais presentes em ${d.ano_ref} e ${d.ano} (mesmo município, zona e nº do local); ` +
+        "partido pela entidade (fusões e trocas de nº). Azul: subiu; vermelho: caiu." : "") +
       (!d.itens.length && camada === "residuo" ? ` Nenhum local com ${int(d.min_validos)} votos válidos ou mais ` +
         "para o resíduo (ele só usa locais com votos suficientes)." : "");
   } catch (e) {
@@ -1488,10 +1502,12 @@ async function desenharPontos(mapa, d, legendaEl) {
     const cores = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"].map(cor);
     corDe = (v) => { const a = Math.abs(v); const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3; return cores[v < 0 ? 3 - k : 3 + k]; };
     const m = (x) => Math.abs(x).toFixed(1).replace(".", ",");
-    itensLegenda = [[cores[6], `voto maior que o esperado: mais de ${m(lim[2])} p.p.`], [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
-      [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `como esperado (±${m(lim[0])} p.p.)`],
+    const variacao = d.camada === "variacao";
+    itensLegenda = [[cores[6], `${variacao ? "subiu" : "voto maior que o esperado:"} mais de ${m(lim[2])} p.p.`],
+      [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
+      [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `${variacao ? "estável" : "como esperado"} (±${m(lim[0])} p.p.)`],
       [cores[2], `−${m(lim[0])} a −${m(lim[1])} p.p.`], [cores[1], `−${m(lim[1])} a −${m(lim[2])} p.p.`],
-      [cores[0], `voto menor que o esperado: mais de ${m(lim[2])} p.p.`]];
+      [cores[0], `${variacao ? "caiu" : "voto menor que o esperado:"} mais de ${m(lim[2])} p.p.`]];
   } else {
     const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);  // amarelo (menos) -> vermelho (mais)
     const qb = quebrasQuantis(vals);
@@ -1514,7 +1530,8 @@ async function desenharPontos(mapa, d, legendaEl) {
       weight: 0.8, fillColor: c, fillOpacity: 0.92 });
     mk.bindTooltip(() => el("div", {}, el("strong", {}, it.nome), el("br"), `${it.mun} · zona ${it.zona}, local ${it.local}`, el("br"),
       d.tipo === "categorico" ? (it.rotulo || String(it.valor)) : fmt(it.valor),
-      d.tipo === "divergente" ? [el("br"), `voto ${it.voto.toFixed(2).replace(".", ",")}% · indicador ${int(Math.round(it.indicador * 100) / 100)}`] : null,
+      d.camada === "variacao" ? [el("br"), `${d.ano_ref}: ${it.antes.toFixed(2).replace(".", ",")}% → ${d.ano}: ${it.depois.toFixed(2).replace(".", ",")}%`]
+        : d.tipo === "divergente" ? [el("br"), `voto ${it.voto.toFixed(2).replace(".", ",")}% · indicador ${int(Math.round(it.indicador * 100) / 100)}`] : null,
       el("br"), `${int(it.eleitores)} eleitores`), { sticky: true });
     return mk;
   })).addTo(mapa);
@@ -1540,7 +1557,7 @@ function enderecoMapa() {
     q.set("ano_bairros", anoBairrosSel.value);
     if (estado.detalhe === "locais") {
       q.set("camada", camadaSel.value);
-      if (camadaSel.value !== "voto") q.set("indicador", indicadorSel.value);
+      if (!["voto", "variacao"].includes(camadaSel.value)) q.set("indicador", indicadorSel.value);
       if (camadaSel.value === "residuo" && numeroMapa.value.trim()) q.set("numero", numeroMapa.value.trim());
       if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
     }

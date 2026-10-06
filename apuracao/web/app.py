@@ -12,7 +12,8 @@ Rotas:
   GET /api/candidato/historico um candidato por município nesta eleição e na de referência (mesmo nome civil),
                                com a variação; /planilha devolve o mesmo em .xlsx (sem depender dos microdados)
   GET /api/mapa                valor por município (código IBGE) para uma métrica
-  GET /api/mapa/locais         um ponto por local de votação: voto, perfil do eleitorado ou resíduo do Perfil × voto
+  GET /api/mapa/locais         um ponto por local de votação: voto, perfil do eleitorado, resíduo do Perfil × voto
+                               ou variação desde a eleição anterior
   GET /api/planilha            .xlsx de um candidato em ano com microdados (reaproveita planilha_candidato)
   GET /geo/municipios.geojson  malha municipal do IBGE (baixada uma vez para o cache)
   GET /geo/locais.geojson      locais de votação com coordenadas (cadastro de eleitorado)
@@ -969,13 +970,14 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
     @app.get("/api/mapa/locais")
     def mapa_locais(ano: int, camada: str = "voto", cargo: int = 3, turno: int = 1, metrica: str | None = None,
                     numero: int | None = None, indicador: str | None = None, municipio: int | None = None,
-                    min_validos: int = Query(50, ge=0)) -> dict[str, Any]:
-        """Um ponto por local de votação (microdados): voto, perfil do eleitorado ou resíduo do Perfil × voto.
-        `municipio`: código IBGE; `numero` de 2 dígitos em cargo proporcional = partido."""
-        chave = (ano, camada, cargo, turno, metrica, numero, indicador, municipio, min_validos)
+                    min_validos: int = Query(50, ge=0), ano_ref: int | None = None) -> dict[str, Any]:
+        """Um ponto por local de votação (microdados): voto, perfil do eleitorado, resíduo do Perfil × voto ou
+        variação desde `ano_ref` (padrão ano − 4). `municipio`: código IBGE; `numero` de 2 dígitos em cargo
+        proporcional = partido (na variação, sempre o partido do número)."""
+        chave = (ano, camada, cargo, turno, metrica, numero, indicador, municipio, min_validos, ano_ref)
         if chave not in mapa_locais_cache:
             d = _perfil(lambda: ml.pontos(perfis["local"], ano, camada, cargo, turno, metrica, numero, indicador,
-                                          municipio, min_validos), "local")
+                                          municipio, min_validos, ano_ref), "local")
             if len(mapa_locais_cache) > 24:
                 mapa_locais_cache.clear()
             mapa_locais_cache[chave] = d

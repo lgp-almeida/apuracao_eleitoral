@@ -48,3 +48,31 @@ def test_voltar_para_municipios(pagina, site) -> None:
     pagina.select_option("#mapa-detalhe", "municipios")
     pagina.wait_for_function("() => estado.detalhe === 'municipios' && !location.hash.includes('camada=')")
     assert pagina.locator("#mapa-l-camada").is_hidden() and pagina.locator("#mapa-l-locais").is_visible()
+
+
+def test_camada_de_variacao(pagina, site) -> None:
+    """Rodada 46 (17a): o sintético só tem 2024; a resposta da API vem pronta (rota interceptada) para
+    conferir os controles, a legenda divergente com "subiu/caiu" e o endereço."""
+    import json
+    resposta = {"camada": "variacao", "tipo": "divergente", "unidade": "p.p.", "ano": 2024, "ano_ref": 2020,
+                "rotulo": "Variação (p.p.) de % dos válidos do PSD — Vereador, 2020 → 2024",
+                "cobertura": {"locais": 4, "com_valor": 3},
+                "itens": [{"u": f"u{i}", "lat": -22.9 - i / 100, "lon": -43.2, "nome": f"L{i}", "mun": "RIO", "zona": 4,
+                           "local": 1000 + i, "eleitores": 300, "valor": d, "antes": 30.0, "depois": 30.0 + d}
+                          for i, d in enumerate((-6.0, 0.5, 8.0))]}
+    pagina.route("**/api/mapa/locais?*camada=variacao*",
+                 lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(resposta)))
+    abrir(pagina, site, f"{BASE}&camada=variacao&numero=55")
+    _pronto(pagina)
+    assert pagina.locator("#mapa-l-metrica").is_visible() and pagina.locator("#mapa-l-indicador").is_hidden()
+    assert pagina.locator("#mapa-numero").is_enabled()
+    assert pagina.evaluate("document.querySelector('#mapa-metrica option[value=vencedor]').disabled")
+    leg = pagina.inner_text("#mapa-legenda")
+    assert "subiu mais de" in leg and "caiu mais de" in leg and "estável" in leg
+    assert "presentes em 2020 e 2024" in pagina.inner_text("#locais-nota")
+    h = pagina.evaluate("location.hash")
+    assert "camada=variacao" in h and "numero=55" in h and "indicador=" not in h
+    cores = set(pagina.evaluate("Object.values(estado.mapa._export.cores)"))
+    div = set(pagina.evaluate("['--div-n3','--div-n2','--div-n1','--div-0','--div-p1','--div-p2','--div-p3']"
+                              ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())"))
+    assert len(cores) == 3 and cores <= div

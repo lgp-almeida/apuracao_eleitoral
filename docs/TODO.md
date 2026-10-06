@@ -35,14 +35,14 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 12 | Cópia de segurança automática a cada hora (dados, séries e JSON brutos de todas as parciais) | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (copia.py / --copia-dir) |
 | 13 | Modo TV no painel (tela cheia, fonte grande, rotação automática dos cargos) | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (#painel?tv=1) |
 | 14 | "O que mudou" desde o boletim anterior, no boletim e no painel | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (boletim e painel) |
-| 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (bancadas, reeleitos, novatos; a variação por local vai com o 17a) |
+| 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (bancadas, reeleitos, novatos) e [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (variação por local) |
 | 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (`conferir_resultado.py`; roda sozinho após cada importação) |
-| 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | pendente |
+| 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | **17a feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (camada "Variação desde a eleição anterior"); 17b pendente (microdados do 2º turno) |
 | 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **feito**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md), [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) e [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem por turno; Governador/Senador medidos nas UFs com votos por seção no cache — RJ e ES) |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
 | 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
 | 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) |
-| 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | pendente |
+| 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | **feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (`migracao_votos.py`, por local; fora da amostra 0,83 p.p. × swing 1,14 no Presidente RJ) |
 | 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
 | 24 | Manter `apuracao/partidos.py` (`EVENTOS`/`NOVOS`) a cada partido novo, fusão ou renomeação; conferir as datas para comparar com eleições municipais | a cada cadastro novo do TSE | contínuo — o teste com os cadastros reais acusa |
 
@@ -184,11 +184,13 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
   - repetir com os totais oficiais quando o detalhe munzona sair (`preparar_2026` já grava a conferência
     reconstruído × oficial).
 
-## 17. Novas camadas no mapa por local (após a apuração)
+## 17. Novas camadas no mapa por local (após a apuração) — 17a FEITO (rodada 46)
 
 - **O quê:**
-  - o destino dos eliminados no 2º turno, por local (sobre a rodada 30);
-  - a variação 2022 → 2026 por local.
+  - **17b, pendente:** o destino dos eliminados no 2º turno, por local (sobre a rodada 30). Precisa dos
+    microdados do 2º turno de 2026 (dias após 25/10);
+  - **17a, feito ([RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md)):** a variação 2022 → 2026 por local
+    (partido pela entidade, abstenção, comparecimento, brancos/nulos).
 
 ---
 
@@ -251,7 +253,11 @@ Registrado em 04/10/2026 (pedido do usuário: "Registre no TODO a análise das p
 - **Uso:** `python analisar_coleta.py --dados dados_2026/oficial [--log <log do vigia>] [--saida saidas/coleta_4_10.xlsx]`. Funções sem I/O em `apuracao/divulgacao/analise.py`, com testes sobre um `raw/` sintético.
 - **Também no ensaio:** rodar sobre `dados_2026/ensaio_2022` e conferir que não há pausa nossa e que nenhuma versão anterior fica sem ser pedida de novo.
 
-## 22. Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção, após os microdados de 2026)
+## 22. Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção, após os microdados de 2026) — FEITO (rodada 46)
+
+- **Feito na [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md):** `migracao_votos.py` (núcleo `apuracao/migracao.py`),
+  unidade = local presente nos dois anos (a seção é renumerada entre anos), Presidente e Governador. Senador fica de
+  fora (1 vaga em 2022, 2 em 2026).
 
 - **Por quê:** o gráfico de variação por partido da aba Comparação ([RODADA_38](RODADA_38_2026-10-05_variacao_partidos.md)) é uma leitura ecológica. Ele fala de municípios, não de pessoas, e não diz que "eleitores de Lula votaram em Flávio".
 - **Ferramenta:** para estimar quem migrou para quem, o caminho certo é a inferência ecológica de `transferencia.py`, que hoje faz 1º → 2º turno.
