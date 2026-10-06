@@ -297,6 +297,46 @@ def test_detalhe_de_secoes_categorias() -> None:
     assert sp["QT_TOTAL_VOTOS_VALIDOS"] == 30 and sp["QT_VOTOS_NULOS_TECNICOS"] == 0
 
 
+def _com_federacao(dest: pl.DataFrame, siglas: dict[int, str], federados: dict[int, int], composicao: dict[int, str]
+                   ) -> pl.DataFrame:
+    """Colunas de federação de `destinacao_oficial`: sigla por partido, nº da federação e a composição (por sigla)."""
+    return dest.with_columns(
+        pl.col("NR_PARTIDO").replace_strict(siglas, default=None, return_dtype=pl.String).alias("SG_PARTIDO"),
+        pl.col("NR_PARTIDO").replace_strict(federados, default=None, return_dtype=pl.Int64).alias("NR_FEDERACAO")
+    ).with_columns(pl.col("NR_FEDERACAO").replace_strict(composicao, default=None, return_dtype=pl.String)
+                   .alias("COMPOSICAO_FEDERACAO"))
+
+
+def test_destino_da_legenda_pela_agremiacao() -> None:
+    """Rodada 48 (gabarito: detalhe munzona 2022 nas 25 UFs com votos por seção e a noite de 2026). A legenda é
+    da agremiação: o sócio da federação sem candidato próprio tem legenda válida; agremiação só com candidatos
+    sub judice → sub judice; com todos anulados → anulada; sem candidato → nulo técnico. Voto nominal em
+    candidato "Válido (legenda)" vai para a legenda."""
+    votos, det = _secoes(
+        [(1, "AC", RIO, 4, 1, 7, 18, 71),       # REDE: federada com o PSOL (50), sem candidato próprio → válida
+         (1, "AC", RIO, 4, 1, 7, 50, 9),        # PSOL: candidato válido → válida
+         (1, "AC", RIO, 4, 1, 7, 29, 30),       # PCO: só candidato sub judice → sub judice
+         (1, "AC", RIO, 4, 1, 7, 29111, 4),
+         (1, "AC", RIO, 4, 1, 7, 36, 20),       # AGIR: todos os candidatos anulados → anulada
+         (1, "AC", RIO, 4, 1, 7, 36111, 2),
+         (1, "AC", RIO, 4, 1, 7, 77, 3),        # sem candidato e sem federação → nulo técnico
+         (1, "AC", RIO, 4, 1, 7, 50123, 40),
+         (1, "AC", RIO, 4, 1, 7, 50456, 5)],    # "Válido (legenda)": o nominal vai para a legenda
+        [(1, "AC", RIO, 4, 1, 7, 300, 200, "02/10/2022 18:00:00")])
+    dest = _com_federacao(
+        _dest([(1, "AC", 7, 50123, 50, "Válido"), (1, "AC", 7, 50456, 50, "Válido (legenda)"),
+               (1, "AC", 7, 29111, 29, "Anulado sub judice"), (1, "AC", 7, 36111, 36, "Anulado"),
+               (1, "SP", 7, 18222, 18, "Válido")]),  # a sigla da REDE vem de outra UF
+        {50: "PSOL", 18: "REDE", 29: "PCO", 36: "AGIR"}, {50: 102, 18: 102}, {102: "PSOL / REDE"})
+    ac = h.detalhe_de_secoes(votos, det, dest).filter(pl.col("SG_UF") == "AC").row(0, named=True)
+    assert (ac["QT_TOTAL_VOTOS_LEG_VALIDOS"], ac["QT_VOTOS_NOMINAIS_VALIDOS"]) == (71 + 9 + 5, 40)
+    assert (ac["QT_TOTAL_VOTOS_ANUL_SUBJUD"], ac["QT_TOTAL_VOTOS_ANULADOS"]) == (30 + 4, 20 + 2)
+    assert ac["QT_VOTOS_NULOS_TECNICOS"] == 3
+    # sem as colunas de federação (anos antes de 2022): cada partido é a própria agremiação
+    sem_fed = h.detalhe_de_secoes(votos, det, dest.drop("SG_PARTIDO", "NR_FEDERACAO", "COMPOSICAO_FEDERACAO"))
+    assert sem_fed.filter(pl.col("SG_UF") == "AC")["QT_VOTOS_NULOS_TECNICOS"].item() == 71 + 3
+
+
 def test_importar_com_totais_reconstruidos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sem_microdados: None) -> None:
     """Os totais reconstruídos alimentam as mesmas tabelas; o status.json marca o resultado como provisório."""
     votos, det = _secoes([(1, "RJ", RIO, 4, 1, 3, 22, 700), (1, "RJ", RIO, 4, 1, 3, 40, 300), (1, "RJ", RIO, 4, 1, 3, 96, 20)],
@@ -379,6 +419,10 @@ def test_partido_soma_so_nominais_validos() -> None:
     uf = lambda p: p.filter((pl.col("ABRANGENCIA") == "uf") & (pl.col("NR_PARTIDO") == 55)).row(0, named=True)  # noqa: E731
     assert (uf(part)["VOTOS_NOMINAIS"], uf(part)["VOTOS_LEGENDA"], uf(part)["VOTOS_TOTAL"]) == (500, 40, 540)
     assert uf(sem)["VOTOS_NOMINAIS"] == 700
+    # rodada 48: a legenda só é do partido quando é válida — aqui, todos os candidatos sub judice
+    so_subjudice = _dest([(1, "RJ", 7, 55123, 55, "Anulado sub judice"), (1, "RJ", 7, 55456, 55, "Anulado sub judice")])
+    _, sj = h.candidatos_e_partidos(_votos(VOTOS_UF), _votos(VOTOS_BR), _cand(), tot, "RJ", 1, so_subjudice)
+    assert (uf(sj)["VOTOS_NOMINAIS"], uf(sj)["VOTOS_LEGENDA"]) == (0, 0)
 
 
 def test_agremiacao_da_federacao_e_formato_2026() -> None:

@@ -23,7 +23,8 @@ Totais (`importar(totais=...)`, rodada 40): "munzona" = os oficiais do detalhe_v
 reconstruídos, enquanto o TSE não publica o detalhe munzona, dos votos por seção + detalhe por seção
 (aptos, comparecimento, abstenção) + destinação de cada candidato (`detalhe_de_secoes`). Conferido no RJ
 2022: zero diferença nas 732 combinações zona × cargo (válidos, legenda, brancos, nulos, nulos técnicos,
-anulados, sub judice).
+anulados, sub judice). Rodada 48: a legenda segue a AGREMIAÇÃO (`destino_legenda`); 2022 igual ao oficial
+em 16 das 25 UFs com votos por seção, 2026 igual à noite em 24 de 25.
 
 Abrangências: Brasil (só presidente, exterior incluído), a UF e cada município da UF.
 """
@@ -135,15 +136,27 @@ def load_votos_munzona(ano: int, uf: str, cache: Path) -> tuple[pl.LazyFrame, pl
 
 
 _COLS_DESTINACAO = ["NR_CANDIDATO", "NR_PARTIDO", "CD_ELEICAO", "NM_TIPO_DESTINACAO_VOTOS", "DS_SIT_TOT_TURNO"]
+_COLS_FEDERACAO = ("SG_PARTIDO", "NR_FEDERACAO", "DS_COMPOSICAO_FEDERACAO")  # desde 2022 (federações)
 
 
-def _parquet_com_colunas(dataset: str, ano: int, cache: Path, colunas: list[str]) -> Path:
+def _cabecalho(dataset: str, ano: int, cache: Path) -> set[str]:
+    """Colunas do CSV _BRASIL do ZIP nacional no cache."""
+    with zipfile.ZipFile(cache / f"{dataset}_{ano}.zip") as zf:
+        return set(v.read_header(zf, v.pick_csv_member(zf, v.NATIONAL, "_BRASIL.csv")))
+
+
+def _parquet_com_colunas(dataset: str, ano: int, cache: Path, colunas: list[str],
+                         opcionais: tuple[str, ...] = ()) -> Path:
     """`_munzona_parquet` garantindo as colunas: um Parquet convertido antes com menos colunas é refeito;
-    se nem o ZIP as tiver (layout de outro ano), `TseDataError`."""
-    pq = _munzona_parquet(dataset, ano, cache, colunas)
-    if not set(colunas) <= set(pl.scan_parquet(pq).collect_schema().names()):
+    se nem o ZIP as tiver (layout de outro ano), `TseDataError`. `opcionais` entram quando o CSV as tem (as
+    federações só existem desde 2022): o Parquet só é refeito se faltar uma que o CSV tem."""
+    todas = colunas + [c for c in opcionais if c not in colunas]
+    pq = _munzona_parquet(dataset, ano, cache, todas)
+    tem = set(pl.scan_parquet(pq).collect_schema().names())
+    falta_opcional = set(opcionais) - tem
+    if not set(colunas) <= tem or (falta_opcional and falta_opcional & _cabecalho(dataset, ano, cache)):
         pq.unlink()
-        pq = _munzona_parquet(dataset, ano, cache, colunas)
+        pq = _munzona_parquet(dataset, ano, cache, todas)
         faltam = set(colunas) - set(pl.scan_parquet(pq).collect_schema().names())
         if faltam:
             raise v.TseDataError(f"{dataset}_{ano} sem as colunas {', '.join(sorted(faltam))}")
@@ -159,15 +172,71 @@ def destinacao_oficial(ano: int, cache: Path) -> pl.DataFrame:
     if not (cache / f"votacao_candidato_munzona_{ano}.zip").exists():
         raise v.TseDataError(f"votacao_candidato_munzona_{ano}.zip não está no cache")
     pq = _parquet_com_colunas("votacao_candidato_munzona", ano, cache,
-                              _COLS_MUNZONA + ["QT_VOTOS_NOMINAIS"] + _COLS_DESTINACAO)
+                              _COLS_MUNZONA + ["QT_VOTOS_NOMINAIS"] + _COLS_DESTINACAO, _COLS_FEDERACAO)
     inteiro = lambda c: pl.col(c).cast(pl.String).str.strip_chars().cast(pl.Int64, strict=False)  # noqa: E731
+    tem = set(pl.scan_parquet(pq).collect_schema().names())
+    texto = lambda c: pl.col(c).cast(pl.String) if c in tem else pl.lit(None, pl.String)  # noqa: E731
+    federacao = inteiro("NR_FEDERACAO") if "NR_FEDERACAO" in tem else pl.lit(None, pl.Int64)
     return (pl.scan_parquet(pq)
             .select(inteiro("NR_TURNO").alias("NR_TURNO"), "SG_UF", inteiro("CD_CARGO").alias("CD_CARGO"),
                     inteiro("NR_CANDIDATO").alias("NUMERO"), inteiro("NR_PARTIDO").alias("NR_PARTIDO"),
                     inteiro("CD_ELEICAO").alias("CD_ELEICAO"),
                     pl.col("NM_TIPO_DESTINACAO_VOTOS").alias("DESTINACAO_TSE"),
-                    pl.col("DS_SIT_TOT_TURNO").alias("SITUACAO_TSE"))
+                    pl.col("DS_SIT_TOT_TURNO").alias("SITUACAO_TSE"),
+                    texto("SG_PARTIDO").alias("SG_PARTIDO"),
+                    pl.when(federacao > 0).then(federacao).alias("NR_FEDERACAO"),  # -1 = sem federação
+                    texto("DS_COMPOSICAO_FEDERACAO").alias("COMPOSICAO_FEDERACAO"))
             .unique(["NR_TURNO", "SG_UF", "CD_CARGO", "NUMERO"], keep="first").collect())
+
+
+def _agremiacoes(destinacao: pl.DataFrame) -> pl.DataFrame:
+    """NR_PARTIDO → _AGREMIACAO ("F<nº da federação>") dos partidos federados, inclusive o sócio sem candidato
+    próprio, que só aparece pela SIGLA na composição ("PCDOB / PT / PV"; ligada ao número pela sigla dos
+    candidatos de qualquer UF, comparada por `partidos.chave`). Partido fora daqui é a própria agremiação."""
+    from apuracao import partidos as pt
+
+    vazio = pl.DataFrame(schema={"NR_PARTIDO": pl.Int64, "_AGREMIACAO": pl.String})
+    if "NR_FEDERACAO" not in destinacao.columns:
+        return vazio
+    numero = {pt.chave(s): n for s, n in destinacao.filter(pl.col("SG_PARTIDO").is_not_null())
+              .select("SG_PARTIDO", "NR_PARTIDO").unique().iter_rows()}
+    fed = destinacao.filter(pl.col("NR_FEDERACAO").is_not_null())
+    pares = set(fed.select("NR_PARTIDO", "NR_FEDERACAO").iter_rows())
+    for f, comp in fed.select("NR_FEDERACAO", "COMPOSICAO_FEDERACAO").unique().iter_rows():
+        for sigla in (pt.normalizar_federacao(comp) or "").split("/"):
+            if pt.chave(sigla) in numero:
+                pares.add((numero[pt.chave(sigla)], f))
+            elif sigla.strip():
+                logger.debug("federação %s: sigla %r sem candidato em nenhuma UF", f, sigla)
+    if not pares:
+        return vazio
+    return pl.DataFrame(sorted(pares), schema={"NR_PARTIDO": pl.Int64, "_F": pl.Int64}, orient="row").select(
+        "NR_PARTIDO", pl.format("F{}", "_F").alias("_AGREMIACAO")).unique("NR_PARTIDO", keep="first")
+
+
+def destino_legenda(legenda: pl.DataFrame, destinacao: pl.DataFrame) -> pl.DataFrame:
+    """`legenda` (NR_TURNO, SG_UF, CD_CARGO, NR_VOTAVEL = nº do partido) + _DESTINO_LEGENDA: para onde vão os
+    votos de legenda, pela situação da AGREMIAÇÃO (federação = um partido) no cargo e na UF. Gabarito: o
+    detalhe munzona oficial de 2022 nas 25 UFs com votos por seção (rodada 48):
+      algum candidato da agremiação com destinação "Válido*" → LEGENDA (válida);
+      senão algum "Anulado sub judice" → SUBJUDICE; senão (todos anulados) → ANULADOS;
+      agremiação sem candidato no cargo → NULOS_TECNICOS."""
+    chave = ["NR_TURNO", "SG_UF", "CD_CARGO"]
+    agrem = _agremiacoes(destinacao)
+    proprio = lambda c: pl.coalesce("_AGREMIACAO", pl.format("P{}", c))  # noqa: E731
+    d = pl.col("DESTINACAO_TSE")
+    estado = (destinacao.filter(pl.col("CD_CARGO").is_in(list(PROPORCIONAIS)))
+              .join(agrem, on="NR_PARTIDO", how="left").with_columns(proprio("NR_PARTIDO").alias("_AGREMIACAO"))
+              .group_by(chave + ["_AGREMIACAO"])
+              .agg(pl.when(d.str.starts_with("Válido")).then(3).when(d == "Anulado sub judice").then(2)
+                   .otherwise(1).max().alias("_NIVEL")))
+    return (legenda.join(agrem.rename({"NR_PARTIDO": "NR_VOTAVEL"}), on="NR_VOTAVEL", how="left")
+            .with_columns(proprio("NR_VOTAVEL").alias("_AGREMIACAO"))
+            .join(estado, on=chave + ["_AGREMIACAO"], how="left")
+            .with_columns(pl.col("_NIVEL").replace_strict({3: "LEGENDA", 2: "SUBJUDICE", 1: "ANULADOS"},
+                                                          default="NULOS_TECNICOS", return_dtype=pl.String)
+                          .alias("_DESTINO_LEGENDA"))
+            .drop("_AGREMIACAO", "_NIVEL"))
 
 
 _CHAVE_ZONA = ["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO"]
@@ -181,17 +250,17 @@ def detalhe_de_secoes(votos: pl.LazyFrame, detalhe: pl.LazyFrame, destinacao: pl
 
     `votos`: votacao_secao (NR_TURNO, SG_UF, CD_MUNICIPIO, NR_ZONA, NR_SECAO, CD_CARGO, NR_VOTAVEL, QT_VOTOS);
     `detalhe`: detalhe_votacao_secao (aptos, comparecimento, abstenções, hora de entrada na totalização);
-    `destinacao`: `destinacao_oficial`. Regras (iguais ao oficial em todas as zonas do RJ 2022):
+    `destinacao`: `destinacao_oficial`. Regras (rodada 48: iguais ao oficial de 2022 em 16 das 25 UFs com votos
+    por seção e à noite de 2026 em 24 de 25; o resto depende do DRAP do partido, que não está nos arquivos):
       95 branco · 96 nulo · 97 anulado em apuração separada;
-      proporcional, votável < 100 = legenda: válida se o partido tem candidato no cargo, senão nulo técnico;
-      nominal: destinação "Válido*" → válido; "Anulado sub judice" → sub judice; outra → anulado;
+      proporcional, votável < 100 = legenda: destino pela agremiação (`destino_legenda`);
+      nominal: "Válido (legenda)" → legenda; outra "Válido*" → válido; "Anulado sub judice" → sub judice;
+      outra → anulado;
       número que não está na destinação (candidatura negada antes da eleição) → nulo técnico."""
     chave_cand = ["NR_TURNO", "SG_UF", "CD_CARGO"]
     dest = destinacao.select(chave_cand + ["NUMERO", "DESTINACAO_TSE"])
     pres = dest.filter(pl.col("CD_CARGO") == CARGO_PRESIDENTE).drop("SG_UF").unique(
         ["NR_TURNO", "CD_CARGO", "NUMERO"])  # presidente: a destinação é nacional
-    partidos = destinacao.select(chave_cand + [pl.col("NR_PARTIDO").alias("NR_VOTAVEL")]).unique().with_columns(
-        pl.lit(True).alias("_TEM_CANDIDATO"))
     v = (votos.group_by(_CHAVE_ZONA + ["NR_VOTAVEL"]).agg(pl.col("QT_VOTOS").sum()).collect()
          .with_columns(pl.col("NR_TURNO", "CD_CARGO", "NR_VOTAVEL", "CD_MUNICIPIO", "NR_ZONA").cast(pl.Int64)))
     v_uf = v.filter(pl.col("CD_CARGO") != CARGO_PRESIDENTE).join(
@@ -200,12 +269,12 @@ def detalhe_de_secoes(votos: pl.LazyFrame, detalhe: pl.LazyFrame, destinacao: pl
         pres.rename({"NUMERO": "NR_VOTAVEL"}), on=["NR_TURNO", "CD_CARGO", "NR_VOTAVEL"], how="left")
     cargos = cargos_com_destinacao(destinacao)
     v = (pl.concat([v_uf, v_pr], how="diagonal_relaxed")
-         .join(partidos, on=chave_cand + ["NR_VOTAVEL"], how="left")
          .join(cargos.filter(pl.col("CD_CARGO") != CARGO_PRESIDENTE), on=chave_cand, how="left")
          .join(cargos.filter(pl.col("CD_CARGO") == CARGO_PRESIDENTE).drop("SG_UF").unique(),
                on=["NR_TURNO", "CD_CARGO"], how="left", suffix="_PR")
          .with_columns(pl.coalesce("_TEM_DESTINACAO", "_TEM_DESTINACAO_PR").fill_null(False).alias("_TEM_DESTINACAO")))
     legenda = pl.col("CD_CARGO").is_in(PROPORCIONAIS) & (pl.col("NR_VOTAVEL") < 100) & ~pl.col("NR_VOTAVEL").is_in(ESPECIAIS)
+    v = destino_legenda(v, destinacao)
     destino = pl.col("DESTINACAO_TSE")
     cat = (pl.when(pl.col("NR_VOTAVEL") == 95).then(pl.lit("BRANCOS"))
            .when(pl.col("NR_VOTAVEL") == 96).then(pl.lit("NULOS_DIGITADOS"))
@@ -214,8 +283,9 @@ def detalhe_de_secoes(votos: pl.LazyFrame, detalhe: pl.LazyFrame, destinacao: pl
            # dá para saber quem foi anulado; os votos nominais e de legenda contam como válidos (aviso no status)
            .when(~pl.col("_TEM_DESTINACAO") & legenda).then(pl.lit("LEGENDA"))
            .when(~pl.col("_TEM_DESTINACAO")).then(pl.lit("NOMINAIS"))
-           .when(legenda & pl.col("_TEM_CANDIDATO").fill_null(False)).then(pl.lit("LEGENDA"))
-           .when(legenda | destino.is_null()).then(pl.lit("NULOS_TECNICOS"))
+           .when(legenda).then(pl.col("_DESTINO_LEGENDA"))
+           .when(destino.is_null()).then(pl.lit("NULOS_TECNICOS"))
+           .when(destino == "Válido (legenda)").then(pl.lit("LEGENDA"))  # nominal convertido em legenda
            .when(destino.str.starts_with("Válido")).then(pl.lit("NOMINAIS"))
            .when(destino == "Anulado sub judice").then(pl.lit("SUBJUDICE"))
            .otherwise(pl.lit("ANULADOS")))
@@ -502,6 +572,13 @@ def candidatos_e_partidos(votos_uf: pl.LazyFrame, votos_br: pl.LazyFrame, cand: 
         pl.col("SITUACAO").str.starts_with("Eleito").sum().cast(pl.Int64).alias("VAGAS_AGREMIACAO"))
     leg = (votos.filter(proporcional & (pl.col("NR_VOTAVEL") < 100) & ~pl.col("NR_VOTAVEL").is_in(ESPECIAIS))
            .select(chave + [pl.col("NR_VOTAVEL").alias("NR_PARTIDO"), pl.col("QT_VOTOS").alias("VOTOS_LEGENDA")]))
+    if destinacao is not None and not destinacao.is_empty():  # só a legenda VÁLIDA é do partido (`destino_legenda`)
+        leg = (destino_legenda(leg.with_columns(pl.lit(turno, pl.Int64).alias("NR_TURNO"), pl.lit(uf.upper()).alias("SG_UF"),
+                                                pl.col("CARGO").alias("CD_CARGO"), pl.col("NR_PARTIDO").alias("NR_VOTAVEL")),
+                               destinacao)
+               .with_columns(pl.when(pl.col("_DESTINO_LEGENDA") == "LEGENDA").then(pl.col("VOTOS_LEGENDA"))
+                             .otherwise(0).alias("VOTOS_LEGENDA"))
+               .select(chave + ["NR_PARTIDO", "VOTOS_LEGENDA"]))
     # agremiação POR CARGO: o mesmo partido pode estar coligado para governador e isolado (ou em federação) para
     # deputado; sem o cargo na chave, a escolha dependia da ordem das linhas (rodada 40)
     siglas = (cad.select("CARGO", "NR_PARTIDO", "PARTIDO", "FEDERACAO", "AGREMIACAO")
