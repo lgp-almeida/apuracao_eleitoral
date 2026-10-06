@@ -32,6 +32,7 @@ import uvicorn
 
 from apuracao.boletim import Boletineiro
 from apuracao.copia import Copiador
+from apuracao.web.servicos import ServicosUFs
 from apuracao import ufs as uf_mod
 from apuracao.divulgacao.cliente import AMBIENTES, ClienteDivulgacao, LimitadorTaxa
 from apuracao.divulgacao.coletor import Coletor, destino_padrao
@@ -148,9 +149,8 @@ def _main_ufs(args: argparse.Namespace) -> int:
     if sem:
         logger.warning("sem dados em %s para: %s (python baixar_ufs.py --ufs %s --etapas divulgacao)",
                        base, " ".join(sem), " ".join(sem))
-    for opcao in ("interesse", "copia_dir"):
-        if getattr(args, opcao):
-            logger.warning("--%s vale só para o site de uma UF; ignorado com --ufs", opcao.replace("_", "-"))
+    if args.interesse:  # o nº do deputado só vale dentro da UF: escolha-o pela aba Candidato de cada UF
+        logger.warning("--interesse vale só para o site de uma UF; ignorado com --ufs")
     exposto = not eh_loopback(args.host)
     com_dados = [e for e in entradas if uf_mod.tem_dados(e.dados)]
     # o coletor percorre todas as UFs pedidas; as que ainda não tinham dados aparecem no site ao reiniciá-lo
@@ -161,16 +161,27 @@ def _main_ufs(args: argparse.Namespace) -> int:
         return create_app(e.dados, e.uf, Path(args.cache_dir), status[e.uf] if args.coletar else None, e.referencia,
                           pesadas_so_local=exposto, destacar=tuple(args.destacar))
 
-    try:
-        app = create_multi_app(entradas, args.uf, fabrica)
+    # boletim, cópia e alertas de cada UF (rodada 43): uma thread percorre as UFs montadas
+    servicos = ServicosUFs(boletim=bool(args.coletar) and not args.sem_boletim, boletim_min=args.boletim_min,
+                           copia=bool(args.coletar) and not args.sem_copia,
+                           copia_base=Path(args.copia_dir) if args.copia_dir else Path("copias"),
+                           copia_min=args.copia_min, alertas=not args.sem_alertas, destacar=tuple(args.destacar))
+    try:  # com --coletar o site sobe mesmo antes de qualquer UF ter dados (2º turno: pastas novas e vazias)
+        app = create_multi_app(entradas, args.uf, fabrica, ao_montar=servicos.registrar, permitir_vazio=args.coletar)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
+    parar_servicos = parar or threading.Event()
+    threading.Thread(target=servicos.executar, args=(parar_servicos, app.state.atualizar), name="servicos_ufs",
+                     daemon=True).start()
+    if args.coletar and not args.sem_copia and not args.copia_dir:
+        logger.info("cópia de segurança de cada UF em copias/<pasta da UF> — use --copia-dir num OUTRO disco")
     url = f"http://localhost:{args.porta}/"
     print(f"\nApuração — {len(com_dados)} UF(s) com dados ({' '.join(e.uf for e in com_dados)}): {url}  "
           "(Ctrl+C encerra)\n", flush=True)
     if args.coletar:
-        print("Coletor: as UFs uma depois da outra, a cada ciclo; boletim, cópia e alertas só no site de uma UF.")
+        print("Coletor: as UFs uma depois da outra, a cada ciclo; boletim, cópia e alertas de cada UF numa thread; "
+              "UF que ganhar dados aparece no seletor sem reiniciar.")
     if args.abrir:
         threading.Timer(1.5, _abrir_chrome, [url]).start()
     try:

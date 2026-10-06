@@ -2,6 +2,7 @@
 
     python verificar_prontidao.py              # checagens rápidas (poucos acessos ao TSE)
     python verificar_prontidao.py --testes     # + a suíte de testes sem navegador
+    python verificar_prontidao.py --turno 2 --ufs todas   # noite do 2º turno com o site de várias UFs (rodada 43)
 
 Cada linha sai como OK, AVISO ou FALHA; qualquer FALHA faz o comando terminar com código 1.
 """
@@ -170,6 +171,68 @@ def _destino(dados: Path) -> list[Resultado]:
     return [("OK", "dados do oficial", f"{dados} já tem coleta do oficial (o coletor continua de onde parou)")]
 
 
+def ufs_com_segundo_turno(base_1t: Path, ufs: list[str], cargo: int = 3) -> list[str]:
+    """UFs cujo resultado do 1º turno (coletado em `<base_1t>[_<UF>]`) tem candidato do cargo na situação
+    "2º turno" — sem rede (04/10/2026: Governador em AC, AM, DF, ES, RJ, RN e TO)."""
+    import polars as pl
+
+    from apuracao.ufs import dir_uf
+    saida = []
+    for uf in ufs:
+        arq = dir_uf(base_1t, uf) / "ultimo" / "candidatos.parquet"
+        if not arq.exists():
+            continue
+        c = pl.read_parquet(arq, columns=["CARGO", "ABRANGENCIA", "SITUACAO"])
+        if c.filter((pl.col("CARGO") == cargo) & (pl.col("ABRANGENCIA") == "uf")
+                    & (pl.col("SITUACAO") == "2º turno")).height:
+            saida.append(uf)
+    return saida
+
+
+def _segundo_turno(ufs: list[str], raiz: Path = Path("dados_2026")) -> list[Resultado]:
+    """Por UF, sem rede: a pasta do 2º turno (vazia ou do oficial), a referência de 2022 do 2º turno (aba
+    Comparação) e a pasta do 1º turno (transferência 1º → 2º turno)."""
+    from apuracao.ufs import dir_uf, tem_dados
+    out: list[Resultado] = []
+    com_gov = ufs_com_segundo_turno(raiz / "oficial", ufs)
+    out.append(("OK" if com_gov else "AVISO", "2º turno para Governador",
+                f"{', '.join(com_gov)} (do resultado do 1º turno)" if com_gov else "nenhuma UF com o 1º turno coletado"))
+    for uf in ufs:
+        destino, ref, t1 = (dir_uf(raiz / "oficial_t2", uf), dir_uf(raiz / "historico_2022_t2", uf),
+                            dir_uf(raiz / "oficial", uf))
+        sit, item, det = _destino(destino)[0]
+        out.append((sit, f"{uf}: dados do 2º turno", det))
+        out.append(("OK" if tem_dados(ref) else "AVISO", f"{uf}: 2022 do 2º turno (Comparação)",
+                    str(ref) if tem_dados(ref) else f"falta {ref} — python baixar_ufs.py --etapas historico --turnos 2"))
+        out.append(("OK" if tem_dados(t1) else "AVISO", f"{uf}: 1º turno (transferência)",
+                    str(t1) if tem_dados(t1) else f"falta {t1} — python baixar_ufs.py --ufs {uf} --etapas divulgacao"))
+    return out
+
+
+def _ambiente_2t(ufs_gov: list[str]) -> list[Resultado]:
+    """Oficial, 2º turno: as eleições (cdt2) no ele-c.json e o acompanhamento só das UFs com 2º turno para
+    Governador (poucos pedidos: 404 repetido bloqueia o IP)."""
+    cli = ClienteDivulgacao("oficial", max_rps=2)
+    try:
+        resp = cli.get_json(cli.caminho_config())
+    except (DivulgacaoIndisponivel, requests.RequestException) as exc:
+        return [("FALHA", "TSE oficial (2º turno): configuração", str(exc))]
+    if resp is None:
+        return [("FALHA", "TSE oficial (2º turno): configuração", "404")]
+    cfg = m.parse_config(resp.dados)
+    out: list[Resultado] = []
+    for cargo, nome in ((3, "Governador"), (1, "Presidente")):
+        e = cfg.por_cargo(cargo, 2)
+        out.append(("OK" if e else "FALHA", f"TSE oficial: eleição do 2º turno ({nome})",
+                    f"código {e.codigo}" if e else "sem cdt2 no ele-c.json — o coletor ficaria sem eleição"))
+    est = cfg.por_cargo(3, 2)
+    for uf in ufs_gov if est else []:
+        ab = cli.get_json(cli.caminho_acompanhamento(cfg, est.codigo, uf.lower()))
+        out.append(("OK" if ab is not None else "AVISO", f"TSE oficial: acompanhamento do 2º turno ({uf})",
+                    "publicado" if ab is not None else "ainda 404 (normal antes das 17h de 25/10)"))
+    return out
+
+
 def _testes() -> list[Resultado]:
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "not e2e"], capture_output=True, text=True)
     ultima = (r.stdout.strip().splitlines() or ["?"])[-1]
@@ -181,10 +244,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cache-dir", type=Path, default=Path("cache_tse"))
     ap.add_argument("--dados", type=Path, default=Path("dados_2026/oficial"))
     ap.add_argument("--testes", action="store_true", help="rodar também a suíte de testes sem navegador")
+    ap.add_argument("--turno", type=int, choices=[1, 2], default=1)
+    ap.add_argument("--ufs", nargs="+", help="siglas ou 'todas': confere cada UF (pastas, referência, 1º turno)")
     a = ap.parse_args(argv)
-    linhas = (_dependencias() + _disco(a.dados) + _cache(a.cache_dir) + _relogio()
-              + [x for amb in sorted(AMBIENTES) for x in _ambiente(amb)] + _portas((8000,)) + _destino(a.dados)
-              + (_testes() if a.testes else []))
+    from apuracao import ufs as uf_mod
+    ufs = uf_mod.lista(a.ufs) if a.ufs else ["RJ"]
+    if a.turno == 2:
+        linhas = (_dependencias() + _disco(a.dados) + _relogio() + _segundo_turno(ufs)
+                  + _ambiente_2t(ufs_com_segundo_turno(Path("dados_2026/oficial"), ufs))
+                  + _portas((8000, 8001) if a.ufs else (8000,)) + (_testes() if a.testes else []))
+    else:
+        linhas = (_dependencias() + _disco(a.dados) + _cache(a.cache_dir) + _relogio()
+                  + [x for amb in sorted(AMBIENTES) for x in _ambiente(amb)] + _portas((8000,)) + _destino(a.dados)
+                  + (_testes() if a.testes else []))
     largura = max(len(i) for _, i, _ in linhas)
     for sit, item, det in linhas:
         print(f"{sit:5}  {item:<{largura}}  {det}")

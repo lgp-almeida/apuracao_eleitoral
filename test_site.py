@@ -194,3 +194,60 @@ def test_multi_ufs_sem_dados(tmp_path: Path, tse_cache: Path) -> None:
 
     with pytest.raises(ValueError, match="nenhuma"):
         create_multi_app([EntradaUF("SP", tmp_path / "x")], "SP", lambda e: create_app(e.dados, e.uf, tse_cache))
+
+
+def test_multi_ufs_comeca_vazio_e_monta_uf_nova(fake_tse: FakeTSE, tse_cache: Path, tmp_path: Path) -> None:
+    """Rodada 43: no 2º turno as pastas começam vazias; o site sobe e monta a UF quando ela ganha dados,
+    chamando `ao_montar` (serviços da UF) — sem reiniciar."""
+    from apuracao.web.multi import EntradaUF, create_multi_app
+
+    rj = tmp_path / "oficial_t2_RJ"
+    montadas: list[str] = []
+    app = create_multi_app([EntradaUF("RJ", rj)], "rj", lambda e: create_app(e.dados, e.uf, tse_cache),
+                           ao_montar=lambda e, a: montadas.append(e.uf), permitir_vazio=True)
+    c = TestClient(app, follow_redirects=False)
+    assert c.get("/").status_code == 200 and "Aguardando" in c.get("/").text
+    assert c.get("/ufs.json").json()["padrao"] is None and montadas == []
+    Coletor(ClienteDivulgacao("simulado", sessao=fake_tse, limitador=LimitadorTaxa(1e9)), rj).ciclo()  # 1º ciclo
+    assert c.get("/ufs.json").json()["padrao"] == "RJ" and montadas == ["RJ"]
+    assert c.get("/").headers["location"] == "/rj/" and c.get("/rj/api/status").json()["uf"] == "RJ"
+    c.get("/ufs.json")
+    assert montadas == ["RJ"]  # montada uma vez só
+
+
+def test_servicos_por_uf(tmp_path: Path) -> None:
+    """Uma thread percorre as UFs: cada serviço no seu período; o erro de uma UF não para as outras."""
+    from types import SimpleNamespace
+
+    from apuracao.web.multi import EntradaUF
+    from apuracao.web.servicos import PERIODOS_S, ServicosUFs
+
+    chamadas: list[tuple[str, str]] = []
+
+    class Falso:
+        def __init__(self, uf: str, tipo: str, falha: bool = False) -> None:
+            self.uf, self.tipo, self.falha = uf, tipo, falha
+
+        def verificar(self) -> None:
+            chamadas.append((self.uf, self.tipo))
+            if self.falha:
+                raise RuntimeError("disco cheio")
+
+    sv = ServicosUFs(boletim=False, copia=False, alertas=True)
+    sv.registrar(EntradaUF("RJ", tmp_path / "rj"), SimpleNamespace(state=SimpleNamespace(vigia=Falso("RJ", "alertas", True))))
+    sv.registrar(EntradaUF("SP", tmp_path / "sp"), SimpleNamespace(state=SimpleNamespace(vigia=Falso("SP", "alertas"))))
+    sv.itens["SP"]["copia"] = Falso("SP", "copia")
+    ultimo: dict[str, float] = {}
+    sv.passo(0.0, ultimo)
+    assert chamadas == [("RJ", "alertas"), ("SP", "alertas"), ("SP", "copia")]  # o erro do RJ não parou o SP
+    chamadas.clear()
+    sv.passo(PERIODOS_S["alertas"], ultimo)          # 15 s depois: só os alertas
+    assert chamadas == [("RJ", "alertas"), ("SP", "alertas")]
+    chamadas.clear()
+    sv.passo(PERIODOS_S["copia"], ultimo)            # 60 s: alertas e cópia
+    assert ("SP", "copia") in chamadas
+    rj = tmp_path / "oficial_RJ"
+    rj.mkdir()
+    com_copia = ServicosUFs(boletim=False, copia=True, copia_base=rj / "dentro", alertas=False)
+    com_copia.registrar(EntradaUF("RJ", rj), SimpleNamespace(state=SimpleNamespace()))
+    assert "copia" not in com_copia.itens["RJ"]  # cópia dentro da pasta de dados: recusada, sem derrubar nada

@@ -34,6 +34,9 @@ from apuracao.bairros import numero_partido
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "divulgacao"
 ELEICAO_FEDERAL, ELEICAO_ESTADUAL = 21270, 21272  # códigos do simulado de 2026 (ele-c.json dos recortes)
+ELEICAO_FEDERAL_2T, ELEICAO_ESTADUAL_2T = 21271, 21273  # os cdt2 do mesmo ele-c.json (2º turno, rodada 43)
+FEDERAIS = (ELEICAO_FEDERAL, ELEICAO_FEDERAL_2T)
+CARGOS_POR_TURNO = {1: (1, 3, 5, 6, 7), 2: (1, 3)}  # no 2º turno só Presidente e Governador
 NOMES = {1: "Presidente", 3: "Governador", 5: "Senador", 6: "Deputado Federal", 7: "Deputado Estadual"}
 ESPECIAIS = (95, 96, 97)
 SITUACAO = {"ELEITO": "Eleito", "ELEITO POR QP": "Eleito por QP", "ELEITO POR MÉDIA": "Eleito por média",
@@ -95,6 +98,7 @@ class Reconstituicao:
     cargos: dict[int, DadosCargo]
     inicio: datetime
     fim: datetime
+    turno: int = 1
     _cache: dict[tuple, Any] = field(default_factory=dict)
     _trava: threading.Lock = field(default_factory=threading.Lock)
 
@@ -126,32 +130,36 @@ class Reconstituicao:
         return foto
 
 
-def _secoes_e_votos(det: pl.LazyFrame, votos: pl.LazyFrame, cargo: int, nome: str, uf: str | None
+def _secoes_e_votos(det: pl.LazyFrame, votos: pl.LazyFrame, cargo: int, nome: str, uf: str | None, turno: int = 1
                     ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Seções (com hora e eleitorado) e votos por seção de um cargo; `uf=None` = todas as UFs."""
     chave = ["SG_UF", "CD_MUNICIPIO", "NR_ZONA", "NR_SECAO"]
     filtro_uf = (pl.col("SG_UF") == uf) if uf else pl.lit(True)
-    secoes = (det.filter((pl.col("NR_TURNO") == 1) & (pl.col("CD_CARGO") == cargo) & filtro_uf)
+    secoes = (det.filter((pl.col("NR_TURNO") == turno) & (pl.col("CD_CARGO") == cargo) & filtro_uf)
               .select(chave + [pl.col("DT_PRIM_TOT_PARCIAL_HOR_TSE").str.strptime(pl.Datetime, "%d/%m/%Y %H:%M:%S",
                                                                                    strict=False).alias("T"),
                                pl.col("QT_APTOS").alias("APTOS"), "QT_COMPARECIMENTO", "QT_ABSTENCOES"])
               .rename({"QT_COMPARECIMENTO": "COMPARECIMENTO", "QT_ABSTENCOES": "ABSTENCOES"})
               .collect().drop_nulls("T"))
-    vs = (votos.filter((pl.col("NR_TURNO") == 1) & v.office_filter(nome) & filtro_uf)
+    vs = (votos.filter((pl.col("NR_TURNO") == turno) & v.office_filter(nome) & filtro_uf)
           .group_by(chave + ["NR_VOTAVEL"]).agg(pl.col("QT_VOTOS").sum()).collect()
           .join(secoes.select(chave + ["T"]), on=chave, how="inner"))
     return secoes.drop("NR_ZONA", "NR_SECAO"), vs.select("SG_UF", "CD_MUNICIPIO", "T", "NR_VOTAVEL", "QT_VOTOS")
 
 
-def carregar_2022(cache: Path, uf: str = "RJ", cargos: tuple[int, ...] = (1, 3, 5, 6, 7)) -> Reconstituicao:
-    """Monta a reconstituição a partir do cache (detalhe e votos por seção, candidatos e destinação oficiais)."""
+def carregar_2022(cache: Path, uf: str = "RJ", cargos: tuple[int, ...] | None = None, turno: int = 1) -> Reconstituicao:
+    """Monta a reconstituição a partir do cache (detalhe e votos por seção, candidatos e destinação oficiais).
+    `turno` 2 (rodada 43): só Presidente e Governador; cargo sem 2º turno na UF (Governador do RJ em 2022) sai."""
+    from apuracao.ufs import dir_uf
+
+    cargos = cargos or CARGOS_POR_TURNO[turno]
     import zipfile
     import io
 
     ano = 2022
     det_uf = v.load_section_details(ano, uf, cache)
     votos_uf = v.load_section_votes(ano, uf, "governador", cache, False)
-    ultimo = Path("dados_2026/historico_2022_t1/ultimo")
+    ultimo = dir_uf(Path(f"dados_2026/historico_2022_t{turno}"), uf) / "ultimo"
     cadastro = pl.read_parquet(ultimo / "candidatos.parquet").filter(pl.col("ABRANGENCIA") == "uf") \
         if (ultimo / "candidatos.parquet").exists() else None
     with zipfile.ZipFile(cache / "votacao_candidato_munzona_2022.zip") as z:
@@ -160,7 +168,7 @@ def carregar_2022(cache: Path, uf: str = "RJ", cargos: tuple[int, ...] = (1, 3, 
                               columns=["NR_TURNO", "CD_CARGO", "NR_CANDIDATO", "NM_URNA_CANDIDATO", "NM_CANDIDATO",
                                        "SQ_CANDIDATO", "SG_PARTIDO", "NR_PARTIDO", "NR_FEDERACAO", "SG_FEDERACAO",
                                        "NM_TIPO_DESTINACAO_VOTOS", "DS_SIT_TOT_TURNO", "CD_TIPO_ELEICAO"])
-    oficial = oficial.filter((pl.col("NR_TURNO") == "1") & (pl.col("CD_TIPO_ELEICAO") == "2")).unique(
+    oficial = oficial.filter((pl.col("NR_TURNO") == str(turno)) & (pl.col("CD_TIPO_ELEICAO") == "2")).unique(
         ["CD_CARGO", "NR_CANDIDATO"])
     dados: dict[int, DadosCargo] = {}
     for cargo in cargos:
@@ -168,31 +176,36 @@ def carregar_2022(cache: Path, uf: str = "RJ", cargos: tuple[int, ...] = (1, 3, 
         if cargo == 1:
             det = pj.detalhe_nacional(ano, cache)
             votos = v.load_section_votes(ano, "BR", "presidente", cache, False)
-            secoes, vs = _secoes_e_votos(det, votos, 1, nome, None)
+            secoes, vs = _secoes_e_votos(det, votos, 1, nome, None, turno)
         else:
-            secoes, vs = _secoes_e_votos(det_uf, votos_uf, cargo, nome, uf)
-        cand = _candidatos(cargo, oficial, cadastro, vs, uf)
+            secoes, vs = _secoes_e_votos(det_uf, votos_uf, cargo, nome, uf, turno)
+        if secoes.filter(pl.col("SG_UF") == uf).is_empty():  # cargo sem esse turno na UF
+            continue
+        cand = _candidatos(cargo, oficial, cadastro, vs, uf, turno)
         partidos = cand.select("NR_PARTIDO", "PARTIDO", "FEDERACAO").unique("NR_PARTIDO")
         vagas = {1: 1, 3: 1, 5: 1}.get(cargo) or int(cand["SITUACAO_FINAL"].str.starts_with("Eleito").sum())
-        dados[cargo] = DadosCargo(cargo, ELEICAO_FEDERAL if cargo == 1 else ELEICAO_ESTADUAL, vagas, secoes, vs,
-                                  cand, partidos)
+        eleicao = (ELEICAO_FEDERAL if cargo == 1 else ELEICAO_ESTADUAL) if turno == 1 else (
+            ELEICAO_FEDERAL_2T if cargo == 1 else ELEICAO_ESTADUAL_2T)
+        dados[cargo] = DadosCargo(cargo, eleicao, vagas, secoes, vs, cand, partidos)
     horas = pl.concat([d.secoes.filter(pl.col("SG_UF") == uf).select("T") for d in dados.values()])["T"]
     # a foto arredonda ao minuto: o fim é o minuto seguinte à última seção (senão a UF nunca fecha)
     fim = (horas.max() + timedelta(minutes=1)).replace(second=0, microsecond=0)
-    return Reconstituicao(uf, dados, (horas.min() - timedelta(minutes=5)).replace(second=0, microsecond=0), fim)
+    return Reconstituicao(uf, dados, (horas.min() - timedelta(minutes=5)).replace(second=0, microsecond=0), fim, turno)
 
 
-def _candidatos(cargo: int, oficial: pl.DataFrame, cadastro: pl.DataFrame | None, vs: pl.DataFrame, uf: str
-                ) -> pl.DataFrame:
+def _candidatos(cargo: int, oficial: pl.DataFrame, cadastro: pl.DataFrame | None, vs: pl.DataFrame, uf: str,
+                turno: int = 1) -> pl.DataFrame:
     if cargo == 1:  # presidente: não está no arquivo da UF; cadastro do histórico importado e todos válidos
         base = cadastro.filter(pl.col("CARGO") == 1) if cadastro is not None else pl.DataFrame()
         tot = vs.filter(pl.col("NR_VOTAVEL") < 95).group_by("NR_VOTAVEL").agg(pl.col("QT_VOTOS").sum()).sort(
             "QT_VOTOS", descending=True)
-        segundo = set(tot["NR_VOTAVEL"].head(2).to_list())
+        # 1º turno: os 2 mais votados no Brasil vão ao 2º; no 2º, o mais votado é o eleito
+        destaque, rotulo = (set(tot["NR_VOTAVEL"].head(2).to_list()), "2º turno") if turno == 1 else (
+            set(tot["NR_VOTAVEL"].head(1).to_list()), "Eleito")
         return base.select(
             "NUMERO", "NOME_URNA", "NOME", pl.col("SQ_CANDIDATO").alias("SQ"), "PARTIDO", "NR_PARTIDO",
             pl.lit(None, pl.String).alias("FEDERACAO"), pl.lit(True).alias("VALIDO"),
-            pl.when(pl.col("NUMERO").is_in(list(segundo))).then(pl.lit("2º turno")).otherwise(pl.lit("Não eleito"))
+            pl.when(pl.col("NUMERO").is_in(list(destaque))).then(pl.lit(rotulo)).otherwise(pl.lit("Não eleito"))
             .alias("SITUACAO_FINAL"))
     o = oficial.filter(pl.col("CD_CARGO") == str(cargo))
     return o.select(
@@ -237,11 +250,12 @@ class Gerador:
         agora = agora or self.relogio.agora()
         self._idg += 1
         dg, hg = _dt(agora)
-        return {"ele": str(eleicao), "t": "1", "f": "s", "dg": dg, "hg": hg, "idg": str(200000000 + self._idg)}
+        return {"ele": str(eleicao), "t": str(self.rec.turno), "f": "s", "dg": dg, "hg": hg,
+                "idg": str(200000000 + self._idg)}
 
     # ---- EA14/EA15
     def acompanhamento(self, eleicao: int, uf: str) -> dict[str, Any]:
-        cargo = 1 if eleicao == ELEICAO_FEDERAL else 3
+        cargo = 1 if eleicao in FEDERAIS else 3
         if cargo not in self.rec.cargos:  # reconstituição sem esse cargo: nada a acompanhar
             return {**self._cabecalho(eleicao), "abr": []}
         foto = self.rec.fotografia(cargo, self.relogio.agora())

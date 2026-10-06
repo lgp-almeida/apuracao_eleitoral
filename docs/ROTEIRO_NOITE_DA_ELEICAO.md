@@ -19,7 +19,21 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
 | 4/10, a cada hora cheia e no fim | mandar o boletim para a equipe | `dados_2026/oficial/boletins/boletim_ultimo.html` e `.xlsx` (gravados sozinhos) |
 | ao fim | conferir a cópia final automática e fazer o `tar` de sempre | `ls <copia-dir>/instantaneos/final` e `tar czf oficial_4out.tgz dados_2026/oficial` |
 
-- **2º turno:** o mesmo roteiro com `--turno 2`. Os dados vão para `dados_2026/oficial_t2` e não se misturam com os do 1º turno. A comparação usa `dados_2026/historico_2022_t2`.
+- **2º turno (25/10), com várias UFs** (rodada 43). Haverá 2º turno para Governador em AC, AM, DF, ES, RJ, RN e TO, e para Presidente.
+
+  | Quando | O quê | Comando |
+  |---|---|---|
+  | até 23/10 | ensaio do 2º turno (ES 2022: Governador + Presidente; deve terminar em "OK") | `python ensaio_apuracao.py --uf ES --turno 2` |
+  | até 24/10 | referência de 2022 do 2º turno de todas as UFs (aba Comparação) | `python baixar_ufs.py --etapas historico --turnos 2` (já feito em 06/10) |
+  | 24/10 e 25/10, 16h | prontidão do 2º turno, por UF | `python verificar_prontidao.py --turno 2 --ufs todas --testes` |
+  | 25/10, 16h30 | encerrar os sites de teste (8000, 8001…) | Ctrl+C ou `kill` |
+  | 25/10, 16h45 | **site de várias UFs com coleta, sob o vigia**: sobe mesmo antes de qualquer UF ter dados; cada UF aparece no seletor ao ganhar dados; boletim, cópia e alertas de CADA UF | `python vigiar_site.py -- python site_apuracao.py --ambiente oficial --turno 2 --ufs todas --coletar --porta 8001 --copia-dir <pasta em OUTRO disco>/t2` |
+  | 25/10, 17h em diante | acompanhar | http://localhost:8001 (seletor de UF no cabeçalho) |
+  | ao fim | **não apagar** `dados_2026/oficial_t2_*` (as parciais da noite de 4/10 do RJ se perderam assim — rodada 42); análise das parciais | `python analisar_coleta.py --dados dados_2026/oficial_t2_RJ --saida saidas/coleta_t2_RJ.xlsx --grafico saidas/coleta_t2_RJ.png` |
+
+  - Os dados de cada UF vão para `dados_2026/oficial_t2_<UF>`; a comparação usa `dados_2026/historico_2022_t2[_<UF>]`.
+  - A cópia de cada UF fica em `<copia-dir>/oficial_t2_<UF>`.
+  - Só o RJ, como no 1º turno: `site_apuracao.py --ambiente oficial --turno 2 --coletar` (porta 8000).
   - **Transferência de votos 1º → 2º turno** (rodada 30): no site do 2º turno, a aba "1º → 2º turno" já abre no **tempo real** (municípios, com os dados do 1º turno em `dados_2026/oficial`). É leitura **frágil** (92 unidades; em 2022 o destino dos eliminados por município diferiu até 22 p.p. do estimado por seção) e a página avisa. A estimativa boa (seção ou local) vem com os microdados do 2º turno: com o ZIP no cache, `python transferencia_turnos.py --ano 2026 --cargo governador --nivel secao --saida saidas/transferencia_2026.xlsx` ou a mesma aba com fonte "Microdados".
 
 ## Antes da noite

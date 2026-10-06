@@ -7,6 +7,7 @@ as rotas do site. No fim, confere o resultado com o oficial e grava um relatóri
     python ensaio_apuracao.py                          # 7 h de apuração em ~14 min (velocidade 30)
     python ensaio_apuracao.py --velocidade 120 --carga 8
     python ensaio_apuracao.py --inicio 19:30 --manter  # começa às 19h30 de 2022 e deixa o site no ar ao fim
+    python ensaio_apuracao.py --uf ES --turno 2        # 2º turno de 2022 (Governador e Presidente) de outra UF
 
 Abra http://localhost:8040 durante o ensaio. Os dados ficam em dados_2026/ensaio_2022/ (apagados
 a cada novo ensaio, a menos que use --continuar).
@@ -37,13 +38,14 @@ from apuracao.boletim import Boletineiro
 from apuracao.copia import Copiador
 from apuracao.divulgacao.cliente import ClienteDivulgacao
 from apuracao.divulgacao.coletor import Coletor
+from apuracao.ufs import dir_uf
 from apuracao.web.app import create_app
 
 logger = logging.getLogger("ensaio")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Ensaio geral: apuração de 2022 (RJ) acelerada, com coletor, site e carga.")
+    p = argparse.ArgumentParser(description="Ensaio geral: apuração de 2022 (RJ, ou outra UF/turno) acelerada, com coletor, site e carga.")
     p.add_argument("--velocidade", type=float, default=30.0, help="quantas vezes mais rápido que a noite real")
     p.add_argument("--inicio", help="hora de 2022 em que o ensaio começa (HH:MM; padrão: 5 min antes da 1ª seção)")
     p.add_argument("--intervalo", type=float, default=15.0, help="segundos (reais) entre ciclos do coletor")
@@ -56,7 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interesse", nargs="+", default=["7:13713"], metavar="CARGO:NUMERO",
                    help="deputados acompanhados pelos alertas (padrão: 7:13713)")
     p.add_argument("--porta", type=int, default=8040)
-    p.add_argument("--dados", default="dados_2026/ensaio_2022")
+    p.add_argument("--uf", default="RJ", type=str.upper, help="UF reconstituída (precisa do votacao_secao_2022_<UF>)")
+    p.add_argument("--turno", type=int, choices=[1, 2], default=1,
+                   help="2: o 2º turno de 2022 (Governador, se a UF teve, e Presidente) pelo caminho de 2º turno do coletor")
+    p.add_argument("--dados", help="padrão: dados_2026/ensaio_2022 (RJ, 1º turno) ou dados_2026/ensaio_2022_<UF>_t<turno>")
     p.add_argument("--cache-dir", default="cache_tse")
     p.add_argument("--continuar", action="store_true", help="não apagar os dados de um ensaio anterior")
     p.add_argument("--manter", action="store_true", help="deixar o site no ar ao fim (Ctrl+C encerra)")
@@ -120,11 +125,15 @@ class Carga:
 # Conferência final com o resultado oficial
 # --------------------------------------------------------------------------
 def conferir(base: str, rec: en.Reconstituicao) -> list[dict[str, Any]]:
-    """O que o site mostra ao fim do ensaio × resultado oficial de 2022."""
-    oficial = Path("dados_2026/historico_2022_t1/ultimo/totais.parquet")
+    """O que o site mostra ao fim do ensaio × resultado oficial de 2022 da UF e do turno (o importado em
+    dados_2026/historico_2022_t<turno>[_<UF>]): válidos, apuração final, cadeiras (1º turno) e eleitos."""
+    pasta = dir_uf(Path(f"dados_2026/historico_2022_t{rec.turno}"), rec.uf) / "ultimo"
+    oficial = pasta / "totais.parquet"
     checks: list[dict[str, Any]] = []
     painel = requests.get(base + "api/painel", timeout=120).json()
     ref = pl.read_parquet(oficial).filter(pl.col("ABRANGENCIA") == "uf") if oficial.exists() else None
+    cand_of = (pl.read_parquet(pasta / "candidatos.parquet").filter(pl.col("ABRANGENCIA") == "uf")
+               if (pasta / "candidatos.parquet").exists() else None)
     for c in painel["cartoes"]:
         if c["abrangencia"] == "BRASIL":
             continue
@@ -138,16 +147,24 @@ def conferir(base: str, rec: en.Reconstituicao) -> list[dict[str, Any]]:
                                "oficial": int(ov), "ok": dif < 0.001, "detalhe": f"diferença {100 * dif:.3f}%"})
         checks.append({"verificacao": f"{c['ds_cargo']}: apuração 100% e final", "site": t["PCT_SECOES_TOTALIZADAS"],
                        "oficial": 100, "ok": t["PCT_SECOES_TOTALIZADAS"] == 100 and bool(t["TOTALIZACAO_FINAL"]), "detalhe": ""})
-    for cargo, vagas in ((6, 46), (7, 70)):
+    for cargo in (6, 7) if rec.turno == 1 else ():
+        if cargo not in rec.cargos or cand_of is None:
+            continue
+        vagas = cand_of.filter((pl.col("CARGO") == cargo) & pl.col("SITUACAO").str.starts_with("Eleito")).height
         r = requests.get(base + f"api/cadeiras?cargo={cargo}", timeout=120).json()
         conf = r.get("conferencia_tse", {})
         checks.append({"verificacao": f"cadeiras {cargo} (projeção do site × eleitos oficiais)",
                        "site": conf.get("coincidentes"), "oficial": vagas,
                        "ok": conf.get("coincidentes") == vagas, "detalhe": f"divergências {conf.get('divergencias')}"})
-    gov = next(c for c in painel["cartoes"] if c["cargo"] == 3 and c["abrangencia"] != "BRASIL")
-    eleito = [x["NOME_URNA"] for x in gov["candidatos"] if x.get("ELEITO")]
-    checks.append({"verificacao": "Governador eleito no 1º turno", "site": ", ".join(eleito), "oficial": "CLÁUDIO CASTRO",
-                   "ok": eleito == ["CLÁUDIO CASTRO"], "detalhe": ""})
+    for c in painel["cartoes"]:  # majoritários: quem o site dá como eleito (ou no 2º turno) × o oficial
+        if c["abrangencia"] == "BRASIL" or c["cargo"] not in (1, 3, 5) or cand_of is None:
+            continue
+        site = sorted(x["NOME_URNA"] for x in c["candidatos"] if x.get("ELEITO"))
+        of = sorted(cand_of.filter((pl.col("CARGO") == c["cargo"]) & pl.col("ELEITO"))["NOME_URNA"].to_list())
+        if c["cargo"] == 1:  # presidente: a situação é a nacional e o painel da UF mostra a dela (só confere a regra)
+            continue
+        checks.append({"verificacao": f"{c['ds_cargo']}: eleitos no {rec.turno}º turno", "site": ", ".join(site),
+                       "oficial": ", ".join(of), "ok": site == of, "detalhe": ""})
     return checks
 
 
@@ -158,13 +175,14 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%H:%M:%S")
     for ruidoso in ("apuracao.divulgacao", "apuracao.web", "votos_local"):
         logging.getLogger(ruidoso).setLevel(logging.WARNING)
-    destino = Path(a.dados)
+    destino = Path(a.dados) if a.dados else Path(
+        "dados_2026/ensaio_2022" if (a.uf, a.turno) == ("RJ", 1) else f"dados_2026/ensaio_2022_{a.uf}_t{a.turno}")
     copias = Path(f"{destino}_copias")  # cópia de segurança do ensaio (na noite: --copia-dir, outro disco)
     if destino.exists() and not a.continuar:
         shutil.rmtree(destino)
         shutil.rmtree(copias, ignore_errors=True)
     t0 = time.time()
-    rec = en.carregar_2022(Path(a.cache_dir))
+    rec = en.carregar_2022(Path(a.cache_dir), a.uf, turno=a.turno)
     inicio = rec.inicio
     if a.inicio:
         h, mnt = map(int, a.inicio.split(":"))
@@ -177,21 +195,22 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("reconstituição de 2022 carregada em %.1f s: %s → %s em ~%.1f min reais", time.time() - t0,
                 f"{inicio:%H:%M}", f"{fim:%H:%M}", duracao / 60)
 
-    muns = Path("dados_2026/historico_2022_t1/ultimo/municipios.parquet")  # os 92 do RJ, com nome
+    muns = dir_uf(Path("dados_2026/historico_2022_t1"), a.uf) / "ultimo" / "municipios.parquet"  # os da UF, com nome
     sessao = en.SessaoEnsaio(en.Gerador(rec, relogio, a.atraso_ea20), pl.read_parquet(muns) if muns.exists() else None)
     cliente = ClienteDivulgacao("simulado", sessao=sessao, max_rps=a.max_rps)
     cliente.ambiente = "ensaio 2022"  # só o rótulo (status.json e selo do site); os caminhos são os do simulado
-    coletor = Coletor(cliente, destino)
+    coletor = Coletor(cliente, destino, a.uf, a.turno)
     status: dict[str, Any] = {"ativo": True, "intervalo_s": a.intervalo, "ensaio": True}
     interesse = tuple(tuple(int(x) for x in i.split(":")) for i in a.interesse)
-    app = create_app(destino, "RJ", Path(a.cache_dir), status, None, interesse=interesse)
+    app = create_app(destino, a.uf, Path(a.cache_dir), status, None,
+                     interesse=interesse if (a.uf, a.turno) == ("RJ", 1) else ())
     vigia = app.state.vigia
     vigia.agora = relogio.agora  # "sem avanço" e a hora dos alertas no relógio de 2022 (coleta parada: relógio real)
     # boletins no relógio do ensaio (hora de 2022): um por hora cheia e o final
     boletineiro = Boletineiro(app.state.consultas, destino / "boletins", a.boletim_min, agora=relogio.agora)
     boletins: list[dict[str, Any]] = []
     alertas: list[dict[str, Any]] = []
-    copiador = Copiador(destino, copias, "RJ", a.boletim_min, agora=relogio.agora)
+    copiador = Copiador(destino, copias, a.uf, a.boletim_min, agora=relogio.agora)
     copiadas: list[dict[str, Any]] = []
     servidor = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=a.porta, log_level="warning"))
     threading.Thread(target=servidor.run, name="site", daemon=True).start()
@@ -245,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                 carga.iniciar()
                 carga_iniciada = True
             try:
-                p = requests.get(base + "api/projecao?cargo=3", timeout=60)
+                p = requests.get(base + f"api/projecao?cargo={3 if 3 in rec.cargos else 1}", timeout=60)
                 if p.ok:
                     d = p.json()
                     k = d["candidatos"][0]
@@ -281,9 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         graves = [x for x in alertas if x["nivel"] in ("critico", "ERRO")]
         checks.append({"verificacao": "nenhum alerta crítico (coleta normal)", "site": len(graves), "oficial": 0,
                        "ok": not graves, "detalhe": "; ".join(x["titulo"] for x in graves)[:120]})
-        gov = [x for x in alertas if x["titulo"].startswith("Governador: vitória")]
-        checks.append({"verificacao": "alerta de leitura do Governador (vitória no 1º turno)", "site": len(gov),
-                       "oficial": ">= 1", "ok": bool(gov), "detalhe": gov[0]["hora_2022"] if gov else ""})
+        if 3 in rec.cargos:  # houve governador eleito neste turno (no RJ de 2022, no 1º)
+            gov = [x for x in alertas if x["titulo"].startswith("Governador: vitória")]
+            checks.append({"verificacao": "alerta de leitura do Governador (vitória)", "site": len(gov),
+                           "oficial": ">= 1", "ok": bool(gov), "detalhe": gov[0]["hora_2022"] if gov else ""})
         n_raw = len(list((destino / "raw").rglob("*.json.gz")))
         n_copia = len(list((copias / "raw").rglob("*.json.gz")))
         tem_copia = (copias / "instantaneos" / "final").exists() and n_copia == n_raw

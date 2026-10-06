@@ -246,3 +246,23 @@ def test_tempo_real_igual_aos_microdados_por_municipio() -> None:
     assert u.cat1 == um.cat1
     a, b = u.tabela.sort("UNIDADE"), um.tabela.sort("UNIDADE")
     assert a.select(pl.exclude("NOME", "NM_MUNICIPIO", "GRUPO")).equals(b.select(pl.exclude("NOME", "NM_MUNICIPIO", "GRUPO")))
+
+
+def test_tempo_real_acha_o_1o_turno_com_a_uf_no_nome(fake_tse, tse_cache: Path, tmp_path: Path) -> None:
+    """Rodada 43: no 2º turno a pasta é oficial_t2_<UF> (site de várias UFs e também o de uma UF); a aba
+    "1º → 2º turno" precisa achar oficial_<UF> — no RJ, também a pasta antiga sem a UF."""
+    import shutil
+
+    from apuracao.divulgacao.cliente import ClienteDivulgacao, LimitadorTaxa
+    from apuracao.divulgacao.coletor import Coletor
+
+    base = tmp_path / "coletado"
+    Coletor(ClienteDivulgacao("simulado", sessao=fake_tse, limitador=LimitadorTaxa(1e9)), base).ciclo()
+    for nome in ("oficial_ES", "oficial_t2_ES", "oficial", "oficial_t2_RJ"):
+        shutil.copytree(base, tmp_path / nome)
+    for nome, uf in (("oficial_t2_ES", "ES"), ("oficial_t2_RJ", "RJ")):
+        info = TestClient(create_app(tmp_path / nome, uf, tse_cache)).get("/api/transferencia/info").json()
+        assert info["tempo_real"] is True, nome
+    shutil.rmtree(tmp_path / "oficial_ES")
+    assert TestClient(create_app(tmp_path / "oficial_t2_ES", "ES", tse_cache)).get(
+        "/api/transferencia/info").json()["tempo_real"] is False   # sem o 1º turno da UF: não usa o de outra

@@ -38,7 +38,7 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | pendente |
 | 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **parcial**: feita à mão para o RJ na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md) (totais, candidatos, cadeiras); falta a ferramenta |
 | 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | pendente |
-| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **parcial**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md); o resto nas rodadas 43 e 44 (noite do 2º turno com várias UFs) |
+| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **parcial**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md) e [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) (boletim/cópia/alertas por UF, UF nova sem reiniciar, prontidão e ensaio do 2º turno); falta a calibração por UF (rodada 44) |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
 | 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
 | 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) |
@@ -194,7 +194,7 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
 
 Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para o 2º turno"). Na noite de 4/10, só o RJ, que está ensaiado.
 
-## 18. Várias UFs (para o 2º turno) — PARCIAL (rodada 39)
+## 18. Várias UFs (para o 2º turno) — PARCIAL (rodadas 39 e 43)
 
 - **Feito na [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md):**
   - pasta de dados com a UF (`ufs.dir_uf`; as pastas antigas, sem sufixo, continuam valendo para o RJ);
@@ -202,11 +202,14 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
     usam UM limitador para todas;
   - um site com seletor de UF (`site_apuracao.py --ufs`), em vez do portal agrupado;
   - histórico de qualquer UF pela fonte munzona, sem baixar o votacao_secao de cada uma.
-- **Falta:**
-  - ensaio, prontidão e `validar_projecao.py` aceitando qualquer UF (hoje conferem só o RJ: Castro eleito, 46/70 cadeiras, arquivos `_RJ`);
-  - calibração da margem de Governador/Senador e do erro das cadeiras por UF, com os microdados de 2022 dela (a margem do Presidente já foi medida nas 27 UFs);
-  - boletim, cópia de segurança e alertas no site de várias UFs (hoje só no de uma UF);
-  - no site de várias UFs, montar uma UF que ganhou dados sem reiniciar.
+- **Feito na [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md):**
+  - boletim, cópia de segurança e alertas de cada UF no site de várias UFs;
+  - o site sobe sem nenhuma UF com dados e monta a que ganhar dados, sem reiniciar;
+  - prontidão do 2º turno por UF (`verificar_prontidao.py --turno 2 --ufs todas`);
+  - ensaio de qualquer UF e do 2º turno (`ensaio_apuracao.py --uf ES --turno 2`: OK).
+- **Falta (rodada 44):**
+  - `validar_projecao.py` por UF e turno;
+  - calibração da margem do 2º turno e de Governador/Senador por UF com os microdados de 2022 (a do Presidente já foi medida nas 27 UFs).
 
 ## 19. Painel nacional do Presidente — FEITO (rodada 35)
 

@@ -1068,12 +1068,16 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
     transf_trava = threading.Lock()   # um cálculo por vez (10–30 s): pedidos iguais esperam e reaproveitam
 
     def dir_1t() -> Path | None:
-        """No 2º turno, o diretório do 1º: <ambiente>_t2 -> <ambiente> (coletor) ou <nome>_t1 (histórico importado)."""
-        nome = dados_dir.name
-        if not nome.endswith("_t2"):
+        """No 2º turno, o diretório do 1º: <ambiente>_t2 -> <ambiente> (coletor) ou <nome>_t1 (histórico importado);
+        com a UF no nome (rodada 39), <ambiente>_t2_<UF> -> <ambiente>_<UF> (no RJ, também a pasta antiga sem UF)."""
+        from apuracao.ufs import dir_uf
+        m_ = re.match(r"^(?P<base>.+)_t2(?:_(?P<uf>[A-Z]{2}))?$", dados_dir.name)
+        if not m_:
             return None
-        return next((d for d in (dados_dir.with_name(nome[:-3]), dados_dir.with_name(nome[:-3] + "_t1"))
-                     if (d / "ultimo" / "totais.parquet").exists()), None)
+        base, uf_ = m_["base"], m_["uf"]
+        bases = (dados_dir.with_name(base), dados_dir.with_name(base + "_t1"))
+        candidatos = [dir_uf(b, uf_) for b in bases] if uf_ else list(bases)
+        return next((d for d in candidatos if (d / "ultimo" / "totais.parquet").exists()), None)
 
     @app.get("/api/transferencia/info")
     def transferencia_info() -> dict[str, Any]:
