@@ -24,7 +24,7 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 2b | Projeção das cadeiras de deputado (consolidados × em disputa) | noite de 4/10 | **feito**: [RODADA_22](RODADA_22_2026-09-30_projecao_de_cadeiras.md) (pedido do usuário em 30/09) |
 | 3 | Ensaio geral e roteiro de prontidão | 3/10 e 4/10 | **feito**: [RODADA_23](RODADA_23_2026-09-30_ensaio_geral.md) e [roteiro](ROTEIRO_NOITE_DA_ELEICAO.md); a checagem do oficial foi cumprida na noite de 4/10, que rodou no oficial (fechado na rodada 42) |
 | 4 | Preparar os dados de 2026 assim que o TSE publicar | dias após o pleito | **feito**: [RODADA_24](RODADA_24_2026-09-30_microdados_2026.md); gatilho de importação corrigido e totais provisórios das seções na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md). RJ importado em 06/10 (provisório); falta o detalhe munzona do TSE |
-| 4b | Recalibrar margem da projeção e σ das cadeiras com 2026 | quando saírem os microdados de 2026 | pendente — procedimento pronto e ensaiado: [RECALIBRAR_MARGENS](RECALIBRAR_MARGENS.md), [RODADA_25](RODADA_25_2026-09-30_recalibracao.md); **dados disponíveis desde 06/10** (detalhe por seção de 2026 com a hora de cada seção, no cache) |
+| 4b | Recalibrar margem da projeção e σ das cadeiras com 2026 | quando saírem os microdados de 2026 | **feito**: [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem do 1º turno com 2022 + 2026, margem própria do 2º turno; σ validado em 2026 e mantido). Refazer com o 2º turno de 2026 depois de 25/10 |
 | 5 | Perfil por local de votação no estado inteiro | pós-eleição | **feito**: [RODADA_26](RODADA_26_2026-09-30_perfil_por_local.md) (setores + regressão com vários indicadores) |
 | 6 | Revisão de código e de segurança do caminho da noite + versões fixadas | antes de 4/10 | **feito**: [RODADA_27](RODADA_27_2026-09-30_revisao_noite.md) (3 bloqueadores e 4 importantes corrigidos) |
 | 7 | Boletim automático para a equipe (HTML de um arquivo + planilha, a cada hora e no fim) | noite de 4/10 | **feito**: [RODADA_28](RODADA_28_2026-09-30_boletim.md) (gravado pelo site com `--coletar`; `gerar_boletim.py`) |
@@ -38,7 +38,7 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | pendente |
 | 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **parcial**: feita à mão para o RJ na [RODADA_40](RODADA_40_2026-10-06_totais_sem_munzona.md) (totais, candidatos, cadeiras); falta a ferramenta |
 | 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | pendente |
-| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **parcial**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md) e [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) (boletim/cópia/alertas por UF, UF nova sem reiniciar, prontidão e ensaio do 2º turno); falta a calibração por UF (rodada 44) |
+| 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **feito**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md), [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) e [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem por turno; Governador/Senador medidos nas UFs com votos por seção no cache — RJ e ES) |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
 | 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
 | 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) |
@@ -194,7 +194,7 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
 
 Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para o 2º turno"). Na noite de 4/10, só o RJ, que está ensaiado.
 
-## 18. Várias UFs (para o 2º turno) — PARCIAL (rodadas 39 e 43)
+## 18. Várias UFs (para o 2º turno) — FEITO (rodadas 39, 43 e 44)
 
 - **Feito na [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md):**
   - pasta de dados com a UF (`ufs.dir_uf`; as pastas antigas, sem sufixo, continuam valendo para o RJ);
@@ -207,9 +207,11 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
   - o site sobe sem nenhuma UF com dados e monta a que ganhar dados, sem reiniciar;
   - prontidão do 2º turno por UF (`verificar_prontidao.py --turno 2 --ufs todas`);
   - ensaio de qualquer UF e do 2º turno (`ensaio_apuracao.py --uf ES --turno 2`: OK).
-- **Falta (rodada 44):**
-  - `validar_projecao.py` por UF e turno;
-  - calibração da margem do 2º turno e de Governador/Senador por UF com os microdados de 2022 (a do Presidente já foi medida nas 27 UFs).
+- **Feito na [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md):**
+  - `validar_projecao.py` por turno e por cargo;
+  - Governador e Senador em toda UF com `votacao_secao` no cache;
+  - margem própria do 2º turno.
+- **Não feito, de propósito:** baixar o `votacao_secao_2022` das 27 UFs só para calibrar Governador por UF (vários GB). O Presidente nas 27 UFs e o Governador em RJ e ES já dão a margem; uma UF pode ser incluída a qualquer momento, baixando o arquivo dela.
 
 ## 19. Painel nacional do Presidente — FEITO (rodada 35)
 

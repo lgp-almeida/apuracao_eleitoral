@@ -32,21 +32,28 @@ import polars as pl
 import votos_por_local_votacao as v
 
 ESPECIAIS = (95, 96, 97)
-# (limite superior da faixa de % do eleitorado apurado, margem em p.p.) — gerado por `calibrar`
-# sobre a apuração real de 2022 (rodada 21); a faixa final vale até 100%.
+# (limite superior da faixa de % do eleitorado apurado, margem em p.p.) — gerado por `calibrar`; a faixa final
+# vale até 100%. Uma tabela por turno (rodada 44): no 2º turno (2 candidatos) a projeção erra MAIS no meio da
+# apuração (p95 a 40%: 2,98 × 2,11 p.p.), e a margem única cobria só 94,5% dele.
+#   1º turno: 2022 + 2026 reconstituídos seção a seção (Presidente nas 27 UFs; Governador e Senador no RJ e no ES)
+#   2º turno: 2022 (Presidente nas 27 UFs; Governador no ES)
 MARGEM_PP: list[tuple[float, float]] = [
-    (10, 8.07), (20, 4.51), (30, 3.78), (40, 3.10), (50, 2.67), (60, 2.07), (70, 1.55), (80, 1.17),
-    (90, 0.82), (100, 0.43),
+    (10, 7.02), (20, 4.72), (30, 3.51), (40, 2.76), (50, 2.11), (60, 1.78), (70, 1.4), (80, 1.08),
+    (90, 0.78), (100, 0.42),
+]
+MARGEM_PP_2T: list[tuple[float, float]] = [
+    (10, 8.82), (20, 4.24), (30, 3.76), (40, 3.33), (50, 2.98), (60, 2.07), (70, 1.55), (80, 1.17),
+    (90, 0.7), (100, 0.35),
 ]
 
 
 PCT_MINIMO_LEITURA = 2.0  # a calibração começa em 2% apurado: antes disso a leitura seria chute
 
 
-def margem(pct_apurado: float, tabela: list[tuple[float, float]] | None = None) -> float | None:
+def margem(pct_apurado: float, tabela: list[tuple[float, float]] | None = None, turno: int = 1) -> float | None:
     """Margem calibrada (p.p.) para o % do eleitorado já apurado; None antes de haver apuração.
-    `tabela`: outra calibração (para validar uma proposta antes de adotá-la); padrão `MARGEM_PP`."""
-    tabela = tabela or MARGEM_PP
+    `tabela`: outra calibração (para validar uma proposta antes de adotá-la); padrão a do `turno`."""
+    tabela = tabela or (MARGEM_PP_2T if turno == 2 else MARGEM_PP)
     if pct_apurado <= 0:
         return None
     if pct_apurado >= 100:
@@ -79,7 +86,7 @@ class Projecao:
     municipios_sem_apuracao: int
 
 
-def projetar(mun: pl.DataFrame, votos: pl.DataFrame) -> Projecao:
+def projetar(mun: pl.DataFrame, votos: pl.DataFrame, turno: int = 1) -> Projecao:
     """`mun`: CD_MUNICIPIO, ELEITORADO, APURADO (eleitorado das seções totalizadas), VALIDOS.
     `votos`: CD_MUNICIPIO, NUMERO, VOTOS (votos atuais de cada candidato no município).
 
@@ -111,7 +118,7 @@ def projetar(mun: pl.DataFrame, votos: pl.DataFrame) -> Projecao:
         pl.col("VOTOS").sum(), (pl.col("VOTOS") + pl.col("SHARE") * pl.col("VALIDOS_RESTANTES")).sum().alias("VOTOS_PROJ"))
     validos_proj = float(m["VALIDOS_FINAIS"].sum())
     pct_ap = 100 * apurado / eleitorado if eleitorado else 0.0
-    mg = margem(pct_ap)
+    mg = margem(pct_ap, turno=turno)
     cand = proj.with_columns(
         (100 * pl.col("VOTOS") / validos_atuais if validos_atuais else pl.lit(None, pl.Float64)).alias("PCT_ATUAL"),
         (100 * pl.col("VOTOS_PROJ") / validos_proj if validos_proj else pl.lit(None, pl.Float64)).alias("PCT_PROJ"),
@@ -125,10 +132,11 @@ def projetar(mun: pl.DataFrame, votos: pl.DataFrame) -> Projecao:
                     int((m["APURADO"] == 0).sum()))
 
 
-def situacao(p: Projecao, vagas: int = 1, objetivo: str = "maioria") -> str:
+def situacao(p: Projecao, vagas: int = 1, objetivo: str = "maioria", turno: int = 1) -> str:
     """Leitura da projeção com a margem calibrada: definido × indefinido (sem probabilidades).
     `objetivo`: "maioria" (Governador: > 50% dos válidos decide no 1º turno), "vagas" (Senador: os
-    `vagas` primeiros) ou "lideranca" (Presidente na UF: quem vence no estado; o turno é nacional)."""
+    `vagas` primeiros) ou "lideranca" (Presidente na UF: quem vence no estado; o turno é nacional).
+    No 2º turno (rodada 44) não há "vitória no 1º turno" nem "2º turno projetado": quem passa de 50% vence."""
     c = p.candidatos
     if p.margem_pp is None or c.is_empty():
         return "sem apuração"
@@ -142,8 +150,11 @@ def situacao(p: Projecao, vagas: int = 1, objetivo: str = "maioria") -> str:
         return "indefinido: o 1º e o 2º no estado estão a menos de uma margem"
     if objetivo == "maioria":
         lider = c.row(0, named=True)
+        no_turno = " no 1º turno" if turno == 1 else ""
         if lider["MIN"] > 50:
-            return f"vitória no 1º turno {'confirmada' if final else 'projetada'} (acima de 50% mesmo na margem)"
+            return f"vitória{no_turno} {'confirmada' if final else 'projetada'} (acima de 50% mesmo na margem)"
+        if turno == 2:
+            return "indefinido: o líder está a menos de uma margem dos 50%"
         if lider["MAX"] < 50:
             return "2º turno " + ("confirmado" if final else "projetado (ninguém chega a 50% mesmo na margem)")
         return "indefinido: o líder está a menos de uma margem dos 50%"

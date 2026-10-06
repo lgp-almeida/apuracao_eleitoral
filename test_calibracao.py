@@ -12,21 +12,24 @@ import polars as pl
 from apuracao import projecao as pj
 from apuracao import projecao_cadeiras as pc
 
-CALIBRADO_COM = "2022"  # eleições usadas (atualizar junto com as tabelas)
-MARGEM_PP = [(10, 8.07), (20, 4.51), (30, 3.78), (40, 3.10), (50, 2.67), (60, 2.07), (70, 1.55), (80, 1.17),
-             (90, 0.82), (100, 0.43)]
+CALIBRADO_COM = "1º turno: 2022 + 2026; 2º turno: 2022; σ das cadeiras: 2022"  # rodada 44
+MARGEM_PP = [(10, 7.02), (20, 4.72), (30, 3.51), (40, 2.76), (50, 2.11), (60, 1.78), (70, 1.4), (80, 1.08),
+             (90, 0.78), (100, 0.42)]
+MARGEM_PP_2T = [(10, 8.82), (20, 4.24), (30, 3.76), (40, 3.33), (50, 2.98), (60, 2.07), (70, 1.55), (80, 1.17),
+                (90, 0.7), (100, 0.35)]
 SIGMA = [(10, 0.142, 0.425), (20, 0.130, 0.338), (30, 0.126, 0.289), (40, 0.109, 0.239), (50, 0.086, 0.194),
          (60, 0.072, 0.145), (70, 0.059, 0.131), (80, 0.038, 0.093), (90, 0.022, 0.052), (100, 0.012, 0.025)]
 
 
 def test_constantes_calibradas() -> None:
     assert pj.MARGEM_PP == MARGEM_PP, f"MARGEM_PP mudou: recalibrado com {CALIBRADO_COM}? atualize este teste e a rodada"
+    assert pj.MARGEM_PP_2T == MARGEM_PP_2T, "MARGEM_PP_2T mudou: atualize este teste e a rodada"
     assert pc.SIGMA == SIGMA, f"SIGMA mudou: recalibrado com {CALIBRADO_COM}? atualize este teste e a rodada"
 
 
 def test_formato_das_tabelas() -> None:
     """Qualquer calibração precisa cobrir (0, 100] e nunca crescer com a apuração."""
-    for tab in (pj.MARGEM_PP, [(lim, a) for lim, a, _ in pc.SIGMA], [(lim, c) for lim, _, c in pc.SIGMA]):
+    for tab in (pj.MARGEM_PP, pj.MARGEM_PP_2T, [(lim, a) for lim, a, _ in pc.SIGMA], [(lim, c) for lim, _, c in pc.SIGMA]):
         limites = [lim for lim, _ in tab]
         valores = [x for _, x in tab]
         assert limites == sorted(limites) and limites[-1] == 100 and limites[0] > 0
@@ -50,3 +53,8 @@ def test_calibrar_margem_com_dois_anos_junta_os_erros() -> None:
     juntos = dict(pj.calibrar(pl.concat([e22, e26]), faixas=[10, 100]))
     assert so22[10] == 1.0 and juntos[10] == 3.0  # o p95 conjunto cobre o ano mais difícil
     assert pj.cobertura(e26, [(10, 1.0), (100, 0.1)]) == 0.0 and pj.cobertura(e26, [(10, 3.0), (100, 0.1)]) == 1.0
+
+
+def test_margem_por_turno() -> None:
+    assert pj.margem(45, turno=1) == dict(pj.MARGEM_PP)[50] and pj.margem(45, turno=2) == dict(pj.MARGEM_PP_2T)[50]
+    assert pj.margem(100, turno=2) == 0.0 and pj.margem(0, turno=2) is None

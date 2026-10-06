@@ -60,6 +60,9 @@ def _proj(pcts: list[tuple[int, float]], margem: float) -> pj.Projecao:
 
 def test_leitura_da_projecao() -> None:
     assert pj.situacao(_proj([(1, 53), (2, 40)], 2), objetivo="maioria").startswith("vitória no 1º turno projetada")
+    # 2º turno (rodada 44): sem "no 1º turno" e nunca "2º turno projetado"
+    assert pj.situacao(_proj([(1, 53), (2, 47)], 2), objetivo="maioria", turno=2).startswith("vitória projetada")
+    assert pj.situacao(_proj([(1, 50.5), (2, 49.5)], 2), objetivo="maioria", turno=2).startswith("indefinido")
     assert pj.situacao(_proj([(1, 51), (2, 40)], 2), objetivo="maioria").startswith("indefinido")
     assert pj.situacao(_proj([(1, 45), (2, 40)], 2), objetivo="maioria").startswith("2º turno projetado")
     assert pj.situacao(_proj([(1, 45), (2, 40)], 0), objetivo="maioria") == "2º turno confirmado"

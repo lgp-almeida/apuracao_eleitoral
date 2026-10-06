@@ -388,9 +388,10 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
         mun, votos = pj.entrada_divulgacao(tot, cand, cargo)
         if mun.is_empty():
             raise v.TseDataError(f"sem apuração por município do cargo {cargo}")
-        p = pj.projetar(mun, votos)
         t = _abrangencia(tot.filter(pl.col("CARGO") == cargo), "uf", uf)
         linha = t.row(0, named=True) if not t.is_empty() else {}
+        turno = int(linha.get("TURNO") or 1)
+        p = pj.projetar(mun, votos, turno)  # margem do turno (rodada 44)
         vagas = int(linha.get("VAGAS") or 1)
         nomes = _abrangencia(cand.filter(pl.col("CARGO") == cargo), "uf", uf).select("NUMERO", "NOME_URNA", "PARTIDO")
         c = p.candidatos.join(nomes, on="NUMERO", how="left")
@@ -398,11 +399,12 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
             "cargo": cargo, "pct_apurado": p.pct_apurado, "margem_pp": p.margem_pp, "vagas": vagas,
             "validos_atuais": p.validos_atuais, "validos_projetados": round(p.validos_projetados),
             "municipios_sem_apuracao": p.municipios_sem_apuracao,
-            "situacao": pj.situacao(p, vagas, {1: "lideranca", 3: "maioria", 5: "vagas"}[cargo]),
+            "situacao": pj.situacao(p, vagas, {1: "lideranca", 3: "maioria", 5: "vagas"}[cargo], turno),
             "candidatos": _rows(c.head(12 if completo else 6).select(
                 "NUMERO", "NOME_URNA", "PARTIDO", "VOTOS", "PCT_ATUAL", "VOTOS_PROJ", "PCT_PROJ", "MIN", "MAX")),
             "metodo": "por município: o que falta em cada um segue o voto já apurado ali; margem = percentil 95 "
-                      "do erro na apuração real de 2022 (Presidente nas 27 UFs, Governador e Senador no RJ)",
+                      "do erro na apuração real, uma por turno (1º: 2022 e 2026; 2º: 2022 — Presidente nas 27 UFs, "
+                      "Governador e Senador no RJ e no ES)",
         }
         if completo:
             falta = p.municipios.filter(pl.col("VALIDOS_RESTANTES") >= 1).head(15).join(
