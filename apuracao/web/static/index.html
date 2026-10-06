@@ -151,6 +151,7 @@
             <option value="perfil">Perfil do eleitorado</option>
             <option value="residuo">Resíduo do Perfil × voto</option>
             <option value="variacao">Variação desde a eleição anterior</option>
+            <option value="transferencia">Destino dos eliminados (1º → 2º turno)</option>
           </select>
         </label>
         <label id="mapa-l-metrica">Mostrar
@@ -167,6 +168,14 @@
           </select>
         </label>
         <label id="mapa-l-indicador" hidden>Indicador <select id="mapa-indicador"></select></label>
+        <label id="mapa-l-transf" hidden>Mostrar
+          <select id="mapa-transf">
+            <option value="elim_para_a" selected>Destino dos eliminados (% para o 1º finalista)</option>
+            <option value="eliminados_1t">Eliminados no 1º turno (% do eleitorado)</option>
+            <option value="abst_extra">Abstenção extra no 2º turno (p.p.)</option>
+            <option value="residuo_a">1º finalista: observado − previsto (p.p.)</option>
+          </select>
+        </label>
         <label>Candidato
           <input id="mapa-numero" list="mapa-lista" autocomplete="off" disabled placeholder="número">
           <datalist id="mapa-lista"></datalist>

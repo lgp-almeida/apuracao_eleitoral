@@ -148,3 +148,39 @@ def test_variacao_de_brancos_nulos_e_pedidos_invalidos():
         ml.pontos(_Plocal(), 2026, "variacao", cargo=1, metrica="pct_candidato")   # sem número
     with pytest.raises(ValueError):
         ml.pontos(_Plocal(), 2026, "variacao", cargo=1, metrica="brancos_nulos_pct", ano_ref=2026)
+
+
+# --------------------------------------------------------------------------- camada "transferencia" (17b, rodada 47)
+def test_camada_destino_dos_eliminados(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from types import SimpleNamespace
+
+    from apuracao import mapa_locais as ml
+    pedidos = []
+    por = pl.DataFrame({"UNIDADE": ["100-4-1015", "100-4-1023"], "CD_MUNICIPIO": [100, 100], "NR_ZONA": [4, 4],
+                        "NR_LOCAL_VOTACAO": [1015, 1023], "ELIMINADOS_1_PCT": [6.0, 9.0],
+                        "ELIM_PARA_A (X)_PCT": [40.0, 40.0], "ABST_1_PCT": [20.0, 22.0], "ABST_2_PCT": [21.0, 21.5],
+                        "ABST_EXTRA_PP": [1.0, -0.5], "A (X)_2_PCT": [50.0, 45.0], "A (X)_2_AJUSTE_PCT": [48.0, 46.0],
+                        "RESIDUO_A_PP": [2.0, -1.0]})
+
+    def calcular(ano, uf, cargo, nivel, cache, municipio=None, n_boot=200):
+        pedidos.append((ano, uf, cargo, nivel, n_boot))
+        return SimpleNamespace(unidades=SimpleNamespace(cat2=["A (X)", "B (Y)", tf.BRANCO_NULO, tf.ABSTENCAO]),
+                               por_unidade=por)
+    monkeypatch.setattr(tf, "calcular", calcular)
+    plocal = _Plocal()
+    plocal.b = SimpleNamespace(uf="RJ", cache=tmp_path)
+    plocal.locais = lambda ano: _Plocal.locais(plocal, ano).with_columns(
+        pl.Series("CD_MUNICIPIO", [100, 100]), pl.Series("NR_ZONA", [4, 4]))
+
+    d = ml.pontos(plocal, 2022, "transferencia", cargo=1, turno=2, metrica="elim_para_a")
+    assert pedidos == [(2022, "RJ", 1, "local", 0)]
+    assert d["tipo"] == "sequencial" and d["unidade"] == "%" and "A (X)" in d["rotulo"]
+    assert {p["u"]: p["valor"] for p in d["itens"]} == {_Plocal.U1: 40.0, _Plocal.U2: 40.0}   # valor do município
+    a = ml.pontos(plocal, 2022, "transferencia", cargo=1, turno=2, metrica="abst_extra")
+    assert a["tipo"] == "divergente" and a["lados"] == ["1º turno", "2º turno"] and a["sentido"] == "variacao"
+    u1 = {p["u"]: p for p in a["itens"]}[_Plocal.U1]
+    assert (u1["valor"], u1["antes"], u1["depois"]) == (1.0, 20.0, 21.0)
+    r = ml.pontos(plocal, 2022, "transferencia", cargo=1, turno=2, metrica="residuo_a")
+    assert r["sentido"] == "residuo" and {p["u"]: p["depois"] for p in r["itens"]}[_Plocal.U2] == 45.0
+    with pytest.raises(ValueError):
+        ml.pontos(plocal, 2022, "transferencia", cargo=1, turno=2, metrica="vencedor")

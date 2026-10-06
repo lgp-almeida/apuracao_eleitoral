@@ -1,6 +1,6 @@
 """Mapa por local de votação: um ponto por local (estado inteiro, coordenada do cadastro de eleitorado).
 
-Quatro camadas, todas sobre os caches de `PerfilVotoLocal` (apuracao/perfil_local.py) — nada é recalculado:
+Cinco camadas, sobre os caches de `PerfilVotoLocal` (apuracao/perfil_local.py) — nada é recalculado:
   * "voto": as métricas do mapa por bairro (mais votado, % e votos de um candidato, brancos/nulos,
     abstenção/comparecimento), dos microdados por seção somados por local;
   * "perfil": um indicador do eleitorado (TSE do ano) ou do entorno (Censo 2022 por setor, raio de 800 m);
@@ -9,7 +9,11 @@ Quatro camadas, todas sobre os caches de `PerfilVotoLocal` (apuracao/perfil_loca
   * "variacao" (rodada 46, TODO 17a): quanto a métrica mudou no local desde a eleição de referência (padrão: a
     geral anterior, ano − 4), em p.p. — % dos válidos do PARTIDO (pela entidade, `apuracao/partidos.py`: o nº de
     um candidato vale pelo partido dele; Flávio/PL 2026 × Bolsonaro/PL 2022), abstenção, comparecimento,
-    brancos/nulos. Locais casados pela UNIDADE (município + zona + nº do local): local novo ou desativado sai.
+    brancos/nulos. Locais casados pela UNIDADE (município + zona + nº do local): local novo ou desativado sai;
+  * "transferencia" (rodada 47, TODO 17b): o 1º → 2º turno por local (`transferencia.calcular`, nível local, estrato
+    município): o peso dos eliminados no 1º turno e a abstenção extra (observados no local), o resíduo do 1º
+    finalista (observado − previsto pela matriz) e o destino dos eliminados — ESTIMADO por município (o estrato):
+    todos os locais de um município têm o mesmo valor. Inferência ECOLÓGICA (rodada 30).
 
 Só com microdados (resultado final, por seção): o tempo real vai no máximo até o município.
 """
@@ -26,8 +30,12 @@ from apuracao import partidos as pt
 from apuracao import perfil as pf
 
 CAMADAS = {"voto": "Voto", "perfil": "Perfil do eleitorado", "residuo": "Resíduo do Perfil × voto",
-           "variacao": "Variação desde a eleição anterior"}
+           "variacao": "Variação desde a eleição anterior", "transferencia": "Destino dos eliminados (1º → 2º turno)"}
 # métricas da camada "variacao" → métrica de `bairros.valor_por_bairro`/`metrica_participacao`
+METRICAS_TRANSFERENCIA = {"eliminados_1t": "Eliminados no 1º turno (% do eleitorado)",
+                          "elim_para_a": "Destino dos eliminados: % para o 1º finalista (estimado por município)",
+                          "abst_extra": "Abstenção extra no 2º turno (p.p.)",
+                          "residuo_a": "1º finalista: observado − previsto pela matriz (p.p.)"}
 METRICAS_VARIACAO = {"pct_candidato": "partido", "abstencao_pct": "abstencao_pct",
                      "comparecimento_pct": "comparecimento_pct", "brancos_nulos_pct": "brancos_nulos",
                      "brancos_pct": "brancos", "nulos_pct": "nulos"}
@@ -88,6 +96,30 @@ def variacao(plocal: Any, ano: int, ano_ref: int, cargo: int, turno: int, metric
     return df, f"Variação (p.p.) de {rotulo} — {br.CARGOS[cargo].title()}, {ano_ref} → {ano}"
 
 
+def transferencia(plocal: Any, ano: int, cargo: int, metrica: str) -> tuple[pl.DataFrame, str, str, str, dict]:
+    """(CD_BAIRRO, VALOR[, ANTES, DEPOIS]; rótulo; tipo; unidade; extra) da camada "transferencia"."""
+    from apuracao import transferencia as tf
+    if metrica not in METRICAS_TRANSFERENCIA:
+        raise ValueError(f"transferência por local: {', '.join(METRICAS_TRANSFERENCIA)}")
+    res = tf.calcular(ano, plocal.b.uf, cargo, "local", plocal.b.cache, n_boot=0)
+    a = res.unidades.cat2[0]
+    por = res.por_unidade.drop("UNIDADE").join(plocal.locais(ano).select(v.LOCAL_KEY + ["UNIDADE"]), on=v.LOCAL_KEY, how="inner")
+    extra: dict[str, Any] = {"finalistas": res.unidades.cat2[:2]}
+    col = {"eliminados_1t": "ELIMINADOS_1_PCT", "elim_para_a": f"ELIM_PARA_{a}_PCT", "abst_extra": "ABST_EXTRA_PP",
+           "residuo_a": "RESIDUO_A_PP"}[metrica]
+    sel = [pl.col("UNIDADE").alias("CD_BAIRRO"), pl.col(col).alias("VALOR")]
+    if metrica == "abst_extra":
+        sel += [pl.col("ABST_1_PCT").alias("ANTES"), pl.col("ABST_2_PCT").alias("DEPOIS")]
+        extra.update(lados=["1º turno", "2º turno"], sentido="variacao")
+    elif metrica == "residuo_a":
+        sel += [pl.col(f"{a}_2_AJUSTE_PCT").alias("ANTES"), pl.col(f"{a}_2_PCT").alias("DEPOIS")]
+        extra.update(lados=["previsto", "observado"], sentido="residuo")
+    rotulo = METRICAS_TRANSFERENCIA[metrica].replace("o 1º finalista", a).replace("1º finalista", a)
+    tipo = "divergente" if metrica in ("abst_extra", "residuo_a") else "sequencial"
+    return (por.select(sel), f"{rotulo} — {br.CARGOS[cargo].title()} {ano}, 1º → 2º turno",
+            tipo, "p.p." if tipo == "divergente" else "%", extra)
+
+
 def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, metrica: str | None = None,
            numero: int | None = None, indicador: str | None = None, municipio: int | None = None,
            min_validos: int = 50, ano_ref: int | None = None) -> dict[str, Any]:
@@ -130,7 +162,12 @@ def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, m
             raise ValueError("a eleição de referência deve ser anterior")
         df, rotulo = variacao(plocal, ano, ano_ref, cargo, turno, metrica, numero, municipio)
         tipo, unidade = "divergente", "p.p."
-        extra["ano_ref"] = ano_ref
+        extra.update(ano_ref=ano_ref, lados=[str(ano_ref), str(ano)], sentido="variacao")
+    elif camada == "transferencia":
+        df, rotulo, tipo, unidade, mais = transferencia(plocal, ano, cargo, metrica)
+        if municipio is not None:
+            df = df.filter(pf.municipio_do_bairro() == municipio)
+        extra.update(mais)
     else:
         if numero is None or indicador is None:
             raise ValueError("o resíduo precisa do número (candidato; 2 dígitos = partido) e do indicador")
@@ -139,6 +176,7 @@ def pontos(plocal: Any, ano: int, camada: str, cargo: int = 3, turno: int = 1, m
                                 pl.col("X").alias("INDICADOR"))
         est = d["estatistica"]
         rotulo, tipo, unidade = f"Resíduo (p.p.): {d['rotulo_y']} × {d['rotulo_x']}", "divergente", "p.p."
+        extra["sentido"] = "residuo"
         extra.update(estatistica={k: est.get(k) for k in ("n", "pearson", "r2", "a", "b", "p")},
                      rotulo_x=d["rotulo_x"], rotulo_y=d["rotulo_y"], min_validos=min_validos)
     base = loc if municipio is None else loc.filter(pl.col("CD_MUN").cast(pl.Int64) == municipio)

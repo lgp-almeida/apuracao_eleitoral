@@ -1214,6 +1214,8 @@ async function atualizarMapa() {
   const cargo = document.getElementById("mapa-cargo").value;
   const metrica = metricaSel.value;
   const legenda = document.getElementById("mapa-legenda");
+  // por local, cada camada valida o que precisa (a métrica escondida não vale nas camadas sem ela)
+  if (estado.detalhe === "locais") { await atualizarMapaLocais(cargo, legenda); return; }
   let q = `api/mapa?cargo=${cargo}&metrica=${metrica}`;
   let numero = null;
   if (metrica.endsWith("_candidato")) {
@@ -1222,7 +1224,6 @@ async function atualizarMapa() {
     if (numero === null) { legenda.replaceChildren(el("p", {}, "Informe o número de um candidato.")); return; }
     q += `&numero=${numero}`;
   }
-  if (estado.detalhe === "locais") { await atualizarMapaLocais(cargo, legenda); return; }
   if (estado.detalhe === "bairros") { await atualizarMapaBairros(cargo, metrica, numero, legenda); return; }
   const lt = estado.lt;
   const noPassado = lt.momentos.length > 1 && lt.idx < lt.momentos.length - 1;
@@ -1384,10 +1385,12 @@ anoBairrosSel.addEventListener("change", async () => { await prepararDetalhe(ano
 
 // ---------------------------------------------------------------- mapa por local de votação (rodada 32)
 // Um ponto por local (microdados): voto, perfil do eleitorado, resíduo do Perfil × voto ou variação desde a eleição
-// anterior (rodada 46: partido pela entidade, abstenção, brancos/nulos). Área do ponto ∝ eleitorado.
+// anterior (rodada 46: partido pela entidade, abstenção, brancos/nulos) ou destino dos eliminados no 2º turno
+// (rodada 47: microdados dos dois turnos). Área do ponto ∝ eleitorado.
 const METRICAS_VARIACAO = ["pct_candidato", "abstencao_pct", "comparecimento_pct", "brancos_nulos_pct", "brancos_pct", "nulos_pct"];
 const camadaSel = document.getElementById("mapa-camada");
 const indicadorSel = document.getElementById("mapa-indicador");
+const transfSel = document.getElementById("mapa-transf");
 const municipioLocSel = document.getElementById("mapa-municipio");
 
 async function prepararLocais() {
@@ -1408,7 +1411,8 @@ function ajustarControlesLocais() {
   document.getElementById("mapa-l-camada").hidden = !locais;
   document.getElementById("mapa-l-municipio").hidden = !locais;
   const comMetrica = ["voto", "variacao"].includes(camada);
-  document.getElementById("mapa-l-indicador").hidden = !locais || comMetrica;
+  document.getElementById("mapa-l-indicador").hidden = !locais || comMetrica || camada === "transferencia";
+  document.getElementById("mapa-l-transf").hidden = !locais || camada !== "transferencia";
   document.getElementById("mapa-l-metrica").hidden = locais && !comMetrica;
   if (locais) {
     const permitidas = camada === "variacao" ? METRICAS_VARIACAO : METRICAS_BAIRRO;
@@ -1422,6 +1426,7 @@ function ajustarControlesLocais() {
 }
 camadaSel.addEventListener("change", () => { ajustarControlesLocais(); atualizarMapa(); });
 indicadorSel.addEventListener("change", () => atualizarMapa());
+transfSel.addEventListener("change", () => atualizarMapa());
 municipioLocSel.addEventListener("change", () => { if (estado.mapa) estado.mapa._enquadrado = false; atualizarMapa(); });
 metricaSel.addEventListener("change", ajustarControlesLocais);
 
@@ -1439,6 +1444,9 @@ async function atualizarMapaLocais(cargo, legenda) {
       }
       q.set("numero", num);
     }
+  } else if (camada === "transferencia") {
+    q.set("metrica", transfSel.value);
+    q.set("turno", "2");
   } else {
     q.set("indicador", indicadorSel.value);
     if (camada === "residuo") {
@@ -1462,6 +1470,9 @@ async function atualizarMapaLocais(cargo, legenda) {
         "Azul: o voto foi MAIOR que o esperado pelo indicador; vermelho: menor. Correlação ecológica." : "") +
       (camada === "variacao" ? ` Só os locais presentes em ${d.ano_ref} e ${d.ano} (mesmo município, zona e nº do local); ` +
         "partido pela entidade (fusões e trocas de nº). Azul: subiu; vermelho: caiu." : "") +
+      (camada === "transferencia" ? " Inferência ecológica (padrão médio, não o voto de pessoas): o destino dos " +
+        "eliminados é estimado por município (todos os locais do município têm o mesmo valor); eliminados, abstenção " +
+        "extra e o resíduo são de cada local." : "") +
       (!d.itens.length && camada === "residuo" ? ` Nenhum local com ${int(d.min_validos)} votos válidos ou mais ` +
         "para o resíduo (ele só usa locais com votos suficientes)." : "");
   } catch (e) {
@@ -1502,7 +1513,7 @@ async function desenharPontos(mapa, d, legendaEl) {
     const cores = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"].map(cor);
     corDe = (v) => { const a = Math.abs(v); const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3; return cores[v < 0 ? 3 - k : 3 + k]; };
     const m = (x) => Math.abs(x).toFixed(1).replace(".", ",");
-    const variacao = d.camada === "variacao";
+    const variacao = d.sentido === "variacao";
     itensLegenda = [[cores[6], `${variacao ? "subiu" : "voto maior que o esperado:"} mais de ${m(lim[2])} p.p.`],
       [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
       [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `${variacao ? "estável" : "como esperado"} (±${m(lim[0])} p.p.)`],
@@ -1530,7 +1541,7 @@ async function desenharPontos(mapa, d, legendaEl) {
       weight: 0.8, fillColor: c, fillOpacity: 0.92 });
     mk.bindTooltip(() => el("div", {}, el("strong", {}, it.nome), el("br"), `${it.mun} · zona ${it.zona}, local ${it.local}`, el("br"),
       d.tipo === "categorico" ? (it.rotulo || String(it.valor)) : fmt(it.valor),
-      d.camada === "variacao" ? [el("br"), `${d.ano_ref}: ${it.antes.toFixed(2).replace(".", ",")}% → ${d.ano}: ${it.depois.toFixed(2).replace(".", ",")}%`]
+      d.lados && it.antes != null ? [el("br"), `${d.lados[0]}: ${it.antes.toFixed(2).replace(".", ",")}% → ${d.lados[1]}: ${it.depois.toFixed(2).replace(".", ",")}%`]
         : d.tipo === "divergente" ? [el("br"), `voto ${it.voto.toFixed(2).replace(".", ",")}% · indicador ${int(Math.round(it.indicador * 100) / 100)}`] : null,
       el("br"), `${int(it.eleitores)} eleitores`), { sticky: true });
     return mk;
@@ -1557,7 +1568,8 @@ function enderecoMapa() {
     q.set("ano_bairros", anoBairrosSel.value);
     if (estado.detalhe === "locais") {
       q.set("camada", camadaSel.value);
-      if (!["voto", "variacao"].includes(camadaSel.value)) q.set("indicador", indicadorSel.value);
+      if (["perfil", "residuo"].includes(camadaSel.value)) q.set("indicador", indicadorSel.value);
+      if (camadaSel.value === "transferencia") q.set("transf", transfSel.value);
       if (camadaSel.value === "residuo" && numeroMapa.value.trim()) q.set("numero", numeroMapa.value.trim());
       if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
     }
@@ -1581,6 +1593,7 @@ async function aplicarEnderecoMapa(params) {
   const temOpcao = (sel, val) => val !== null && [...sel.options].some((o) => o.value === val);
   if (temOpcao(camadaSel, q.get("camada"))) camadaSel.value = q.get("camada");
   if (temOpcao(indicadorSel, q.get("indicador"))) indicadorSel.value = q.get("indicador");
+  if (temOpcao(transfSel, q.get("transf"))) transfSel.value = q.get("transf");
   if (temOpcao(municipioLocSel, q.get("municipio"))) municipioLocSel.value = q.get("municipio");
   ajustarControlesLocais();
   numeroMapa.value = q.get("numero") || "";

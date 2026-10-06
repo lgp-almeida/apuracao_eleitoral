@@ -17,6 +17,9 @@ Registrado em 30/09/2026, a 4 dias do 1º turno (4/10/2026). A ordem segue a pri
 
 Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `--vigiar`) e 24 (contínuo).
 
+**Plano concluído em 06/10/2026 (rodadas 42–47).** Os lotes 5 e 6 ficaram prontos antes do 2º turno: o que depende
+dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](RODADA_47_2026-10-06_comparacao_ufs_e_eliminados.md)).
+
 | # | Proposta | Quando serve | Situação |
 |---|---|---|---|
 | 1 | Distribuição de cadeiras de deputado em tempo real | noite de 4/10 | **feito**: [RODADA_20](RODADA_20_2026-09-30_cadeiras_de_deputado.md) |
@@ -37,10 +40,10 @@ Fora dos lotes: 4 (importação final de 2026: depende do TSE; automática com `
 | 14 | "O que mudou" desde o boletim anterior, no boletim e no painel | noite de 4/10 | **feito**: [RODADA_33](RODADA_33_2026-09-30_vigia_copia_tv_mudancas.md) (boletim e painel) |
 | 15 | Bancadas 2026 × 2022 (eleitos por partido/federação, reeleitos, novatos; variação por local) | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (bancadas, reeleitos, novatos) e [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (variação por local) |
 | 16 | Conferência automática do tempo real com os microdados de 2026 | após a apuração | **feito**: [RODADA_45](RODADA_45_2026-10-06_conferencia_e_bancadas.md) (`conferir_resultado.py`; roda sozinho após cada importação) |
-| 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | **17a feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (camada "Variação desde a eleição anterior"); 17b pendente (microdados do 2º turno) |
+| 17 | Novas camadas no mapa por local (destino dos eliminados no 2º turno; variação 2022 → 2026) | após a apuração | **feito**: 17a na [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (camada "Variação desde a eleição anterior"); 17b na [RODADA_47](RODADA_47_2026-10-06_comparacao_ufs_e_eliminados.md) (camada "Destino dos eliminados"; com 2022 agora, 2026 quando saírem os microdados do 2º turno) |
 | 18 | Várias UFs: pasta de dados por UF, limite de acessos ao TSE dividido entre UFs, ensaio/prontidão/calibração por UF, portal por UF | 2º turno, 25/10 | **feito**: [RODADA_39](RODADA_39_2026-10-05_todas_as_ufs.md), [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) e [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem por turno; Governador/Senador medidos nas UFs com votos por seção no cache — RJ e ES) |
 | 19 | Painel nacional do Presidente (mapa do Brasil por UF, % apurado e vencedor em cada estado) | a definir | **feito**: [RODADA_35](RODADA_35_2026-10-01_presidente_por_uf.md) (bloco "Por estado" do cartão Brasil: mapa, quem lidera, % apurado e hint com todos os candidatos; fechado na rodada 42) |
-| 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | pendente |
+| 20 | Comparação entre UFs (abstenção, brancos/nulos, transferência 1º → 2º turno) | após a apuração | **feito**: [RODADA_47](RODADA_47_2026-10-06_comparacao_ufs_e_eliminados.md) (`comparar_ufs.py`; o 2º turno de 2026 entra sozinho com as pastas `oficial_t2_<UF>`) |
 | 21 | Análise das parciais da noite (`analisar_coleta.py`): TSE × coletor, atrasos, versões anteriores, pausas | antes do 2º turno, 25/10 | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) |
 | 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | **feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (`migracao_votos.py`, por local; fora da amostra 0,83 p.p. × swing 1,14 no Presidente RJ) |
 | 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
@@ -184,11 +187,11 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre tudo no TODO. Faremos po
   - repetir com os totais oficiais quando o detalhe munzona sair (`preparar_2026` já grava a conferência
     reconstruído × oficial).
 
-## 17. Novas camadas no mapa por local (após a apuração) — 17a FEITO (rodada 46)
+## 17. Novas camadas no mapa por local (após a apuração) — FEITO (rodadas 46 e 47)
 
 - **O quê:**
-  - **17b, pendente:** o destino dos eliminados no 2º turno, por local (sobre a rodada 30). Precisa dos
-    microdados do 2º turno de 2026 (dias após 25/10);
+  - **17b, feito ([RODADA_47](RODADA_47_2026-10-06_comparacao_ufs_e_eliminados.md)):** o destino dos eliminados no
+    2º turno, por local (sobre a rodada 30). Funciona com 2022; com 2026 quando os microdados do 2º turno saírem;
   - **17a, feito ([RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md)):** a variação 2022 → 2026 por local
     (partido pela entidade, abstenção, comparecimento, brancos/nulos).
 
@@ -220,7 +223,10 @@ Registrado em 30/09/2026 (pedido do usuário: "Registre no TODO, o item 18 para 
 - **O quê:** mapa do Brasil por UF na noite, com % apurado e vencedor em cada estado.
 - **Custo de coleta:** 27 arquivos por ciclo (o resultado de cada UF), não os de todos os municípios do país.
 
-## 20. Comparação entre UFs (após a apuração)
+## 20. Comparação entre UFs (após a apuração) — FEITO (rodada 47)
+
+- **Feito na [RODADA_47](RODADA_47_2026-10-06_comparacao_ufs_e_eliminados.md):** `comparar_ufs.py` (núcleo
+  `apuracao/entre_ufs.py`). Depois de 25/10, rodar de novo: o 2º turno de 2026 entra sozinho.
 
 - **O quê:** abstenção, brancos/nulos e transferência de votos do 1º para o 2º turno lado a lado, entre UFs, sobre as análises que já existem (rodadas 19, 26 e 30).
 
