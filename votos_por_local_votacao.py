@@ -189,10 +189,9 @@ def download(spec: DatasetSpec, cache_dir: Path, verify_sha512: bool = False) ->
     tmp = target.with_suffix(".zip.part")
     with requests.get(spec.url, headers=HTTP_HEADERS, stream=True, timeout=(30, 600)) as resp:
         if resp.status_code == 404:
-            raise TseDataError(
-                f"404 em {spec.url}. Para eleição recente, os microdados podem ainda não "
-                "ter sido publicados (o TSE publica alguns dias após o pleito)."
-            )
+            dica = (" Para eleição recente, os microdados podem ainda não ter sido publicados "
+                    "(o TSE publica alguns dias após o pleito).") if spec.url.startswith(CDN_BASE) else ""
+            raise TseDataError(f"404 em {spec.url}.{dica}")  # o IBGE (ibge.py) também baixa por aqui
         resp.raise_for_status()
         sha = hashlib.sha512()
         size = 0

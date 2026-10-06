@@ -155,3 +155,25 @@ def test_search_and_cli(cache: Path, tmp_path: Path, capsys: pytest.CaptureFixtu
     assert "FULANA DE TAL" in capsys.readouterr().out
     assert v.main(["secoes", "--uf", "RJ", "--cargo", DEP_EST, "--candidato", "99999",
                    "--zona", "4", "--local", "1015", "--cache-dir", str(cache)]) == 1
+
+
+class _Resposta404:
+    status_code = 404
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize("url, cita_tse", [
+    (f"{v.CDN_BASE}/votacao_secao/votacao_secao_2030_RJ.zip", True),
+    ("https://geoftp.ibge.gov.br/bairros/shp/UF/DF_bairros_CD2022.zip", False),
+])
+def test_download_404_so_atribui_ao_tse_o_que_e_do_tse(tmp_path, monkeypatch, url, cita_tse):
+    monkeypatch.setattr(v.requests, "get", lambda *a, **k: _Resposta404())
+    with pytest.raises(v.TseDataError) as exc:
+        v.download(v.DatasetSpec("x", url, "RJ"), tmp_path)
+    assert url in str(exc.value)
+    assert ("TSE" in str(exc.value)) is cita_tse
