@@ -20,6 +20,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -49,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="microdados: com o Boletim de Urna, baixar os das 27 UFs + exterior (Presidente no Brasil)")
     p.add_argument("--so-plano", action="store_true", help="só mostrar o que seria feito (nada é baixado)")
     p.add_argument("--vigiar", action="store_true", help="repetir o que ficou 'aguardando' a cada --intervalo")
+    p.add_argument("--acompanhar", action="store_true",
+                   help="microdados: seguir verificando mesmo com tudo 'ok' (a cada --intervalo-final) e reimportar "
+                        "a UF quando o TSE regera um arquivo")
+    p.add_argument("--intervalo-final", type=float, default=3 * 3600,
+                   help="com --acompanhar e nada aguardando: segundos entre verificações (mínimo 3600)")
+    p.add_argument("--ate", type=date.fromisoformat, help="com --acompanhar: parar depois deste dia (AAAA-MM-DD)")
     p.add_argument("--intervalo", type=float, default=3600, help="segundos entre repetições com --vigiar (mín. 600)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -71,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = lt.Config(ufs=ufs, etapas=tuple(a.etapas), anos=tuple(a.anos), turnos=tuple(a.turnos),
                     anos_eleitorado=tuple(a.anos_eleitorado), ambiente=a.ambiente, raiz=a.raiz, cache=a.cache_dir,
                     max_rps=a.max_rps, refazer=a.refazer, politica_totais=a.politica_totais,
-                    bweb_brasil=a.bweb_brasil)
+                    bweb_brasil=a.bweb_brasil, acompanhar=a.acompanhar)
     lote = lt.Lote(cfg)
     tarefas = lote.tarefas()
     faltam = [(c, u) for c, u, _ in tarefas if not lote.ja_feita(c, u)]
@@ -104,6 +111,14 @@ def main(argv: list[str] | None = None) -> int:
         aguardando = [(u, c) for u in ufs for c, e in estado.get(u, {}).items() if e["situacao"] == lt.AGUARDANDO]
         problemas = [(u, c) for u in ufs for c, e in estado.get(u, {}).items()
                      if e["situacao"] in (lt.ERRO, lt.INCOMPLETO, lt.PENDENTE)]
+        if a.acompanhar:  # rodada 59: não para com tudo "ok"; o TSE regera arquivos depois dos oficiais
+            if a.ate and date.today() > a.ate:
+                print(f"acompanhamento encerrado (--ate {a.ate:%Y-%m-%d}).")
+                return 1 if problemas else 0
+            pausa = intervalo if aguardando else max(a.intervalo_final, 3600)
+            logger.info("%d tarefa(s) aguardando o TSE; nova verificação em %.0f min", len(aguardando), pausa / 60)
+            time.sleep(pausa)
+            continue
         if not a.vigiar or not aguardando:
             if problemas:
                 print(f"\n{len(problemas)} tarefa(s) com erro, incompleta(s) ou pendente(s): rode de novo para tentar "

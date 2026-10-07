@@ -181,7 +181,8 @@ def cli_falso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         chamadas.append(("importar", totais_de))
         destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
         destino.mkdir(parents=True, exist_ok=True)
-        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
+        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de, "insumos":
+                                                         md.insumos_atuais(a.cache_dir, a.ano, a.uf, turno)}))
         return True
     monkeypatch.setattr(cli, "importar", importar)
     monkeypatch.setattr(md, "turnos", lambda *a: {1})  # os ZIPs falsos não têm NR_TURNO: só o 1º turno
@@ -362,3 +363,74 @@ def test_parcial_de_outra_versao_recomeca(tmp_path: Path) -> None:
     sem_range = CDNRange(corpo, lm=LM2, aceita_range=False)
     assert md.baixar("u", tmp_path / "y.zip", sem_range, esperado=LM2).read_bytes() == corpo
     assert sem_range.pedidos[0]["Range"] == "bytes=7-"
+
+
+# --------------------------------------------------------------------------
+# Acompanhar depois dos totais oficiais (rodada 59)
+# --------------------------------------------------------------------------
+def test_insumos_atuais_vem_das_proveniencias(tmp_path: Path) -> None:
+    (tmp_path / "votacao_partido_munzona_2026.zip").write_bytes(b"x")
+    (tmp_path / "votacao_partido_munzona_2026.proveniencia.json").write_text(json.dumps({"last_modified": LM1}))
+    (tmp_path / "perfil_eleitor_secao_2026_RJ.zip").write_bytes(b"x")  # não é insumo da importação
+    assert md.insumos_atuais(tmp_path, 2026, "RJ", 1) == {"votacao_partido_munzona_2026.zip": LM1}
+
+
+def test_reimporta_quando_um_arquivo_usado_mudou(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """O partido munzona (nacional) foi regerado e baixado por OUTRA UF: esta não recebe `mudaram`, mas a versão
+    gravada na importação difere da do cache — reimporta. Nada mudou: não reimporta."""
+    import argparse
+
+    import preparar_2026 as p26
+    from apuracao.ufs import dir_uf
+
+    cache_atual = {"votacao_partido_munzona_2026.zip": LM1}
+    importados: list[int] = []
+
+    def importar(a, totais_de, turno, memo=None):
+        importados.append(turno)
+        d = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de, "insumos": dict(cache_atual)}))
+        return True
+    monkeypatch.setattr(p26, "importar", importar)
+    monkeypatch.setattr(md, "no_cache", lambda *x: set())
+    monkeypatch.setattr(md, "niveis_disponiveis", lambda cache, ano, uf, turno, com=None: ["munzona"] if turno == 1 else [])
+    monkeypatch.setattr(md, "insumos_atuais", lambda cache, ano, uf, turno: dict(cache_atual))
+    a = argparse.Namespace(ano=2026, uf="SP", cache_dir=tmp_path, raiz=tmp_path / "d", saidas=tmp_path / "s",
+                           politica_totais="auto", bweb_brasil=False)
+    p26.atualizar(a)
+    assert importados == [1]
+    p26.atualizar(a)
+    assert importados == [1]                          # nada mudou
+    cache_atual["votacao_partido_munzona_2026.zip"] = LM2
+    p26.atualizar(a)                                  # sem `mudaram`: veio pelo disco
+    assert importados == [1, 1]
+    st = dir_uf(tmp_path / "d" / "historico_2026_t1", "SP") / "status.json"
+    st.write_text(json.dumps({"ano": 2026, "totais_de": "munzona"}))  # importação de antes do registro
+    p26.atualizar(a)
+    assert importados == [1, 1, 1]
+
+
+def test_acompanhar_nao_para_nos_totais_oficiais(cli_falso, monkeypatch) -> None:
+    from datetime import date, timedelta
+    cli, chamadas, args = cli_falso
+    cdn = CDN()
+    publicar(cdn, PROVISORIO + OFICIAL)
+    pausas: list[float] = []
+
+    class Parar(Exception):
+        pass
+
+    def dormir(s):
+        pausas.append(s)
+        if len(pausas) == 2:
+            raise Parar
+    monkeypatch.setattr(cli.time, "sleep", dormir)
+    with pytest.raises(Parar):
+        cli.main(["--acompanhar", "--intervalo-final", "60", *args], sessao=cdn)
+    assert pausas == [3600, 3600]                     # oficiais no cache: o intervalo final (mínimo 1 h)
+    assert [c for c in chamadas if c[0] == "importar"] == [("importar", "munzona")]  # reimporta só se mudar
+    ontem = (date.today() - timedelta(days=1)).isoformat()
+    assert cli.main(["--acompanhar", "--ate", ontem, *args], sessao=cdn) == 0
+    with pytest.raises(SystemExit):
+        cli.main(["--acompanhar", "--vigiar", *args], sessao=cdn)

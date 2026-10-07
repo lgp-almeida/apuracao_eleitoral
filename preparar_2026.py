@@ -25,6 +25,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import polars as pl
@@ -47,9 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     modo = p.add_mutually_exclusive_group()
     modo.add_argument("--vigiar", action="store_true",
                       help="repetir a verificação até os totais oficiais (detalhe e partido munzona) chegarem")
+    modo.add_argument("--acompanhar", action="store_true",
+                      help="como --vigiar, mas sem parar nos totais oficiais: segue verificando (a cada "
+                           "--intervalo-final) e reimporta quando o TSE regera um arquivo")
     modo.add_argument("--so-verificar", action="store_true",
                       help="só consultar o TSE (um HEAD por arquivo) e mostrar o que há: não baixa nem importa")
     p.add_argument("--intervalo", type=float, default=3600, help="segundos entre verificações (mínimo 600)")
+    p.add_argument("--intervalo-final", type=float, default=3 * 3600,
+                   help="com --acompanhar, depois dos totais oficiais: segundos entre verificações (mínimo 3600)")
+    p.add_argument("--ate", type=date.fromisoformat, help="com --acompanhar: parar depois deste dia (AAAA-MM-DD)")
     p.add_argument("--limpar-vazios", action="store_true", help="apagar do cache os ZIPs só com cabeçalho")
     p.add_argument("--politica-totais", choices=list(md.POLITICAS), default="auto",
                    help="nível dos totais: o melhor disponível (auto) ou um fixo, que falha se indisponível")
@@ -102,7 +109,11 @@ def atualizar(a: argparse.Namespace, mudaram: set[str] | frozenset[str] = frozen
         atual = totais_importados(a, turno)
         insumos = md.PARA_IMPORTAR | {md.BWEB} if alvo == "bweb" else md.PARA_IMPORTAR
         fixa = _politica(a) != "auto"
-        if alvo and (md.ORDEM[alvo] > md.ORDEM[atual] or (alvo == atual and mudaram & insumos)
+        # rodada 59: a versão de um arquivo usado mudou desde a importação — inclusive baixado por OUTRA UF (os
+        # munzona são nacionais) ou por outro processo; importação antiga, sem o registro, é refeita uma vez
+        defasada = alvo == atual and alvo is not None and insumos_importados(a, turno) != md.insumos_atuais(
+            a.cache_dir, a.ano, a.uf, turno)
+        if alvo and (md.ORDEM[alvo] > md.ORDEM[atual] or (alvo == atual and (mudaram & insumos or defasada))
                      or (fixa and alvo != atual)):
             importar(a, alvo, turno, memo)
         feitos[turno] = totais_importados(a, turno)
@@ -117,7 +128,9 @@ def importar(a: argparse.Namespace, totais_de: str, turno: int, memo: dict | Non
     memo = {} if memo is None else memo
     destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)  # cada UF na sua pasta
     antes_de = totais_importados(a, turno)
-    antes = _totais_provisorios(destino) if antes_de not in (None, totais_de) else None
+    mesmo_nivel = antes_de == totais_de
+    antes = (_totais_provisorios(destino) if antes_de not in (None, totais_de)
+             else _totais_atuais(destino) if mesmo_nivel else None)
     try:
         if totais_de == "bweb":
             detalhe = None  # por turno, do BU (historico.load_detalhe_bweb)
@@ -137,10 +150,17 @@ def importar(a: argparse.Namespace, totais_de: str, turno: int, memo: dict | Non
     if antes is not None:
         conf = historico.conferir_totais(antes, pl.read_parquet(destino / "ultimo" / "totais.parquet"))
         a.saidas.mkdir(parents=True, exist_ok=True)
-        alvo = a.saidas / f"conferencia_{antes_de}_x_{totais_de}_{turno}t.csv"
-        conf.write_csv(alvo, separator=";")
-        logger.info("totais %s × %s (%sº turno): %d linhas com diferença → %s", antes_de, totais_de, turno,
-                    conf.height, alvo)
+        if mesmo_nivel:  # o TSE regerou um arquivo: o que mudou nos totais (rodada 59)
+            alvo = a.saidas / f"conferencia_atualizacao_{datetime.now():%Y%m%d_%H%M}_{turno}t.csv"
+            conf.write_csv(alvo, separator=";")
+            logger.info("reimportado (%sº turno: arquivo regerado pelo TSE, ou importação sem o registro): %s", turno,
+                        f"{conf.height} linhas dos totais mudaram → {alvo}" if conf.height
+                        else "nenhum total mudou")
+        else:
+            alvo = a.saidas / f"conferencia_{antes_de}_x_{totais_de}_{turno}t.csv"
+            conf.write_csv(alvo, separator=";")
+            logger.info("totais %s × %s (%sº turno): %d linhas com diferença → %s", antes_de, totais_de, turno,
+                        conf.height, alvo)
     if antes_de == "bweb" and totais_de != "bweb":  # o BU deixou de ser a fonte: os Parquet dele saem
         from apuracao import bweb
         zp = bweb.no_cache(a.cache_dir, a.ano, turno, a.uf)
@@ -220,6 +240,22 @@ def garantir_importacao(a: argparse.Namespace) -> str | None:
     return atualizar(a)[1]
 
 
+def insumos_importados(a: argparse.Namespace, turno: int = 1) -> dict[str, str] | None:
+    """As versões dos arquivos usados na importação do turno (status.json `insumos`); None se não registrado."""
+    import json
+    st = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf) / "status.json"
+    try:
+        dados = json.loads(st.read_text())
+    except (OSError, ValueError):
+        return None
+    return dados.get("insumos") if dados.get("ano") == a.ano else None
+
+
+def _totais_atuais(destino: Path) -> pl.DataFrame | None:
+    tot = destino / "ultimo" / "totais.parquet"
+    return pl.read_parquet(tot) if tot.exists() else None
+
+
 def _totais_provisorios(destino: Path) -> pl.DataFrame | None:
     """Os totais de uma importação anterior com totais reconstruídos (para conferir com os oficiais)."""
     import json
@@ -268,11 +304,22 @@ def resumo(a: argparse.Namespace, estados: list[md.Estado], bus: dict | None = N
         linhas.append(f"{turno}º turno — importado: {historico_descricao(totais_importados(a, turno))}; "
                       f"no cache dá para: {', '.join(disp) or 'nada'}; votos por partido: "
                       f"{md.fonte_dos_partidos(a.cache_dir, a.ano, a.uf, turno, cache) or 'divulgação'}"
-                      + (f"; Boletim de Urna no CKAN: {bu.nome}" if (bu := bus.get(turno)) else ""))
+                      + (f"; Boletim de Urna no CKAN: {bu.nome}" if (bu := bus.get(turno)) else "")
+                      + _situacao_insumos(a, turno))
     faltam = sorted(nomes[c] for c in md.FINAL - cache)
     if faltam:
         linhas.append(f"para os totais oficiais ainda falta no cache: {', '.join(faltam)}")
     return linhas
+
+
+def _situacao_insumos(a: argparse.Namespace, turno: int) -> str:
+    if totais_importados(a, turno) is None:
+        return ""
+    gravados, atuais = insumos_importados(a, turno), md.insumos_atuais(a.cache_dir, a.ano, a.uf, turno)
+    if gravados is None:
+        return "; arquivos da importação: sem registro (reimporta na próxima execução)"
+    mudaram = sorted(k for k in set(gravados) | set(atuais) if gravados.get(k) != atuais.get(k))
+    return "; arquivos da importação: em dia" if not mudaram else f"; arquivos mudaram desde a importação: {', '.join(mudaram)}"
 
 
 def historico_descricao(totais_de: str | None) -> str:
@@ -314,6 +361,14 @@ def main(argv: list[str] | None = None, sessao=requests) -> int:
         # encerra só com o que a importação DEFINITIVA usa (totais oficiais): antes disso a importação, se
         # houver, é a provisória, e o vigia precisa seguir para trocá-la pela oficial quando o TSE publicar
         pronto = md.FINAL <= md.no_cache(a.cache_dir, a.ano, a.uf)
+        if a.acompanhar:  # rodada 59: depois dos oficiais, segue de olho nas regerações do TSE
+            if a.ate and date.today() > a.ate:
+                print(f"acompanhamento encerrado (--ate {a.ate:%Y-%m-%d}).")
+                return 0
+            pausa = max(a.intervalo_final, 3600) if pronto else intervalo
+            logger.info("próxima verificação em %.0f min%s", pausa / 60, " (totais oficiais: acompanhando)" if pronto else "")
+            time.sleep(pausa)
+            continue
         if not a.vigiar or pronto:
             if a.vigiar:
                 print("microdados de", a.ano, "completos (com os totais oficiais) e preparados; vigia encerrado.")

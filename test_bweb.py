@@ -206,6 +206,7 @@ def test_importar_pelo_bu_tira_o_brasil(tmp_path: Path, monkeypatch: pytest.Monk
     assert st["totais_de"] == "bweb" and "(BU)" in st["ambiente"] and "Boletim de Urna" in st["totais"]
     assert any("abrangência Brasil" in a for a in st["avisos"]) and st["partidos_de"] is None
     assert any(f.startswith("bweb_1t_RJ_") for f in st["fontes"])
+    assert any(k.startswith("bweb_1t_RJ_") and len(val) == 128 for k, val in st["insumos"].items())  # rodada 59
     tot = pl.read_parquet(tmp_path / "r" / "ultimo" / "totais.parquet")
     assert "br" not in tot["ABRANGENCIA"].to_list()
     gov = tot.filter((pl.col("CARGO") == 3) & (pl.col("ABRANGENCIA") == "uf")).row(0, named=True)
@@ -305,7 +306,8 @@ def test_atualizar_sobe_de_nivel_e_nunca_rebaixa(tmp_path: Path, monkeypatch: py
         importados.append((turno, totais_de))
         d = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
+        (d / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de, "insumos":
+                                                   md.insumos_atuais(a.cache_dir, a.ano, a.uf, turno)}))
         return True
     disponivel: dict[int, list[str]] = {1: ["secoes", "bweb"], 2: ["bweb"]}
     monkeypatch.setattr(p26, "importar", importar)

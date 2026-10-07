@@ -177,15 +177,28 @@ O que aprendemos com o 1º turno:
   - **A CDN do TSE às vezes entrega a cópia velha** de um arquivo que o HEAD já anuncia como novo. O download
     compara as datas e pede de novo (rodada 54). Se aparecer "a CDN ainda entrega a versão de …", espere a próxima
     verificação.
-  - **Quando o TSE regera um arquivo depois de a vigia encerrar** (como o partido munzona às 12h39), rode de novo
-    `python preparar_2026.py` (RJ). Para as outras UFs, reimporte com `preparar_2026.importar(a, "munzona", 1)` por
-    UF: a vigia do lote não reimporta o que já está "ok".
-- **Microdados do 2º turno — depois de 25/10:**
-  - **Ligar as duas vigias logo depois da noite:**
+  - **O TSE regera arquivos depois dos totais oficiais** (o partido munzona saiu às 10h10 e foi regerado às 12h39
+    e às 16h39). Por isso as vigias passaram a ter o modo `--acompanhar` (rodada 59), que não para nos oficiais.
+    - Cada importação guarda a versão de cada arquivo que usou (`insumos` no `status.json`). Se uma versão muda,
+      ela é refeita, mesmo que o download tenha vindo de outra UF.
+    - O log mostra o que mudou nos totais, e a conferência vai para
+      `saidas/<UF>/conferencia_atualizacao_<data>_<t>t.csv`.
 
     ```bash
-    python preparar_2026.py --vigiar                                      # RJ
-    python baixar_ufs.py --etapas microdados --ufs todas --vigiar         # as outras UFs
+    python preparar_2026.py --acompanhar                                         # RJ
+    python baixar_ufs.py --etapas microdados --ufs todas --acompanhar            # as outras UFs
+    ```
+
+    - Depois dos totais oficiais, verificam a cada 3 h (`--intervalo-final`). Param com Ctrl+C ou com
+      `--ate AAAA-MM-DD`.
+    - `python preparar_2026.py --so-verificar` diz, por turno, se os arquivos da importação estão em dia.
+- **Microdados do 2º turno — depois de 25/10:**
+  - **Ligar as duas vigias logo depois da noite** (se as do 1º turno com `--acompanhar` já estiverem no ar,
+    elas cuidam do 2º turno também):
+
+    ```bash
+    python preparar_2026.py --acompanhar                                  # RJ
+    python baixar_ufs.py --etapas microdados --ufs todas --acompanhar     # as outras UFs
     ```
 
   - **Nível dos totais, POR TURNO** (rodada 55): oficial (`detalhe_votacao_munzona`) > seções (`votacao_secao` +
@@ -206,7 +219,7 @@ O que aprendemos com o 1º turno:
     o cache permite e o BU listado no CKAN.
   - **Para forçar um nível:** `--politica-totais bweb|secoes|oficial`. Ele falha se o nível estiver indisponível;
     nunca cai para outro.
-  - **As vigias só encerram** com o detalhe e o partido munzona oficiais.
+  - **Com `--vigiar`**, as vigias encerram com o detalhe e o partido munzona oficiais; **com `--acompanhar`**, seguem verificando.
 - **Com os microdados do 2º turno no cache:**
   - transferência 1º → 2º turno por seção (`transferencia_turnos.py --ano 2026 --cargo governador --nivel secao`)
     e a camada "Destino dos eliminados" no mapa;

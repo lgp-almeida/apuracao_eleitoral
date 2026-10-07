@@ -429,6 +429,27 @@ def com_erro(estados: list[Estado]) -> list[Estado]:
     return [e for e in estados if e.acao == "tentar de novo"]
 
 
+INSUMOS = PARA_IMPORTAR | {"partido_munzona"}  # o que uma importação usa (rodada 59)
+
+
+def insumos_atuais(cache: Path, ano: int, uf: str, turno: int) -> dict[str, str]:
+    """Versão de cada arquivo do cache que uma importação de (ano, UF, turno) usa: nome do ZIP → `Last-Modified`
+    gravado no download (o BU do turno: o SHA-512). A importação grava isto no status.json (`insumos`); se mudar,
+    é preciso reimportar — mesmo que o download tenha sido feito por OUTRA UF (os munzona são nacionais) ou por
+    outro processo (rodada 59: o TSE regerou o partido munzona três vezes em 07/10, depois dos totais oficiais)."""
+    from apuracao import bweb
+
+    saida = {}
+    for a in ARQUIVOS:
+        if a.chave in INSUMOS and (cache / a.zip(ano, uf)).exists():
+            prov = _proveniencia(cache, a.zip(ano, uf))
+            saida[a.zip(ano, uf)] = prov.get("last_modified") or prov.get("sha512") or ""
+    zp = bweb.no_cache(cache, ano, turno, uf)
+    if zp is not None:
+        saida[zp.name] = bweb._proveniencia(zp).get("sha512") or ""
+    return saida
+
+
 def no_cache(cache: Path, ano: int, uf: str) -> set[str]:
     """Chaves cujo ZIP está no cache COM dados — o "já chegou" vem do disco, não da memória do processo
     (antes, uma execução nova esquecia o que a anterior baixou e não importava quando faltava só um arquivo)."""

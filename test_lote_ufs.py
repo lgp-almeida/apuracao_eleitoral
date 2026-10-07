@@ -127,7 +127,8 @@ def test_microdados_provisorio_aguarda_e_oficial_fica_ok(tmp_path: Path, monkeyp
         importados.append(totais_de)
         destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
         destino.mkdir(parents=True, exist_ok=True)
-        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
+        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de, "insumos":
+                                                         md.insumos_atuais(a.cache_dir, a.ano, a.uf, turno)}))
         return True
     monkeypatch.setattr(p26, "importar", importar)
     monkeypatch.setattr(md, "turnos", lambda *a: {1})  # os ZIPs falsos não têm NR_TURNO: só o 1º turno
@@ -149,3 +150,44 @@ def test_microdados_provisorio_aguarda_e_oficial_fica_ok(tmp_path: Path, monkeyp
     assert e["situacao"] == lt.OK and importados == ["secoes", "munzona"]
     heads = cdn.heads
     assert rodar()["situacao"] == lt.OK and cdn.heads == heads  # completo: pulado, sem acessar a CDN
+
+
+def test_microdados_acompanhar_reimporta_a_uf_quando_o_tse_regera(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rodada 59: com tudo "ok", o lote com `acompanhar` verifica de novo e reimporta a UF cujo arquivo usado
+    mudou (o TSE regerou o partido munzona três vezes em 07/10)."""
+    import preparar_2026 as p26
+    from apuracao import ibge
+    from apuracao import microdados as md
+    from apuracao.ufs import dir_uf
+    from test_microdados import CDN, LM2, OFICIAL, PROVISORIO, publicar
+
+    importados: list[str] = []
+
+    def importar(a, totais_de, turno, memo=None):
+        importados.append(a.uf)
+        destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
+        destino.mkdir(parents=True, exist_ok=True)
+        (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de, "insumos":
+                                                         md.insumos_atuais(a.cache_dir, a.ano, a.uf, turno)}))
+        return True
+    monkeypatch.setattr(p26, "importar", importar)
+    monkeypatch.setattr(p26, "transferencia", lambda a: None)
+    monkeypatch.setattr(md, "converter", lambda *a: [])
+    monkeypatch.setattr(md, "turnos", lambda *a: {1})
+    monkeypatch.setattr(ibge, "preparar", lambda *a, **k: [])
+    cdn = CDN()
+    publicar(cdn, PROVISORIO + OFICIAL)
+
+    def rodar(acompanhar: bool) -> dict:
+        cfg = lt.Config(ufs=["RJ"], etapas=("microdados",), raiz=tmp_path, cache=tmp_path / "cache", acompanhar=acompanhar)
+        return lt.Lote(cfg, sessao=cdn).executar()["RJ"]["microdados_2026"]
+
+    assert rodar(False)["situacao"] == lt.OK and importados == ["RJ"]
+    assert rodar(True)["situacao"] == lt.OK and importados == ["RJ"]          # nada mudou: não reimporta
+    publicar(cdn, ("partido_munzona",), lm=LM2)                               # o TSE regerou
+    e = rodar(True)
+    assert e["situacao"] == lt.OK and importados == ["RJ", "RJ"]
+    assert e["detalhe"].startswith("reimportado: o TSE atualizou votacao_partido_munzona_2026.zip (1º turno)")
+    heads = cdn.heads
+    rodar(False)                                                              # sem acompanhar: "ok" é pulado
+    assert cdn.heads == heads

@@ -57,6 +57,7 @@ class Config:
     refazer: bool = False
     politica_totais: str = "auto"  # microdados: nível dos totais (`microdados.POLITICAS`)
     bweb_brasil: bool = False      # microdados: com o Boletim de Urna, também os 27 + exterior (Presidente BR)
+    acompanhar: bool = False       # microdados: verificar de novo mesmo "ok" (regerações do TSE; rodada 59)
 
 
 @dataclass
@@ -106,6 +107,8 @@ class Lote:
         return out
 
     def ja_feita(self, chave: str, uf: str) -> bool:
+        if self.cfg.acompanhar and chave.startswith("microdados"):  # o TSE regera arquivos depois do "ok"
+            return False
         return not self.cfg.refazer and self.estado.get(uf, {}).get(chave, {}).get("situacao") in (OK, NAO_SE_APLICA)
 
     def executar(self, ao_terminar: Callable[[str, str, Resultado], None] | None = None) -> dict:
@@ -222,6 +225,7 @@ class Lote:
                                   saidas=Path("saidas") / uf, politica_totais=self.cfg.politica_totais,
                                   bweb_brasil=self.cfg.bweb_brasil)
         sessao = self.sessao or requests
+        antes = {t: p26.insumos_importados(args, t) for t in (1, 2)}
         try:
             estados = md.preparar(self.cfg.cache, ano, uf, sessao, ao_chegar=p26.ao_chegar(args))
             if p26.procurar_bu(args, sessao, self._lista_bu(ano, sessao)):  # rodada 55: só se nada melhor existe
@@ -235,8 +239,14 @@ class Lote:
             return Resultado(ERRO, "falha em " + "; ".join(f"{e.zip}: {e.situacao}" for e in erros))
         # OK só com os totais OFICIAIS importados: provisório (reconstruído das seções) segue "aguardando",
         # para o --vigiar e a próxima execução trocarem pelo oficial quando o TSE publicar (rodada 40)
+        reimportado = []  # arquivos cuja versão mudou desde a importação anterior (o TSE regerou)
+        for t, ant in antes.items():
+            dep = p26.insumos_importados(args, t)
+            if ant is not None and dep is not None and ant != dep:
+                reimportado += [f"{k} ({t}º turno)" for k in sorted(set(ant) | set(dep)) if ant.get(k) != dep.get(k)]
         if totais == "munzona" and not faltam:
-            return Resultado(OK, f"importado com os totais oficiais; no cache: {', '.join(sorted(com))}")
+            return Resultado(OK, (f"reimportado: o TSE atualizou {', '.join(reimportado)}; " if reimportado else "")
+                             + f"importado com os totais oficiais; no cache: {', '.join(sorted(com))}")
         if totais in ("secoes", "bweb"):
             de = "das seções" if totais == "secoes" else "do Boletim de Urna"
             return Resultado(AGUARDANDO, f"importado com totais PROVISÓRIOS (reconstruídos {de}); "

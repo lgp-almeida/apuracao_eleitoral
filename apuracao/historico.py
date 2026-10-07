@@ -823,6 +823,12 @@ def _partidos_reconstruidos(ano: int, uf: str, turno: int, cache: Path, votos_uf
     return partidos_munzona(cand, legenda, destinacao, ano)
 
 
+def _insumos(cache: Path, ano: int, uf: str, turno: int) -> dict[str, str]:
+    from apuracao import microdados as md
+
+    return md.insumos_atuais(cache, ano, uf, turno)
+
+
 def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path, fonte: str | None = None,
              totais_de: str = "munzona", detalhe: pl.DataFrame | None = None, brasil: bool = False
              ) -> dict[str, int]:
@@ -921,6 +927,7 @@ def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path, fonte: s
         "partidos_de": partidos_de,
         "avisos": avisos,
         "fontes": [*fontes_totais, *fontes_votos, f"consulta_cand_{ano}", "EA12 (divulgação TSE 2026) para o código IBGE"],
+        "insumos": _insumos(cache, ano, uf, turno),  # versões dos arquivos usados: mudou → reimportar (rodada 59)
     }
     (destino / "status.json").write_text(json.dumps(status, indent=2, ensure_ascii=False))
     return {"totais": tot.height, "candidatos": candidatos.height, "partidos": partidos.height,
