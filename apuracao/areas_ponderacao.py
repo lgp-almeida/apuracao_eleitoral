@@ -314,7 +314,31 @@ class PerfilVotoArea(pfl.PerfilVotoLocal):
 MALHA = "malhas/areas_ponderacao_{uf}.geojson"
 SIMPLIFICAR_GRAUS = 0.0006  # ~60 m; com 5 casas (~1 m) o RJ fica com ~1,5 MB e SP com ~6 MB (bairros RJ: 2,7 MB)
 CAMADAS_MAPA = {"voto": "Voto", "perfil": "Perfil (Censo e eleitorado)", "residuo": "Resíduo do Perfil × voto",
-                "variacao": "Variação desde a eleição anterior"}  # as duas últimas: escala divergente (p.p.)
+                "variacao": "Variação desde a eleição anterior",  # resíduo e variação: escala divergente (p.p.)
+                "transferencia": "Destino dos eliminados (1º → 2º turno)"}
+
+
+def transferencia_por_area(pva: PerfilVotoArea, ano: int, cargo: int) -> tuple[Any, pl.DataFrame]:
+    """A inferência 1º → 2º turno por LOCAL (estrato = município) somada por área: os % observados e o voto
+    previsto do 1º finalista são médias ponderadas pelos aptos do turno de cada um (= Σ contagens ÷ Σ aptos). O
+    previsto é linear nos % do 1º turno; somado assim, é a previsão da área quando os aptos do local são os mesmos
+    nos dois turnos — quase sempre (mesmo cadastro; mudam só seções agregadas/não instaladas). Abstenção extra e
+    resíduo saem das somas. O destino dos eliminados é estimado por MUNICÍPIO e a área fica dentro de um só
+    município: vale o do município (igual em todos os locais da área)."""
+    from apuracao import mapa_locais as ml
+    res, por = ml.transferencia_por_local(pva, ano, cargo)
+    a = res.unidades.cat2[0]
+    media = lambda c, aptos: ((pl.col(c) * pl.col(aptos)).sum() / pl.col(aptos).sum()).alias(c)  # noqa: E731
+    destinos = [c for c in por.columns if c.startswith("ELIM_PARA_")]
+    area = (por.join(pva.local_area(ano), on="UNIDADE", how="inner")
+            .group_by("CD_AP").agg(
+                media("ABST_1_PCT", "APTOS_1"), media("ELIMINADOS_1_PCT", "APTOS_1"),
+                media("ABST_2_PCT", "APTOS_2"), media(f"{a}_2_PCT", "APTOS_2"), media(f"{a}_2_AJUSTE_PCT", "APTOS_2"),
+                pl.col("APTOS_1").sum(), pl.col("APTOS_2").sum(), *[pl.col(c).first() for c in destinos])
+            .with_columns((pl.col("ABST_2_PCT") - pl.col("ABST_1_PCT")).alias("ABST_EXTRA_PP"),
+                          (pl.col(f"{a}_2_PCT") - pl.col(f"{a}_2_AJUSTE_PCT")).alias("RESIDUO_A_PP"))
+            .rename({"CD_AP": "UNIDADE"}))
+    return res, area
 
 
 def malha(uf: str, cache: Path) -> dict[str, Any]:
@@ -356,8 +380,10 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
     "residuo": o resíduo do Perfil × voto por área (p.p.; nº de 2 dígitos em proporcional = partido);
     "variacao": a métrica no `ano` − na referência (`ano_ref`, padrão ano − 4), em p.p., pela mesma regra do
     mapa por local (`mapa_locais.variacao`: partido pela entidade). A área não muda entre eleições (é a do Censo
-    2022): os locais de cada ano entram na área do setor que os contém. ValueError = pedido inválido;
-    TseDataError = microdados ausentes."""
+    2022): os locais de cada ano entram na área do setor que os contém;
+    "transferencia": o 1º → 2º turno (`metrica` em `mapa_locais.METRICAS_TRANSFERENCIA`), pela inferência por
+    local somada na área (`transferencia_por_area`). ValueError = pedido inválido; TseDataError = microdados
+    ausentes."""
     from apuracao import bairros as br
     from apuracao import mapa_locais as ml
 
@@ -397,6 +423,12 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
         df, rotulo = ml.variacao(pva, ano, ano_ref, cargo, turno, metrica, numero, municipio)
         tipo, unidade = "divergente", "p.p."
         extra.update(ano_ref=ano_ref, lados=[str(ano_ref), str(ano)], sentido="variacao")
+    elif camada == "transferencia":
+        res, area = transferencia_por_area(pva, ano, cargo)
+        df, rotulo, tipo, unidade, mais = ml.camada_transferencia(res, area, ano, cargo, metrica)
+        if municipio is not None:
+            df = df.filter(pf.municipio_do_bairro() == municipio)
+        extra.update(mais)
     else:  # resíduo
         if numero is None or indicador is None:
             raise ValueError("o resíduo precisa do número (candidato; 2 dígitos = partido) e do indicador")

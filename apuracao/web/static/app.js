@@ -1433,7 +1433,7 @@ async function prepararLocais(unidade = "local") {
   if ([...municipioLocSel.options].some((o) => o.value === munAtual)) municipioLocSel.value = munAtual;
 }
 
-const CAMADAS_AREA = ["voto", "perfil", "residuo", "variacao"];  // por área de ponderação (sem transferência)
+const CAMADAS_AREA = ["voto", "perfil", "residuo", "variacao", "transferencia"];  // por área de ponderação
 
 function ajustarControlesLocais() {
   const locais = estado.detalhe === "locais" || estado.detalhe === "areas";  // os dois usam camada/indicador/município
@@ -1568,7 +1568,10 @@ async function atualizarMapaAreas(cargo, legenda) {
       "com local de votação têm valor; uma cidade pequena é uma área só. " +
       (camada === "perfil" ? `Fonte: ${d.fonte_indicador}.` + (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : "")
         : "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor que contém a sua " +
-          "coordenada)." + (camada === "variacao" ? ` A área é a mesma nos dois anos (${d.ano_ref} e ${d.ano}).` : "")) +
+          "coordenada)." + (camada === "variacao" ? ` A área é a mesma nos dois anos (${d.ano_ref} e ${d.ano}).` : "") +
+          (camada === "transferencia" ? " Inferência ecológica (padrão médio, não o voto de pessoas), feita por local e " +
+            "somada na área: o destino dos eliminados é estimado por município (todas as áreas do município têm o mesmo " +
+            "valor); eliminados, abstenção extra e o resíduo são de cada área." : "")) +
       notaDivergenteArea(d);
   } catch (e) {
     if (pedido !== estado.pedidoMapa) return;

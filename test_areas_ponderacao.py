@@ -168,7 +168,7 @@ def test_valores_do_mapa_por_area(pva: ap.PerfilVotoArea) -> None:
     rio = ap.mapa(pva, 2024, "perfil", indicador="pct_evangelicos", municipio=3304557)
     assert set(rio["itens"]) == {AREA_RIO_1, AREA_RIO_2} and rio["cobertura"]["areas"] == 2
     with pytest.raises(ValueError):
-        ap.mapa(pva, 2024, "transferencia")  # por área: voto, perfil, resíduo e variação
+        ap.mapa(pva, 2024, "setor")  # camada desconhecida
     with pytest.raises(ValueError):
         ap.mapa(pva, 2024, "residuo", indicador="pct_evangelicos")  # o resíduo precisa do número
 
@@ -222,3 +222,31 @@ def test_variacao_por_area(pva: ap.PerfilVotoArea, monkeypatch: pytest.MonkeyPat
     assert (d["itens"][AREA_RIO_2]["antes"], d["itens"][AREA_RIO_2]["depois"]) == (30.0, 22.5)
     with pytest.raises(ValueError):
         ap.mapa(pva, 2024, "variacao", cargo=13, metrica="abstencao_pct", ano_ref=2024)
+
+
+def test_destino_dos_eliminados_por_area(pva: ap.PerfilVotoArea, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A inferência por local somada na área: % observados e previstos ponderados pelos aptos do turno; o destino
+    dos eliminados (estimado por município) é o do município."""
+    from types import SimpleNamespace
+
+    from apuracao import mapa_locais as ml
+    a = "A (X)"
+    por = pl.DataFrame({
+        "UNIDADE": [PEDRO, ESCOLA_X, CIEP, NITEROI], "APTOS_1": [100, 300, 100, 50], "APTOS_2": [100, 300, 100, 50],
+        "ABST_1_PCT": [10.0, 20.0, 40.0, 30.0], "ABST_2_PCT": [15.0, 22.0, 50.0, 30.0],
+        "ELIMINADOS_1_PCT": [30.0, 10.0, 50.0, 20.0], f"{a}_2_PCT": [60.0, 40.0, 20.0, 50.0],
+        f"{a}_2_AJUSTE_PCT": [55.0, 42.0, 30.0, 50.0], f"ELIM_PARA_{a}_PCT": [70.0, 70.0, 70.0, 35.0],
+        "ELIM_PARA_B (Y)_PCT": [30.0, 30.0, 30.0, 65.0]})
+    res = SimpleNamespace(unidades=SimpleNamespace(cat2=[a, "B (Y)"]))
+    monkeypatch.setattr(ml, "transferencia_por_local", lambda unidade, ano, cargo: (res, por))
+    _, area = ap.transferencia_por_area(pva, 2024, 7)
+    r2 = area.filter(pl.col("UNIDADE") == AREA_RIO_2).row(0, named=True)  # Escola X (300 aptos) + CIEP (100)
+    assert r2["ABST_1_PCT"] == pytest.approx((20 * 300 + 40 * 100) / 400)
+    assert r2["ABST_EXTRA_PP"] == pytest.approx((22 * 300 + 50 * 100) / 400 - (20 * 300 + 40 * 100) / 400)
+    assert r2["RESIDUO_A_PP"] == pytest.approx((40 * 300 + 20 * 100) / 400 - (42 * 300 + 30 * 100) / 400)
+    assert r2[f"ELIM_PARA_{a}_PCT"] == 70  # o do município (Rio)
+    d = ap.mapa(pva, 2024, "transferencia", cargo=7, metrica="elim_para_a")
+    assert d["tipo"] == "sequencial" and d["itens"][AREA_NIT]["valor"] == 35 and d["finalistas"] == [a, "B (Y)"]
+    e = ap.mapa(pva, 2024, "transferencia", cargo=7, metrica="abst_extra", municipio=3304557)
+    assert e["tipo"] == "divergente" and set(e["itens"]) == {AREA_RIO_1, AREA_RIO_2} and e["lados"] == ["1º turno", "2º turno"]
+    assert e["itens"][AREA_RIO_1]["valor"] == pytest.approx(5) and e["itens"][AREA_RIO_1]["antes"] == 10

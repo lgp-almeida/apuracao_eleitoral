@@ -104,14 +104,30 @@ def variacao(plocal: Any, ano: int, ano_ref: int, cargo: int, turno: int, metric
     return df, f"Variação (p.p.) de {rotulo} — {br.CARGOS[cargo].title()}, {ano_ref} → {ano}"
 
 
+def transferencia_por_local(plocal: Any, ano: int, cargo: int) -> tuple[Any, pl.DataFrame]:
+    """(resultado de `transferencia.calcular` com o local como unidade e o município como estrato; uma linha por
+    local com a UNIDADE do local, APTOS_1/APTOS_2 e os % observados, ajustados e o destino dos eliminados)."""
+    from apuracao import transferencia as tf
+    res = tf.calcular(ano, plocal.b.uf, cargo, "local", plocal.b.cache, n_boot=0)
+    por = res.por_unidade.drop("UNIDADE").join(plocal.locais(ano).select(v.LOCAL_KEY + ["UNIDADE"]), on=v.LOCAL_KEY, how="inner")
+    return res, por
+
+
 def transferencia(plocal: Any, ano: int, cargo: int, metrica: str) -> tuple[pl.DataFrame, str, str, str, dict]:
     """(CD_BAIRRO, VALOR[, ANTES, DEPOIS]; rótulo; tipo; unidade; extra) da camada "transferencia"."""
-    from apuracao import transferencia as tf
     if metrica not in METRICAS_TRANSFERENCIA:
         raise ValueError(f"transferência por local: {', '.join(METRICAS_TRANSFERENCIA)}")
-    res = tf.calcular(ano, plocal.b.uf, cargo, "local", plocal.b.cache, n_boot=0)
+    res, por = transferencia_por_local(plocal, ano, cargo)
+    return camada_transferencia(res, por, ano, cargo, metrica)
+
+
+def camada_transferencia(res: Any, por: pl.DataFrame, ano: int, cargo: int, metrica: str
+                         ) -> tuple[pl.DataFrame, str, str, str, dict]:
+    """A camada a partir das linhas `por` (UNIDADE + as colunas de `transferencia.Resultado.por_unidade`), seja
+    um local, seja a soma dos locais de uma área de ponderação."""
+    if metrica not in METRICAS_TRANSFERENCIA:
+        raise ValueError(f"transferência: {', '.join(METRICAS_TRANSFERENCIA)}")
     a = res.unidades.cat2[0]
-    por = res.por_unidade.drop("UNIDADE").join(plocal.locais(ano).select(v.LOCAL_KEY + ["UNIDADE"]), on=v.LOCAL_KEY, how="inner")
     extra: dict[str, Any] = {"finalistas": res.unidades.cat2[:2]}
     col = {"eliminados_1t": "ELIMINADOS_1_PCT", "elim_para_a": f"ELIM_PARA_{a}_PCT", "abst_extra": "ABST_EXTRA_PP",
            "residuo_a": "RESIDUO_A_PP"}[metrica]

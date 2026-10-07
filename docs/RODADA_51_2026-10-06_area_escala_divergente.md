@@ -63,6 +63,6 @@ só tinha voto e perfil, porque o `desenharMapa` (polígonos) só pintava escala
 
 ## Pendências
 
-1. **Destino dos eliminados por área:** a transferência por área exigiria a inferência com a área como unidade
-   (`transferencia.calcular`).
+1. **Destino dos eliminados por área:** feito na [RODADA_52](RODADA_52_2026-10-06_area_transferencia.md) (inferência
+   por local somada na área).
 2. **Erro amostral:** marcar no mapa as áreas com coeficiente de variação alto nos indicadores da amostra.

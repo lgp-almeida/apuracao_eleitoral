@@ -150,9 +150,9 @@ def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
                             ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())")
     assert len(cores) == 3 and set(cores.values()) <= set(rampa)  # 3 áreas sintéticas, rampa de mapas
     assert pagina.locator("#areas-nota").is_visible() and "áreas" in pagina.inner_text("#areas-nota")
-    # por área: só a transferência fica desabilitada
+    # por área: as cinco camadas do mapa por local
     assert pagina.evaluate("[...document.querySelectorAll('#mapa-camada option')].filter(o => !o.disabled)"
-                           ".map(o => o.value)") == ["voto", "perfil", "residuo", "variacao"]
+                           ".map(o => o.value)") == ["voto", "perfil", "residuo", "variacao", "transferencia"]
     # perfil: a religião (amostra do Censo) está entre os indicadores da área
     pagina.select_option("#mapa-camada", "perfil")
     pagina.select_option("#mapa-indicador", "pct_evangelicos")
@@ -192,3 +192,26 @@ def test_area_em_escala_divergente(pagina, site) -> None:
         assert "camada=variacao" in pagina.evaluate("location.hash")
     finally:
         pagina.unroute("**/api/mapa/areas?*camada=variacao*")
+
+
+def test_area_destino_dos_eliminados(pagina, site) -> None:
+    """Transferência por área (resposta pronta: o sintético não tem 2º turno): controles, nota e endereço."""
+    import json
+    resposta = {"camada": "transferencia", "metrica": None, "tipo": "sequencial", "unidade": "%", "ano": 2024,
+                "rotulo": "Destino dos eliminados: % para A (X) — Vereador 2024, 1º → 2º turno",
+                "finalistas": ["A (X)", "B (Y)"], "cobertura": {"areas_com_dado": 3, "areas": 3},
+                "itens": {a: {"valor": v, "municipio": f"Área {a[-3:]}", "rotulo": None}
+                          for a, v in (("3304557001", 70.0), ("3304557002", 70.0), ("3303302001", 35.0))}}
+    pagina.route("**/api/mapa/areas?*camada=transferencia*",
+                 lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(resposta)))
+    try:
+        abrir(pagina, site, f"{AREAS}&camada=transferencia&transf=elim_para_a")
+        pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
+                                 "estado.mapa._export.titulo.startsWith('Destino')")
+        assert pagina.locator("#mapa-l-transf").is_visible() and pagina.locator("#mapa-l-indicador").is_hidden()
+        nota = pagina.inner_text("#areas-nota")
+        assert "Inferência ecológica" in nota and "por município" in nota
+        h = pagina.evaluate("location.hash")
+        assert "camada=transferencia" in h and "transf=elim_para_a" in h and "detalhe=areas" in h
+    finally:
+        pagina.unroute("**/api/mapa/areas?*camada=transferencia*")
