@@ -105,3 +105,36 @@ def test_camada_destino_dos_eliminados(pagina, site) -> None:
     assert "estimado por município" in pagina.inner_text("#locais-nota")
     h = pagina.evaluate("location.hash")
     assert "camada=transferencia" in h and "transf=abst_extra" in h and "indicador=" not in h
+
+
+# --------------------------------------------------------------------------- áreas de ponderação (TODO 25)
+AREAS = "#mapas?cargo=13&metrica=pct_candidato&detalhe=areas&ano_bairros=2024"
+
+
+def _areas_prontas(pg) -> None:
+    pg.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas'")
+
+
+def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
+    abrir(pagina, site, f"{AREAS}&camada=voto&numero={CAND}")
+    _areas_prontas(pagina)
+    cores = pagina.evaluate("estado.mapa._export.cores")
+    rampa = pagina.evaluate("['--mapa-1','--mapa-2','--mapa-3','--mapa-4','--mapa-5','--sem-dado']"
+                            ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())")
+    assert len(cores) == 3 and set(cores.values()) <= set(rampa)  # 3 áreas sintéticas, rampa de mapas
+    assert pagina.locator("#areas-nota").is_visible() and "áreas" in pagina.inner_text("#areas-nota")
+    # só voto e perfil por área: as outras camadas ficam desabilitadas
+    assert pagina.evaluate("[...document.querySelectorAll('#mapa-camada option')].filter(o => !o.disabled)"
+                           ".map(o => o.value)") == ["voto", "perfil"]
+    # perfil: a religião (amostra do Censo) está entre os indicadores da área
+    pagina.select_option("#mapa-camada", "perfil")
+    pagina.select_option("#mapa-indicador", "pct_evangelicos")
+    pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('evangélicos')")
+    assert "amostra" in pagina.inner_text("#areas-nota")
+    h = pagina.evaluate("location.hash")
+    assert "detalhe=areas" in h and "camada=perfil" in h and "indicador=pct_evangelicos" in h
+    # de volta pelo endereço (só o hash muda: a página não recarrega, então espera o município aplicado)
+    abrir(pagina, site, h + "&municipio=3303302")
+    pagina.wait_for_function("() => document.getElementById('mapa-municipio').value === '3303302' && "
+                             "location.hash.includes('municipio=3303302') && estado.mapa._export")
+    assert pagina.input_value("#mapa-detalhe") == "areas" and pagina.input_value("#mapa-indicador") == "pct_evangelicos"

@@ -48,7 +48,7 @@ dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](
 | 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | **feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (`migracao_votos.py`, por local; fora da amostra 0,83 p.p. × swing 1,14 no Presidente RJ) |
 | 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
 | 24 | Manter `apuracao/partidos.py` (`EVENTOS`/`NOVOS`) a cada partido novo, fusão ou renomeação; conferir as datas para comparar com eleições municipais | a cada cadastro novo do TSE | contínuo — o teste com os cadastros reais acusa |
-| 25 | Mapa por área de ponderação (aba Mapas): malha das áreas pela fusão dos setores, camadas de voto e de perfil (religião e amostra do Censo) | a definir | proposto em 06/10/2026 (rodada 49; a área já é unidade do Perfil × voto) |
+| 25 | Mapa por área de ponderação (aba Mapas): malha das áreas pela fusão dos setores, camadas de voto e de perfil (religião e amostra do Censo) | a definir | **feito**: [RODADA_50](RODADA_50_2026-10-06_mapa_areas_ponderacao.md) (Detalhe "Áreas de ponderação", camadas voto e perfil) |
 
 ---
 
@@ -298,7 +298,7 @@ Registrado em 06/10/2026 (rodada 40).
 - **Eleições municipais:** a tabela usa a 1ª eleição GERAL em que cada mudança vale. Para comparar com 2020/2024,
   confirmar as datas de PMN → MOBILIZA, PMB → DEMOCRATA e PC do B → PCDOB.
 
-## 25. Mapa por área de ponderação
+## 25. Mapa por área de ponderação — FEITO (rodada 50)
 
 - **Contexto:** [RODADA_49](RODADA_49_2026-10-06_censo_amostra_e_universo.md). A área de ponderação já é unidade do
   Perfil × voto, a única com religião e os demais resultados da amostra do Censo 2022. O usuário pediu o mapa para

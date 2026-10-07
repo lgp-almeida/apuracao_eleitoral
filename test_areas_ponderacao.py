@@ -145,3 +145,49 @@ def test_api_por_area(cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPat
     d = site.get(f"/api/perfil/dispersao?{base}&x=pct_evangelicos").json()
     assert d["estatistica"]["n"] == len(d["pontos"]) >= 2
     assert len(site.get(f"/api/perfil/correlacoes?{base}").json()["correlacoes"]) == len(ap.PerfilVotoArea.indicadores())
+
+
+# --------------------------------------------------------------------------- mapa por área (TODO 25)
+def test_malha_das_areas_funde_os_setores(cache: Path) -> None:
+    geo = ap.malha("RJ", cache)
+    props = {f["properties"]["CD_AP"]: f["properties"] for f in geo["features"]}
+    assert set(props) == {AREA_RIO_1, AREA_RIO_2, AREA_NIT}  # 5 setores → 3 áreas
+    assert props[AREA_RIO_2]["NM_AP"] == "Área 002" and props[AREA_NIT]["CD_MUN"] == 3303302
+    assert (cache / ap.MALHA.format(uf="RJ")).exists() and ap.malha("RJ", cache) == geo  # 2ª vez: do cache
+
+
+def test_valores_do_mapa_por_area(pva: ap.PerfilVotoArea) -> None:
+    y = pf.Alvo(2024, 13, numero=CAND)
+    voto = {r["CD_BAIRRO"]: r["VOTO"] for r in pva.voto(y).iter_rows(named=True)}
+    d = ap.mapa(pva, 2024, "voto", cargo=13, metrica="pct_candidato", numero=CAND)
+    assert d["tipo"] == "sequencial" and d["unidade"] == "%" and d["metrica"] == "pct_candidato"
+    assert {a: i["valor"] for a, i in d["itens"].items()} == pytest.approx(voto)
+    assert d["itens"][AREA_RIO_2]["municipio"] == "Área 002 — Rio de Janeiro" and d["cobertura"]["areas"] == 3
+    p = ap.mapa(pva, 2024, "perfil", indicador="pct_evangelicos")
+    assert p["itens"][AREA_RIO_2]["valor"] == 40 and p["fonte_indicador"] == ap.FONTE_AMOSTRA and p["metrica"] is None
+    rio = ap.mapa(pva, 2024, "perfil", indicador="pct_evangelicos", municipio=3304557)
+    assert set(rio["itens"]) == {AREA_RIO_1, AREA_RIO_2} and rio["cobertura"]["areas"] == 2
+    with pytest.raises(ValueError):
+        ap.mapa(pva, 2024, "residuo", indicador="pct_evangelicos")  # por área: só voto e perfil
+
+
+def test_abstencao_por_area_soma_os_aptos(pva: ap.PerfilVotoArea) -> None:
+    from apuracao import mapa_locais as ml
+    loc = ml._participacao(pva, 2024, 13, 1, "abstencao_pct")
+    e = loc.filter(pl.col("CD_BAIRRO").is_in([ESCOLA_X, CIEP])).select("NUM", "DEN").sum().row(0)
+    d = ap.mapa(pva, 2024, "voto", cargo=13, metrica="abstencao_pct")
+    assert d["itens"][AREA_RIO_2]["valor"] == pytest.approx(100 * e[0] / e[1])  # Σ abstenções ÷ Σ aptos
+
+
+def test_api_do_mapa_por_area(cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (cache / "malhas" / "municipios_RJ.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": []}))
+    monkeypatch.setattr(br.ComparacaoBairros, "siglas", lambda self, ano: {55: "PSD"})
+    site = TestClient(create_app(tmp_path / "dados", "RJ", cache))
+    assert len(site.get("/geo/areas.geojson").json()["features"]) == 3
+    d = site.get(f"/api/mapa/areas?ano=2024&camada=voto&cargo=13&metrica=pct_candidato&numero={CAND}").json()
+    assert set(d["itens"]) <= {AREA_RIO_1, AREA_RIO_2, AREA_NIT} and d["itens"]
+    assert site.get("/api/mapa/areas?ano=2024&camada=perfil&indicador=pct_evangelicos").json()["itens"][AREA_NIT]["valor"] == 25
+    assert site.get("/api/mapa/areas?ano=2024&camada=perfil&indicador=xyz").status_code == 400
+    r = site.post("/api/exportar/mapa", json={"formato": "svg", "camada": "areas", "titulo": "t",
+                                              "cores": {AREA_RIO_1: "#ff0000"}, "legenda": [["#ff0000", "x"]]})
+    assert r.status_code == 200 and b"<svg" in r.content[:400]

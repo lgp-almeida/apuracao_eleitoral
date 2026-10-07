@@ -82,8 +82,9 @@ _AG_SETOR = f"{CENSO}/Agregados_por_Setores_Censitarios/Agregados_por_Setor_csv"
 _RENDA = f"{CENSO}/Agregados_por_Setores_Censitarios_Rendimento_do_Responsavel"
 _ENTORNO = f"{CENSO}/Agregados_por_Setores_Censitarios_Caracteristicas_urbanisticas_do_entorno_dos_domicilios/Agregados_por_Setor_csv"
 _AP = f"{CENSO}/Microdados_e_Areas_de_Ponderacao"
-_AP_PQ = ("ibge_censo2022/ap_composicao.parquet",)
-_AMOSTRA_PQ = ("ibge_censo2022/ap_amostra.parquet",)
+_MALHA_AP = "malhas/areas_ponderacao_{uf}.geojson"  # fusão dos setores pela composição (mapa por área)
+_AP_PQ = ("ibge_censo2022/ap_composicao.parquet", _MALHA_AP)
+_AMOSTRA_PQ = ("ibge_censo2022/ap_amostra.parquet", _MALHA_AP)
 FONTES = [
     Fonte("malha_municipios", "api", API_MALHA, "municipios_{uf}.geojson", "", "malhas", (),
           "mapas por município (todas as abas)"),
@@ -92,7 +93,7 @@ FONTES = [
     Fonte("malha_bairros", "fixo", f"{GEOFTP_CD2022}/bairros/shp/UF", "{uf}_bairros_CD2022.zip", "", "malhas",
           ("malhas/bairros_{uf}.geojson",), "mapas e comparação por bairro, Perfil × voto por bairro"),
     Fonte("malha_setores", "fixo", f"{GEOFTP_CD2022}/setores/shp/UF", "{uf}_setores_CD2022.zip", "", "ibge_censo2022",
-          _SETORES_PQ, "Perfil × voto e mapa por local (ligação setor → local)"),
+          (*_SETORES_PQ, _MALHA_AP), "Perfil × voto e mapa por local (ligação setor → local)"),
     Fonte("bairros_renda", "ftp", _RENDA, "Agregados_por_bairros_renda_responsavel_BR{versao}_csv.zip", "20260508",
           "ibge_censo2022", _BAIRROS_PQ, "Perfil × voto por bairro (renda)"),
     Fonte("bairros_basico", "ftp", _AG_BAIRRO, "Agregados_por_bairros_basico_BR{versao}.zip", "20260520",
@@ -327,7 +328,8 @@ def _geradores() -> dict[str, Callable[[str, Path], Any]]:
             "ibge_censo2022/censo_bairros_{uf}.parquet": pf.censo_por_bairro,
             "ibge_censo2022/censo_setores_{uf}.parquet": pfl.setores,
             "ibge_censo2022/ap_composicao.parquet": lambda uf, cache: ap.composicao(cache),  # nacionais
-            "ibge_censo2022/ap_amostra.parquet": lambda uf, cache: ap.amostra(cache)}
+            "ibge_censo2022/ap_amostra.parquet": lambda uf, cache: ap.amostra(cache),
+            _MALHA_AP: ap.malha}
 
 
 def _guardar(p: Path) -> Path | None:

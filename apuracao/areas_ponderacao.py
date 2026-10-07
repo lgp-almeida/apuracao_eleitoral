@@ -297,3 +297,97 @@ class PerfilVotoArea(pfl.PerfilVotoLocal):
         areas = self.local_area(anos[-1]).select(pl.col("CD_AP").unique())
         return (areas.join(self._amostra().select("CD_AP", "CD_MUN", "NM_MUN"), on="CD_AP", how="inner")
                 .group_by(pl.col("CD_MUN").cast(pl.Int64), "NM_MUN").len("BAIRROS").sort("NM_MUN"))
+
+
+# --------------------------------------------------------------------------
+# Mapa por área de ponderação (TODO 25, rodada 50)
+# --------------------------------------------------------------------------
+MALHA = "malhas/areas_ponderacao_{uf}.geojson"
+SIMPLIFICAR_GRAUS = 0.0006  # ~60 m; com 5 casas (~1 m) o RJ fica com ~1,5 MB e SP com ~6 MB (bairros RJ: 2,7 MB)
+CAMADAS_MAPA = {"voto": "Voto", "perfil": "Perfil (Censo e eleitorado)"}
+
+
+def malha(uf: str, cache: Path) -> dict[str, Any]:
+    """GeoJSON das áreas de ponderação da UF: fusão dos setores da malha do IBGE pela composição.
+    Propriedades: CD_AP, NM_AP, NM_MUN, CD_MUN. Cache: malhas/areas_ponderacao_<UF>.geojson."""
+    import json
+
+    destino = cache / MALHA.format(uf=uf.upper())
+    if destino.exists():
+        return json.loads(destino.read_text())
+    import geopandas as gpd
+
+    setores_zip = ibge.caminho("malha_setores", cache, uf)
+    g = gpd.read_file(f"zip://{setores_zip}", columns=["CD_SETOR"])
+    area_de = dict(composicao(cache).select("CD_SETOR", "CD_AP").iter_rows())
+    g["CD_AP"] = g["CD_SETOR"].astype(str).map(area_de)
+    g = g[g["CD_AP"].notna()].to_crs("EPSG:4326")
+    d = g[["CD_AP", "geometry"]].dissolve(by="CD_AP").reset_index()
+    import shapely
+    d["geometry"] = shapely.set_precision(d.geometry.simplify(SIMPLIFICAR_GRAUS, preserve_topology=True).values, 1e-5)
+    nomes = {a: (n, m) for a, n, m in amostra(cache).select("CD_AP", "NM_AP", "NM_MUN").iter_rows()}
+    d["NM_AP"] = [nomes.get(a, (f"Área {a[-3:]}", None))[0] for a in d["CD_AP"]]  # sem moradores: sem tabela
+    d["NM_MUN"] = [nomes.get(a, (None, None))[1] for a in d["CD_AP"]]
+    d["CD_MUN"] = [int(a[:7]) for a in d["CD_AP"]]
+    geo = json.loads(d.to_json(drop_id=True))
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destino.with_suffix(".geojson.tmp")
+    tmp.write_text(json.dumps(geo, ensure_ascii=False, separators=(",", ":")))
+    tmp.replace(destino)
+    return geo
+
+
+def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int = 1, metrica: str | None = None,
+         numero: int | None = None, indicador: str | None = None, municipio: int | None = None) -> dict[str, Any]:
+    """Valor por área de ponderação, no formato do mapa por bairro (`itens` por código da área).
+    "voto": as métricas do mapa por bairro (votos dos locais da área; abstenção/comparecimento somando os aptos);
+    "perfil": um indicador da unidade área (TSE, universo e amostra do Censo). ValueError = pedido inválido;
+    TseDataError = microdados ausentes."""
+    from apuracao import bairros as br
+    from apuracao import mapa_locais as ml
+
+    if camada not in CAMADAS_MAPA:
+        raise ValueError(f"camada deve ser uma de {sorted(CAMADAS_MAPA)}")
+    extra: dict[str, Any] = {}
+    if camada == "voto":
+        if metrica not in br.METRICAS:
+            raise ValueError(f"métrica indisponível por área: {metrica}. Use: {', '.join(br.METRICAS)}")
+        cargo_nome = br.CARGOS[cargo].title()
+        if metrica in br.PARTICIPACAO:
+            por_local = ml._participacao(pva, ano, cargo, turno, metrica)  # CD_BAIRRO = UNIDADE do local
+            df = (por_local.join(pva.local_area(ano).rename({"UNIDADE": "CD_BAIRRO"}), on="CD_BAIRRO", how="inner")
+                  .group_by("CD_AP").agg(pl.col("NUM").sum(), pl.col("DEN").sum())
+                  .select(pl.col("CD_AP").alias("CD_BAIRRO"),
+                          pl.when(pl.col("DEN") > 0).then(100 * pl.col("NUM") / pl.col("DEN")).alias("VALOR")))
+            rotulo = f"{br.METRICAS[metrica]} — {cargo_nome} {ano}"
+        else:
+            vb = pva._vb(ano, cargo, turno)
+            df = br.metrica(vb, cargo, metrica, numero)
+            rotulo = f"{br.METRICAS[metrica].replace('no bairro', 'na área')} — {cargo_nome} {ano}"
+            if numero is not None and metrica in ("pct_candidato", "votos_candidato"):
+                nome = vb.filter(pl.col("NR_VOTAVEL") == numero)["NM_VOTAVEL"].head(1).to_list()
+                rotulo = f"{br.METRICAS[metrica]} — nº {numero}{' ' + nome[0] if nome else ''} ({cargo_nome} {ano})"
+            if metrica == "vencedor":
+                extra["categorias"] = br.categorias(vb, cargo)
+        tipo = "categorico" if metrica == "vencedor" else "sequencial"
+        unidade = "%" if metrica.endswith("_pct") or metrica == "pct_candidato" else ""
+    else:
+        indicadores = pva.indicadores()
+        if indicador not in indicadores:
+            raise ValueError(f"indicador desconhecido: {indicador}")
+        df = pva.indicador(indicador, ano).select("CD_BAIRRO", pl.col("X").alias("VALOR"))
+        rotulo, tipo = f"{indicadores[indicador]['rotulo']} — por área de ponderação", "sequencial"
+        unidade = "%" if indicador.startswith("pct_") else ""
+        extra["fonte_indicador"] = indicadores[indicador]["fonte"]
+    com_local = pva.local_area(ano).select(pl.col("CD_AP").unique().alias("CD_BAIRRO"))
+    df = df.join(com_local, on="CD_BAIRRO", how="inner")  # só áreas com local de votação (as da UF)
+    if municipio is not None:
+        df = df.filter(pf.municipio_do_bairro() == municipio)
+        com_local = com_local.filter(pf.municipio_do_bairro() == municipio)
+    nomes = pva._nomes()
+    itens = {r["CD_BAIRRO"]: {"valor": r["VALOR"], "municipio": " — ".join(nomes.get(r["CD_BAIRRO"], ("?", "?"))),
+                              "rotulo": r.get("ROTULO")}
+             for r in df.drop_nulls("VALOR").iter_rows(named=True)}
+    return {"camada": camada, "metrica": metrica if camada == "voto" else None, "tipo": tipo, "rotulo": rotulo,
+            "unidade": unidade, "ano": ano, "itens": itens,
+            "cobertura": {"areas_com_dado": len(itens), "areas": com_local.height}, **extra}

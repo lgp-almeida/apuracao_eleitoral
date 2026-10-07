@@ -783,6 +783,7 @@ async function baixarMapa(qual, formato, msg) {
   const corpo = {
     formato, camada: m._export.camada, titulo: m._export.titulo, ano: m._export.ano ?? null,
     subtitulo: m._export.camada === "locais" ? `${estado.uf} · locais de votação (cadastro de ${m._export.ano}); área do ponto ∝ eleitorado`
+      : m._export.camada === "areas" ? `${estado.uf} · áreas de ponderação do Censo 2022 (IBGE)`
       : m._export.subtitulo ? `${m._export.subtitulo} — ${estado.uf} · bairros do IBGE`
       : `${cargoSel.selectedOptions[0]?.textContent || ""} — ${estado.uf} · ${amb}`,
     nome: `mapa ${aba} ${m._export.titulo}`, cores: m._export.cores, legenda: m._export.legenda,
@@ -1123,8 +1124,10 @@ function quebrasQuantis(valores, n = 5) {
 
 // `escala` (opcional) fixa as faixas de cor entre quadros da linha do tempo; a função devolve a escala usada
 async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, camada = "municipios") {
-  const geo = camada === "bairros" ? await malhaBairros() : await malha();
-  const idDe = (ft) => (camada === "bairros" ? ft.properties.CD_BAIRRO : ft.properties.codarea);
+  const poligonos = camada === "bairros" || camada === "areas";  // malhas finas: borda fina e contorno municipal
+  const geo = camada === "bairros" ? await malhaBairros() : camada === "areas" ? await malhaAreas() : await malha();
+  const idDe = (ft) => (camada === "bairros" ? ft.properties.CD_BAIRRO : camada === "areas" ? ft.properties.CD_AP
+    : ft.properties.codarea);
   if (mapa._camada) mapa.removeLayer(mapa._camada);
   if (mapa._contornos) { mapa.removeLayer(mapa._contornos); mapa._contornos = null; }
   const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);  // amarelo (menos) -> vermelho (mais)
@@ -1167,18 +1170,19 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
     style: (ft) => {
       const c = corDe(dados.itens[idDe(ft)]);
       coresExport[idDe(ft)] = c;
-      return { fillColor: c, fillOpacity: 0.85, color: cor("--superficie"), weight: camada === "bairros" ? 0.5 : 1 };
+      return { fillColor: c, fillOpacity: 0.85, color: cor("--superficie"), weight: poligonos ? 0.5 : 1 };
     },
     onEachFeature: (ft, layer) => {
       const it = dados.itens[idDe(ft)];
       const nome = it ? it.municipio
-        : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
+        : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}`
+        : camada === "areas" ? `${ft.properties.NM_AP} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
       layer.bindTooltip(() => { const d = el("div", {}, el("strong", {}, nome), el("br"), f(it)); return d; }, { sticky: true });
       layer.on("mouseover", () => layer.setStyle({ weight: 3, color: cor("--texto") }));
-      layer.on("mouseout", () => layer.setStyle({ weight: camada === "bairros" ? 0.5 : 1, color: cor("--superficie") }));
+      layer.on("mouseout", () => layer.setStyle({ weight: poligonos ? 0.5 : 1, color: cor("--superficie") }));
     },
   }).addTo(mapa);
-  if (camada === "bairros") {  // contorno dos municípios por cima: situa os bairros e os municípios sem malha
+  if (poligonos) {  // contorno dos municípios por cima: situa bairros/áreas e os municípios sem malha de bairros
     mapa._contornos = L.geoJSON(await malha(), {
       interactive: false, style: { fill: false, color: cor("--texto"), weight: 0.8, opacity: 0.45 },
     }).addTo(mapa);
@@ -1216,6 +1220,7 @@ async function atualizarMapa() {
   const legenda = document.getElementById("mapa-legenda");
   // por local, cada camada valida o que precisa (a métrica escondida não vale nas camadas sem ela)
   if (estado.detalhe === "locais") { await atualizarMapaLocais(cargo, legenda); return; }
+  if (estado.detalhe === "areas") { await atualizarMapaAreas(cargo, legenda); return; }
   let q = `api/mapa?cargo=${cargo}&metrica=${metrica}`;
   let numero = null;
   if (metrica.endsWith("_candidato")) {
@@ -1314,6 +1319,11 @@ async function malhaBairros() {
   return estado.geoBairros;
 }
 
+async function malhaAreas() {
+  if (!estado.geoAreas) estado.geoAreas = await api("geo/areas.geojson");
+  return estado.geoAreas;
+}
+
 function preencherCargos(opcoes, preferido) {
   const atual = String(preferido ?? cargoMapa.value);
   cargoMapa.replaceChildren(...opcoes.map(([val, t]) => el("option", { value: val }, t)));
@@ -1324,11 +1334,13 @@ function preencherCargos(opcoes, preferido) {
 async function prepararDetalhe(anoPreferido = null, cargoPreferido = null) {
   const bairros = detalheSel.value !== "municipios";  // bairros ou locais: microdados (anos e cargos do cache)
   const locais = detalheSel.value === "locais";
+  const areas = detalheSel.value === "areas";
   if (estado.detalhe === "municipios" && bairros) estado.cargoMun = cargoMapa.value;  // volta ao mesmo cargo depois
   estado.detalhe = detalheSel.value;
   document.getElementById("mapa-l-ano").hidden = !bairros;
   document.getElementById("bairros-nota").hidden = detalheSel.value !== "bairros";
   document.getElementById("locais-nota").hidden = !locais;
+  document.getElementById("areas-nota").hidden = !areas;
   document.getElementById("mapa-l-locais").hidden = locais;  // os pontos já são os locais
   if (locais && document.getElementById("mapa-locais").checked) {
     document.getElementById("mapa-locais").checked = false;
@@ -1336,7 +1348,7 @@ async function prepararDetalhe(anoPreferido = null, cargoPreferido = null) {
   }
   for (const op of metricaSel.options) op.disabled = bairros && !METRICAS_BAIRRO.includes(op.value);
   if (metricaSel.selectedOptions[0]?.disabled) metricaSel.value = "vencedor";
-  if (locais) await prepararLocais();
+  if (locais || areas) await prepararLocais(areas ? "area" : "local");
   ajustarControlesLocais();
   if (!bairros) { preencherCargos(OPCOES_CARGO_MUN, cargoPreferido ?? estado.cargoMun); return; }
   document.getElementById("linha-tempo").hidden = true;  // microdados = resultado final: sem linha do tempo
@@ -1393,20 +1405,30 @@ const indicadorSel = document.getElementById("mapa-indicador");
 const transfSel = document.getElementById("mapa-transf");
 const municipioLocSel = document.getElementById("mapa-municipio");
 
-async function prepararLocais() {
-  if (estado.locaisInfo) return;
-  estado.locaisInfo = await api("api/perfil/info?unidade=local");
-  const info = estado.locaisInfo;
+// indicadores e municípios da unidade do detalhe ("local" ou "area": a área tem a religião e a amostra do Censo)
+async function prepararLocais(unidade = "local") {
+  estado.mapaInfos ||= {};
+  if (!estado.mapaInfos[unidade]) estado.mapaInfos[unidade] = await api(`api/perfil/info?unidade=${unidade}`);
+  if (estado.indicadoresDe === unidade) return;
+  estado.indicadoresDe = unidade;
+  const info = estado.mapaInfos[unidade];
+  const indAtual = indicadorSel.value, munAtual = municipioLocSel.value;
   const grupos = {};
   for (const [k, d] of Object.entries(info.indicadores)) (grupos[d.fonte] = grupos[d.fonte] || []).push([k, d.rotulo]);
   indicadorSel.replaceChildren(...Object.entries(grupos).map(([fonte, itens]) =>
     el("optgroup", { label: fonte }, ...itens.map(([k, r]) => el("option", { value: k }, r)))));
+  if ([...indicadorSel.options].some((o) => o.value === indAtual)) indicadorSel.value = indAtual;
   municipioLocSel.replaceChildren(el("option", { value: "" }, `Todo o estado (${estado.uf})`),
     ...info.municipios.map((m) => el("option", { value: m.CD_MUN }, m.NM_MUN)));
+  if ([...municipioLocSel.options].some((o) => o.value === munAtual)) municipioLocSel.value = munAtual;
 }
 
+const CAMADAS_AREA = ["voto", "perfil"];  // por área de ponderação (TODO 25)
+
 function ajustarControlesLocais() {
-  const locais = estado.detalhe === "locais";
+  const locais = estado.detalhe === "locais" || estado.detalhe === "areas";  // os dois usam camada/indicador/município
+  for (const op of camadaSel.options) op.disabled = estado.detalhe === "areas" && !CAMADAS_AREA.includes(op.value);
+  if (camadaSel.selectedOptions[0]?.disabled) camadaSel.value = "voto";
   const camada = camadaSel.value;
   document.getElementById("mapa-l-camada").hidden = !locais;
   document.getElementById("mapa-l-municipio").hidden = !locais;
@@ -1476,6 +1498,51 @@ async function atualizarMapaLocais(cargo, legenda) {
       (!d.itens.length && camada === "residuo" ? ` Nenhum local com ${int(d.min_validos)} votos válidos ou mais ` +
         "para o resíduo (ele só usa locais com votos suficientes)." : "");
   } catch (e) {
+    for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
+    estado.mapa._export = null;
+    legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
+    nota.textContent = "";
+  }
+  gravarEnderecoMapa();
+}
+
+// ---------------------------------------------------------------- mapa por área de ponderação (TODO 25)
+// Polígonos = fusão dos setores do Censo pela composição do IBGE. Voto: soma dos locais de votação da área (o local
+// fica na área do setor que contém a sua coordenada); perfil: indicadores da unidade área (religião e amostra do Censo).
+async function atualizarMapaAreas(cargo, legenda) {
+  const nota = document.getElementById("areas-nota");
+  const camada = camadaSel.value;
+  const q = new URLSearchParams({ ano: anoBairrosSel.value, camada, cargo, turno: estado.turno || 1 });
+  if (camada === "voto") {
+    q.set("metrica", metricaSel.value);
+    if (metricaSel.value.endsWith("_candidato")) {
+      const num = numeroMapa.value.trim();
+      if (!/^\d+$/.test(num)) { legenda.replaceChildren(el("p", {}, "Informe o número de um candidato.")); return; }
+      q.set("numero", num);
+    }
+  } else q.set("indicador", indicadorSel.value);
+  const mun = municipioLocSel.value;
+  if (mun) q.set("municipio", mun);
+  legenda.replaceChildren(el("p", { class: "nota" }, "carregando as áreas…"));
+  const pedido = (estado.pedidoAreas = (estado.pedidoAreas || 0) + 1);  // mudanças seguidas: vale só a última
+  try {
+    const d = await api(`api/mapa/areas?${q}`);
+    if (pedido !== estado.pedidoAreas) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
+    await desenharMapa(estado.mapa, d, legenda, d.unidade === "%" ? "%" : "", null, "areas");
+    if (mun) {  // enquadra o município escolhido (as demais áreas ficam "sem dado")
+      const b = L.latLngBounds([]);
+      estado.mapa._camada.eachLayer((l) => { if (String(l.feature.properties.CD_MUN) === mun) b.extend(l.getBounds()); });
+      if (b.isValid()) estado.mapa.fitBounds(b, { padding: [10, 10] });
+    }
+    const c = d.cobertura;
+    const amostra = (d.fonte_indicador || "").includes("amostra");
+    nota.textContent = `Áreas de ponderação do Censo 2022 (IBGE): ${int(c.areas_com_dado)} de ${int(c.areas)} áreas ` +
+      "com local de votação têm valor; uma cidade pequena é uma área só. " +
+      (camada === "voto" ? "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor " +
+        "que contém a sua coordenada)." : `Fonte: ${d.fonte_indicador}.` +
+        (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : ""));
+  } catch (e) {
+    if (pedido !== estado.pedidoAreas) return;
     for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
     estado.mapa._export = null;
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
@@ -1566,7 +1633,7 @@ function enderecoMapa() {
   if (estado.detalhe !== "municipios") {
     q.set("detalhe", estado.detalhe);
     q.set("ano_bairros", anoBairrosSel.value);
-    if (estado.detalhe === "locais") {
+    if (estado.detalhe === "locais" || estado.detalhe === "areas") {
       q.set("camada", camadaSel.value);
       if (["perfil", "residuo"].includes(camadaSel.value)) q.set("indicador", indicadorSel.value);
       if (camadaSel.value === "transferencia") q.set("transf", transfSel.value);
@@ -1587,7 +1654,7 @@ function gravarEnderecoMapa() {
 async function aplicarEnderecoMapa(params) {
   const q = new URLSearchParams(params);
   const metrica = q.get("metrica");
-  detalheSel.value = ["bairros", "locais"].includes(q.get("detalhe")) ? q.get("detalhe") : "municipios";
+  detalheSel.value = ["bairros", "locais", "areas"].includes(q.get("detalhe")) ? q.get("detalhe") : "municipios";
   await prepararDetalhe(q.get("ano_bairros"), q.get("cargo"));  // cargos dependem do detalhe e do ano
   if (metrica && [...metricaSel.options].some((o) => o.value === metrica && !o.disabled)) metricaSel.value = metrica;
   const temOpcao = (sel, val) => val !== null && [...sel.options].some((o) => o.value === val);

@@ -89,8 +89,9 @@ METRICAS_TOTAIS = {
     "secoes_totalizadas_pct": ("PCT_SECOES_TOTALIZADAS", "Seções totalizadas (%)"),
 }
 # baixam microdados/malhas (centenas de MB) ou gastam muita CPU: com o site na rede, só da própria máquina
-ROTAS_PESADAS = ("/api/planilha", "/api/mapa/bairros", "/api/comparacao/bairros", "/api/perfil", "/api/exportar",
-                 "/geo/locais.geojson", "/geo/bairros.geojson", "/api/transferencia", "/api/mapa/locais")
+ROTAS_PESADAS = ("/api/planilha", "/api/mapa/bairros", "/api/mapa/areas", "/api/comparacao/bairros", "/api/perfil",
+                 "/api/exportar", "/geo/locais.geojson", "/geo/bairros.geojson", "/geo/areas.geojson", "/api/transferencia",
+                 "/api/mapa/locais")
 # também só da própria máquina: rotas que ALTERAM estado
 ROTAS_SO_LOCAL = ROTAS_PESADAS + ("/api/alertas/interesse",)
 METRICAS_CANDIDATO = {"pct_candidato": "% dos válidos do candidato", "votos_candidato": "Votos do candidato"}
@@ -114,7 +115,7 @@ class PedidoExportacao(BaseModel):
     """Corpo de POST /api/exportar/mapa (as cores e a legenda vêm prontas da página)."""
 
     formato: str = "png"
-    camada: str = Field("municipios", pattern="^(municipios|bairros|locais)$")
+    camada: str = Field("municipios", pattern="^(municipios|bairros|locais|areas)$")
     ano: int | None = None  # camada "locais": o cadastro de eleitorado do ano (coordenadas)
     nome: str = "mapa"
     titulo: str = ""
@@ -986,6 +987,35 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
             mapa_locais_cache[chave] = d
         return mapa_locais_cache[chave]
 
+    def malha_areas() -> dict[str, Any]:
+        if "malha_areas" not in geo_cache:
+            try:
+                geo_cache["malha_areas"] = ap.malha(uf, cache_dir)
+            except (v.TseDataError, requests.RequestException) as exc:
+                raise HTTPException(503, f"malha das áreas de ponderação indisponível: {exc}") from exc
+        return geo_cache["malha_areas"]
+
+    @app.get("/geo/areas.geojson")
+    def geo_areas() -> JSONResponse:
+        return JSONResponse(malha_areas())
+
+    mapa_areas_cache: dict[tuple, dict[str, Any]] = {}
+
+    @app.get("/api/mapa/areas")
+    def mapa_areas(ano: int, camada: str = "voto", cargo: int = 3, turno: int = 1, metrica: str | None = None,
+                   numero: int | None = None, indicador: str | None = None,
+                   municipio: int | None = None) -> dict[str, Any]:
+        """Valor por área de ponderação do Censo (TODO 25): voto (microdados somados pelos locais da área) ou um
+        indicador de perfil da unidade área (inclusive a religião e a amostra do Censo)."""
+        chave = (ano, camada, cargo, turno, metrica, numero, indicador, municipio)
+        if chave not in mapa_areas_cache:
+            d = _perfil(lambda: ap.mapa(perfis["area"], ano, camada, cargo, turno, metrica, numero, indicador,
+                                        municipio), "area")
+            if len(mapa_areas_cache) > 24:
+                mapa_areas_cache.clear()
+            mapa_areas_cache[chave] = d
+        return mapa_areas_cache[chave]
+
     @app.get("/api/mapa/bairros")
     def mapa_bairros(ano: int, cargo: int, metrica: str, numero: int | None = None, turno: int = 1) -> dict[str, Any]:
         """Valor por bairro do IBGE a partir dos votos de cada local de votação (microdados por seção)."""
@@ -1046,6 +1076,8 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
                  "properties": {"UNIDADE": r["UNIDADE"], "QT_ELEITORES": r["QT_ELEITORES"]}}
                 for r in loc.select("UNIDADE", "LAT", "LON", "QT_ELEITORES").iter_rows(named=True)]}
             chave, contornos = "UNIDADE", malha_municipios()
+        elif pedido.camada == "areas":
+            geo, chave, contornos = malha_areas(), "CD_AP", malha_municipios()
         else:
             geo, chave = malha_bairros(), "CD_BAIRRO"
             contornos = malha_municipios()
