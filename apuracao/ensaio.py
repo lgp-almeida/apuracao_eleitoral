@@ -286,7 +286,11 @@ class Gerador:
         d = self.rec.cargos[cargo]
         if eleicao != d.eleicao:
             return None
-        agora = self.relogio.agora() - timedelta(minutes=self.atraso_ea20_min)
+        # a fotografia é do minuto cheio: o carimbo (dg/hg) tem de ser o MESMO minuto. Com a hora exata, um EA20
+        # das 18:02:45 com o conteúdo das 18:02:00 parecia posterior à totalização anunciada às 18:02:33 e o coletor
+        # o aceitava como final (ensaio ES 2º turno, 07/10/2026: 11 abrangências presas em 99,99%). O TSE real
+        # gera o EA20 depois do conteúdo que ele mostra.
+        agora = (self.relogio.agora() - timedelta(minutes=self.atraso_ea20_min)).replace(second=0, microsecond=0)
         foto = self.rec.fotografia(cargo, agora)
         if abrangencia == "br":
             sec = foto["secoes_uf"].select(pl.col("TS", "TE", "ST", "EST", "C", "A").sum(), pl.col("DT").max())

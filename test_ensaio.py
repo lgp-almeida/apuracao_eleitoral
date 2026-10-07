@@ -163,3 +163,28 @@ def test_ensaio_com_o_atraso_do_tse(rec: en.Reconstituicao, tmp_path: Path) -> N
     fim = pl.read_parquet(tmp_path / "ultimo" / "totais.parquet").filter(pl.col("ABRANGENCIA") == "uf")
     assert fim["TOTALIZACAO_FINAL"].all()
     assert col.ciclo().arquivos_pedidos == 0
+
+
+def test_ea20_carimbado_com_o_minuto_da_fotografia(rec: en.Reconstituicao, tmp_path: Path) -> None:
+    """07/10/2026 (ensaio ES, 2º turno): seção totalizada aos 33 s de um minuto; o EA20 de 12 s depois trazia o
+    conteúdo do minuto cheio (sem ela) com o carimbo da hora exata, posterior ao anúncio — o coletor aceitava a
+    versão como a final e o município ficava preso. O carimbo é o do minuto da fotografia."""
+    from datetime import timedelta
+    secoes = rec.cargos[3].secoes.with_columns(
+        pl.when(pl.col("T") == H(18, 30)).then(pl.lit(H(18, 30) + timedelta(seconds=33))).otherwise(pl.col("T")).alias("T"))
+    votos = rec.cargos[3].votos.with_columns(
+        pl.when(pl.col("T") == H(18, 30)).then(pl.lit(H(18, 30) + timedelta(seconds=33))).otherwise(pl.col("T")).alias("T"))
+    d = rec.cargos[3]
+    r2 = en.Reconstituicao("RJ", {3: en.DadosCargo(3, d.eleicao, d.vagas, secoes, votos, d.candidatos, d.partidos)},
+                           rec.inicio, rec.fim)
+    rel = en.Relogio(r2.inicio, r2.fim)
+    g = en.Gerador(r2, rel, atraso_ea20_min=3)
+    rel.fixar(H(18, 33) + timedelta(seconds=45))  # o EA20 mostra 18:30:45 → fotografia de 18:30:00
+    doc = g.resultado(en.ELEICAO_ESTADUAL, 3, f"rj{NIT:05d}")
+    assert doc["hg"] == "18:30:00" and doc["s"]["st"] == "0"
+    col = Coletor(ClienteDivulgacao("simulado", sessao=en.SessaoEnsaio(g), limitador=LimitadorTaxa(1e9)), tmp_path)
+    assert col.ciclo().arquivos_antigos > 0  # anunciado 18:30:33 no EA15, EA20 de 18:30:00: pede de novo
+    rel.fixar(r2.fim + timedelta(minutes=5))
+    col.ciclo()
+    nit = pl.read_parquet(tmp_path / "ultimo" / "totais.parquet").filter(pl.col("CD_MUNICIPIO") == NIT)
+    assert nit["TOTALIZACAO_FINAL"].all()
