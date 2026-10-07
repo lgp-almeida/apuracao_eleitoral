@@ -49,6 +49,7 @@ dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](
 | 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
 | 24 | Manter `apuracao/partidos.py` (`EVENTOS`/`NOVOS`) a cada partido novo, fusão ou renomeação; conferir as datas para comparar com eleições municipais | a cada cadastro novo do TSE | contínuo — o teste com os cadastros reais acusa |
 | 25 | Mapa por área de ponderação (aba Mapas): malha das áreas pela fusão dos setores, camadas de voto e de perfil (religião e amostra do Censo) | a definir | **feito**: [RODADA_50](RODADA_50_2026-10-06_mapa_areas_ponderacao.md) (Detalhe "Áreas de ponderação", camadas voto e perfil) |
+| 26 | Prontidão do 2º turno: `verificar_prontidao.py --turno 2 --ufs todas --testes`, ensaio do 2º turno numa UF com 2º turno, códigos oficiais do `ele-c.json` e revisão do roteiro para várias UFs | antes de 25/10 (prontidão até ~20/10; códigos quando o TSE publicar) | pendente |
 
 ---
 
@@ -312,3 +313,30 @@ Registrado em 06/10/2026 (rodada 40).
   - **Exportação** PNG/SVG e os testes e2e (cores, dica, endereço `detalhe=areas`).
 - **Cuidado:** são poucas áreas por município pequeno (uma área = a cidade inteira). Avisar na legenda que os
   valores da amostra têm erro amostral (o IBGE publica os coeficientes de variação por área).
+
+---
+
+Registrado em 07/10/2026 (pedido do usuário: "Coloque no TODO a prontidão do 2º turno").
+
+## 26. Prontidão do 2º turno (25/10/2026)
+
+- **Contexto:** as ferramentas para o 2º turno em várias UFs estão prontas desde a
+  [RODADA_43](RODADA_43_2026-10-06_segundo_turno_varias_ufs.md) (pastas `<ambiente>_t2_<UF>`, prontidão e ensaio
+  por UF) e a [RODADA_44](RODADA_44_2026-10-06_margens_por_turno.md) (margem própria do 2º turno), mas ainda não
+  foram rodadas contra o resultado real do 1º turno de 2026.
+- **O quê:**
+  - **Prontidão:** `python verificar_prontidao.py --turno 2 --ufs todas --testes`. As UFs com 2º turno de
+    Governador vêm do resultado do 1º turno, e o acompanhamento é só delas. Corrigir o que faltar: cache, pastas,
+    porta, dependências.
+  - **Ensaio:** `python ensaio_apuracao.py --uf <UF> --turno 2` numa ou duas UFs que terão 2º turno (o RJ, se
+    tiver), com o site aberto e consultas simultâneas. Conferir o fim com o oficial.
+  - **Códigos oficiais:** quando o TSE publicar o `ele-c.json` do 2º turno, rodar
+    `coletar_resultados.py --ambiente oficial --uma-vez`, com `--uf` nas UFs com 2º turno, e confirmar que o
+    coletor acha Governador e Presidente no ciclo certo.
+  - **Roteiro:** atualizar o [ROTEIRO_NOITE_DA_ELEICAO.md](ROTEIRO_NOITE_DA_ELEICAO.md) para o 2º turno em várias
+    UFs: `site_apuracao.py --ufs ... --coletar` sob o `vigiar_site.py`, cópia em outro disco e boletim e alertas
+    por UF.
+- **Junto, opcional:** retomar o download dos microdados de onde parou (pendência da
+  [RODADA_54](RODADA_54_2026-10-07_cdn_versao_antiga.md)). A CDN fecha conexões no meio de arquivos de ~290 MB.
+- **Depois de 25/10 (já previsto em outros itens):** item 4b (refazer a margem do 2º turno com 2026) e o 2º turno
+  de 2026 nos itens 17b e 20, quando saírem os microdados.
