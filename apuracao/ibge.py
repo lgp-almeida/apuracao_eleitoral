@@ -130,6 +130,9 @@ FONTES = [
           "", "ibge_censo2022", _AP_PQ, "Perfil × voto por área de ponderação (setor → área)"),
     Fonte("ap_tabelas", "fixo", f"{_AP}/Areas_de_Ponderacao", "tabelas_xlsx.zip", "", "ibge_censo2022", _AMOSTRA_PQ,
           "Perfil × voto por área de ponderação (religião e demais resultados da amostra)"),
+    Fonte("ap_cv", "fixo", f"{_AP}/Documentacao/Áreas de ponderação", "Coeficientes de variação e de regressão.xlsx",
+          "", "ibge_censo2022", ("ibge_censo2022/ap_cv.parquet",),
+          "erro amostral das estimativas da amostra por área (CV pelo tamanho da estimativa, por UF)"),
 ]
 POR_CHAVE = {f.chave: f for f in FONTES}
 
@@ -329,7 +332,8 @@ def _geradores() -> dict[str, Callable[[str, Path], Any]]:
             "ibge_censo2022/censo_setores_{uf}.parquet": pfl.setores,
             "ibge_censo2022/ap_composicao.parquet": lambda uf, cache: ap.composicao(cache),  # nacionais
             "ibge_censo2022/ap_amostra.parquet": lambda uf, cache: ap.amostra(cache),
-            _MALHA_AP: ap.malha}
+            _MALHA_AP: ap.malha,
+            "ibge_censo2022/ap_cv.parquet": lambda uf, cache: ap.tabela_cv(cache)}
 
 
 def _guardar(p: Path) -> Path | None:

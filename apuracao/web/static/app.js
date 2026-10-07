@@ -788,7 +788,7 @@ async function baixarMapa(qual, formato, msg) {
       : `${cargoSel.selectedOptions[0]?.textContent || ""} — ${estado.uf} · ${amb}`,
     nome: `mapa ${aba} ${m._export.titulo}`, cores: m._export.cores, legenda: m._export.legenda,
     fundo: cor("--superficie"), texto: cor("--texto"), sem_dado: cor("--sem-dado"), contorno: cor("--superficie"),
-    extras: [`Link: ${location.origin}${location.pathname}${location.hash}`],
+    extras: [...(m._export.extras || []), `Link: ${location.origin}${location.pathname}${location.hash}`],
   };
   msg.textContent = " gerando…";
   try {
@@ -1176,20 +1176,31 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
     : dados.tipo === "divergente" && it.voto != null ? [el("br"), `voto ${pct2(it.voto)} · indicador ${int(Math.round(it.indicador * 100) / 100)}`]
     : null);
   const coresExport = {};
+  // erro amostral (indicadores da amostra do Censo por área): CV acima do limite = estimativa pouco confiável,
+  // mais clara e com borda tracejada; a dica dá o CV e a faixa do IBGE
+  const [cvCautela, cvFragil] = dados.cv_limites || [Infinity, Infinity];
+  const fragil = (it) => it && it.cv != null && it.cv > cvFragil;
+  const faixaCv = (x) => (x > cvFragil ? "pouco confiável" : x > cvCautela ? "use com cautela" : "boa precisão");
+  const estilo = (ft) => {
+    const it = dados.itens[idDe(ft)];
+    return fragil(it) ? { fillOpacity: 0.35, color: cor("--texto"), weight: 1, dashArray: "4 3" }
+      : { fillOpacity: 0.85, color: cor("--superficie"), weight: poligonos ? 0.5 : 1, dashArray: null };
+  };
   mapa._camada = L.geoJSON(geo, {
     style: (ft) => {
       const c = corDe(dados.itens[idDe(ft)]);
       coresExport[idDe(ft)] = c;
-      return { fillColor: c, fillOpacity: 0.85, color: cor("--superficie"), weight: poligonos ? 0.5 : 1 };
+      return { fillColor: c, ...estilo(ft) };
     },
     onEachFeature: (ft, layer) => {
       const it = dados.itens[idDe(ft)];
       const nome = it ? it.municipio
         : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}`
         : camada === "areas" ? `${ft.properties.NM_AP} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
-      layer.bindTooltip(() => el("div", {}, el("strong", {}, nome), el("br"), f(it), detalhe(it)), { sticky: true });
+      const cv = it && it.cv != null ? [el("br"), `CV ${it.cv.toFixed(1).replace(".", ",")}% — ${faixaCv(it.cv)}`] : null;
+      layer.bindTooltip(() => el("div", {}, el("strong", {}, nome), el("br"), f(it), detalhe(it), cv), { sticky: true });
       layer.on("mouseover", () => layer.setStyle({ weight: 3, color: cor("--texto") }));
-      layer.on("mouseout", () => layer.setStyle({ weight: poligonos ? 0.5 : 1, color: cor("--superficie") }));
+      layer.on("mouseout", () => layer.setStyle(estilo(ft)));
     },
   }).addTo(mapa);
   if (poligonos) {  // contorno dos municípios por cima: situa bairros/áreas e os municípios sem malha de bairros
@@ -1202,9 +1213,13 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
     mapa._enquadrado = true;
   }
   const titulo = dados.momento ? `${dados.rotulo} — às ${hora(dados.momento)}` : dados.rotulo;
-  mapa._export = { camada, cores: coresExport, legenda: itensLegenda, titulo };
+  const nFrageis = Object.values(dados.itens).filter(fragil).length;
+  const avisoCv = dados.cv_limites ? `Borda tracejada e cor mais clara: estimativa pouco confiável (CV acima de ` +
+    `${cvFragil}%; ${int(nFrageis)} áreas). Entre ${cvCautela}% e ${cvFragil}%: use com cautela (o CV está na dica).` : null;
+  mapa._export = { camada, cores: coresExport, legenda: itensLegenda, titulo, extras: avisoCv ? [avisoCv] : [] };
   legendaEl.replaceChildren(el("h4", {}, titulo),
-    ...itensLegenda.map(([c, t]) => el("div", {}, el("span", { class: "amostra", style: { background: c } }), t)));
+    ...itensLegenda.map(([c, t]) => el("div", {}, el("span", { class: "amostra", style: { background: c } }), t)),
+    avisoCv ? el("p", { class: "nota cv-aviso" }, avisoCv) : null);
   return escala;
 }
 
@@ -1566,7 +1581,9 @@ async function atualizarMapaAreas(cargo, legenda) {
     const amostra = (d.fonte_indicador || "").includes("amostra");
     nota.textContent = `Áreas de ponderação do Censo 2022 (IBGE): ${int(c.areas_com_dado)} de ${int(c.areas)} áreas ` +
       "com local de votação têm valor; uma cidade pequena é uma área só. " +
-      (camada === "perfil" ? `Fonte: ${d.fonte_indicador}.` + (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : "")
+      (camada === "perfil" ? `Fonte: ${d.fonte_indicador}.` + (amostra ? " Estimativa da amostra do Censo: tem erro amostral" +
+        (c.areas_cv_fragil != null ? ` — ${int(c.areas_cv_fragil)} áreas pouco confiáveis (CV > 30%) e ` +
+          `${int(c.areas_cv_cautela)} para usar com cautela (CV de 15% a 30%), pelos coeficientes do IBGE.` : ".") : "")
         : "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor que contém a sua " +
           "coordenada)." + (camada === "variacao" ? ` A área é a mesma nos dois anos (${d.ano_ref} e ${d.ano}).` : "") +
           (camada === "transferencia" ? " Inferência ecológica (padrão médio, não o voto de pessoas), feita por local e " +

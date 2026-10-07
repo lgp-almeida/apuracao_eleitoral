@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 from fastapi.testclient import TestClient
@@ -250,3 +251,47 @@ def test_destino_dos_eliminados_por_area(pva: ap.PerfilVotoArea, monkeypatch: py
     e = ap.mapa(pva, 2024, "transferencia", cargo=7, metrica="abst_extra", municipio=3304557)
     assert e["tipo"] == "divergente" and set(e["itens"]) == {AREA_RIO_1, AREA_RIO_2} and e["lados"] == ["1º turno", "2º turno"]
     assert e["itens"][AREA_RIO_1]["valor"] == pytest.approx(5) and e["itens"][AREA_RIO_1]["antes"] == 10
+
+
+
+# --------------------------------------------------------------------------- erro amostral (rodada 53)
+def test_ler_cv_da_planilha_do_ibge() -> None:
+    import openpyxl
+
+    from apuracao.ufs import UFS
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for nome in ["Brasil", "Região Sudeste", *UFS.values()]:  # Brasil e regiões ficam de fora
+        ws = wb.create_sheet(nome)
+        for r in (["Tabela - Coeficientes de regressão"], ["Pessoas", 4.0, -0.5], [],
+                  ["Tamanho da estimativa", "Coeficientes de variação (%)"], ["Pessoas", "Domicílios"],
+                  [100, 40.0, 38.0], [1000, 12.6, 12.0], [8000000, 0.2, -1], ["Fonte: IBGE"]):
+            ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    t = ap.ler_cv(buf.getvalue())
+    assert t["UF"].n_unique() == 27 and t.filter(pl.col("UF") == "RJ")["CV"].to_list() == [40.0, 12.6, 0.2]
+    wb.remove(wb["Acre"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    with pytest.raises(ValueError, match="AC"):
+        ap.ler_cv(buf.getvalue())
+
+
+def test_coeficiente_de_variacao_interpola_em_log() -> None:
+    tab = pl.DataFrame({"TAMANHO": [100.0, 10000.0], "CV": [40.0, 4.0]})  # b = −0,5
+    cv = ap.coeficiente_variacao([100, 1000, 25, 40000, 0, float("nan")], tab)
+    assert cv[0] == pytest.approx(40) and cv[1] == pytest.approx(40 / 10 ** 0.5)  # interpolado em log-log
+    assert cv[2] == pytest.approx(80) and cv[3] == pytest.approx(2)  # fora da tabela: a reta das pontas
+    assert np.isnan(cv[4]) and np.isnan(cv[5])  # estimativa zero ou sem dado: sem CV
+    assert [ap.faixa_cv(x) for x in (10, 15, 20, 31, None)] == ["boa", "boa", "cautela", "fragil", None]
+
+
+def test_cv_no_mapa_por_area(pva: ap.PerfilVotoArea) -> None:
+    cv = dict(pva.cv("pct_evangelicos").iter_rows())
+    assert cv[AREA_RIO_1] > 30 and cv[AREA_RIO_2] < 15  # 50 × 4.000 evangélicos estimados
+    assert pva.cv("renda_pc_media").is_empty() and pva.cv("pct_apartamentos").is_empty()  # sem contagem: sem CV
+    d = ap.mapa(pva, 2024, "perfil", indicador="pct_evangelicos")
+    assert d["cv_limites"] == [15, 30] and d["itens"][AREA_RIO_1]["cv"] == pytest.approx(cv[AREA_RIO_1])
+    assert d["cobertura"]["areas_cv_fragil"] == 1 and d["cobertura"]["areas_cv_cautela"] == 0
+    assert "cv_limites" not in ap.mapa(pva, 2024, "perfil", indicador="pct_superior")  # TSE: sem erro amostral

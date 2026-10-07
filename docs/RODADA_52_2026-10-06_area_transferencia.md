@@ -66,5 +66,4 @@ No Rio, as 209 áreas têm o mesmo destino dos eliminados (34,9%), como esperado
 
 ## Pendências
 
-1. **Erro amostral:** marcar no mapa as áreas com coeficiente de variação alto nos indicadores da amostra (vinda da
-   rodada 50).
+1. **Erro amostral:** feito na [RODADA_53](RODADA_53_2026-10-06_erro_amostral_areas.md).

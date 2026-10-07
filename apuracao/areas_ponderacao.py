@@ -145,7 +145,8 @@ def indicadores_amostra(tabelas: dict[str, pl.DataFrame]) -> pl.DataFrame:
             tab, cols = it.denominador
             den = tabelas[tab].select("CD_AP", sum(pl.col(f"c{i}") for i in cols).alias("_D"))
             col = num.join(den, on="CD_AP", how="left").select(
-                "CD_AP", pl.when(pl.col("_D") > 0).then(100 * pl.col("_N") / pl.col("_D")).alias(chave))
+                "CD_AP", pl.when(pl.col("_D") > 0).then(100 * pl.col("_N") / pl.col("_D")).alias(chave),
+                pl.col("_N").alias(f"N_{chave}"))  # a contagem estimada: dá o erro amostral (`cv`)
         out = out.join(col, on="CD_AP", how="left")
     return out
 
@@ -204,7 +205,8 @@ def amostra(cache: Path) -> pl.DataFrame:
     destino = cache / AMOSTRA_PQ
     if destino.exists():
         df = pl.read_parquet(destino)
-        if set(AMOSTRA) <= set(df.columns):
+        contagens = {f"N_{k}" for k, it in AMOSTRA.items() if it.denominador is not None}
+        if set(AMOSTRA) | contagens <= set(df.columns):
             return df
         logger.info("%s sem indicadores novos: refazendo", destino.name)
     zp = ibge.caminho("ap_tabelas", cache, "BR")
@@ -217,6 +219,75 @@ def amostra(cache: Path) -> pl.DataFrame:
         logger.warning("amostra por área: %s/%s soma %.0f × Brasil %.0f (%+.2f%%)", r["TABELA"], r["COLUNA"],
                        r["SOMA_AREAS"], r["BRASIL"], r["DIF_PCT"])
     return _gravar(indicadores_amostra(tabelas), destino)
+
+
+# --------------------------------------------------------------------------
+# Erro amostral: coeficiente de variação (CV) pelo tamanho da estimativa (rodada 53)
+# --------------------------------------------------------------------------
+CV_PATH = "ibge_censo2022/ap_cv.parquet"
+CV_CAUTELA, CV_FRAGIL = 15.0, 30.0  # faixas do IBGE: até 15% boa; 15–30% usar com cautela; acima de 30% pouco confiável
+
+
+def ler_cv(conteudo: bytes) -> pl.DataFrame:
+    """'Coeficientes de variação e de regressão.xlsx' → UF (sigla), TAMANHO, CV (% — estimativas de pessoas).
+    Uma aba por UF (as do Brasil e das regiões ficam de fora); -1 = "não existe estimativa desse tamanho"."""
+    import openpyxl
+
+    from apuracao.ufs import UFS
+    sigla = {nome: uf for uf, nome in UFS.items()}
+    wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True)
+    linhas = []
+    for ws in wb.worksheets:
+        if ws.title not in sigla:
+            continue
+        na_tabela = False
+        for r in ws.iter_rows(values_only=True):
+            c = [x for x in r if x is not None]
+            if c[:2] == ["Pessoas", "Domicílios"]:
+                na_tabela = True  # cabeçalho da tabela de CV por tamanho da estimativa
+            elif na_tabela and len(c) >= 2 and isinstance(c[0], (int, float)) and isinstance(c[1], (int, float)):
+                if c[1] > 0:
+                    linhas.append((sigla[ws.title], float(c[0]), float(c[1])))
+            elif na_tabela and c:
+                na_tabela = False
+    faltam = set(UFS) - {u for u, _, _ in linhas}
+    if faltam:
+        raise ValueError(f"coeficientes de variação: abas sem tabela no IBGE: {', '.join(sorted(faltam))}")
+    return pl.DataFrame(linhas, schema={"UF": pl.String, "TAMANHO": pl.Float64, "CV": pl.Float64}, orient="row")
+
+
+def tabela_cv(cache: Path) -> pl.DataFrame:
+    """CV por tamanho da estimativa e UF (nacional). Cache: ibge_censo2022/ap_cv.parquet."""
+    destino = cache / CV_PATH
+    if destino.exists():
+        return pl.read_parquet(destino)
+    return _gravar(ler_cv(ibge.caminho("ap_cv", cache, "BR").read_bytes()), destino)
+
+
+def coeficiente_variacao(contagens: Any, tabela: pl.DataFrame) -> Any:
+    """CV (%) de estimativas de pessoas pela tabela de UMA UF: interpolação linear em log-log (o IBGE ajusta
+    ln CV = a + b·ln tamanho, b ≈ −0,5); fora da tabela, a reta dos dois pontos da ponta. Contagem ≤ 0 → nulo
+    (estimativa zero não tem CV)."""
+    import numpy as np
+
+    t = tabela.sort("TAMANHO")
+    lx, ly = np.log(t["TAMANHO"].to_numpy()), np.log(t["CV"].to_numpy())
+    x = np.asarray(contagens, dtype=float)
+    out = np.full(x.shape, np.nan)
+    ok = np.isfinite(x) & (x > 0)
+    lv = np.log(x[ok])
+    y = np.interp(lv, lx, ly)
+    baixo, alto = lv < lx[0], lv > lx[-1]
+    y[baixo] = ly[0] + (lv[baixo] - lx[0]) * (ly[1] - ly[0]) / (lx[1] - lx[0])
+    y[alto] = ly[-1] + (lv[alto] - lx[-1]) * (ly[-1] - ly[-2]) / (lx[-1] - lx[-2])
+    out[ok] = np.exp(y)
+    return out
+
+
+def faixa_cv(cv: float | None) -> str | None:
+    if cv is None or cv != cv:  # nulo ou NaN
+        return None
+    return "boa" if cv <= CV_CAUTELA else "cautela" if cv <= CV_FRAGIL else "fragil"
 
 
 # --------------------------------------------------------------------------
@@ -287,6 +358,18 @@ class PerfilVotoArea(pfl.PerfilVotoLocal):
                 am = self._amostra().drop("CD_MUN", "NM_MUN", "NM_AP").rename({"CD_AP": "CD_BAIRRO"})
                 self._censo_ap = universo.join(am, on="CD_BAIRRO", how="left")
             return self._censo_ap
+
+    def cv(self, indicador: str) -> pl.DataFrame:
+        """CD_BAIRRO (= área), CV (%) do indicador da amostra: o do numerador (pessoas com a característica na
+        área), pela tabela do IBGE da UF. Vazio para indicador sem contagem (universo, TSE, renda em R$)."""
+        it = AMOSTRA.get(indicador)
+        if it is None or it.denominador is None:
+            return pl.DataFrame(schema={"CD_BAIRRO": pl.String, "CV": pl.Float64})
+        uf = self.b.uf.upper()
+        tab = self.b._carregar(("ap_cv",), lambda: tabela_cv(self.b.cache)).filter(pl.col("UF") == uf)
+        am = self._amostra().filter(pl.col("CD_AP").str.starts_with(str(ibge.UF_IBGE[uf])))
+        return pl.DataFrame({"CD_BAIRRO": am["CD_AP"],
+                             "CV": coeficiente_variacao(am[f"N_{indicador}"].to_numpy(), tab)}).fill_nan(None)
 
     def participacao(self, ano: int, cargo: int, turno: int, metrica: str) -> pl.DataFrame:
         """CD_BAIRRO (= área), VALOR, NUM, DEN: abstenção ou comparecimento somando os aptos dos locais da área."""
@@ -416,6 +499,10 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
         rotulo, tipo = f"{indicadores[indicador]['rotulo']} — por área de ponderação", "sequencial"
         unidade = "%" if indicador.startswith("pct_") else ""
         extra["fonte_indicador"] = indicadores[indicador]["fonte"]
+        cv = pva.cv(indicador)
+        if cv.height:  # indicador da amostra: o erro amostral de cada área vai junto (a página marca as frágeis)
+            df = df.join(cv, on="CD_BAIRRO", how="left")
+            extra["cv_limites"] = [CV_CAUTELA, CV_FRAGIL]
     elif camada == "variacao":
         ano_ref = ano_ref or ano - 4
         if ano_ref >= ano:
@@ -445,10 +532,13 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
         df = df.filter(pf.municipio_do_bairro() == municipio)
         com_local = com_local.filter(pf.municipio_do_bairro() == municipio)
     nomes = pva._nomes()
-    extras = [c for c in ("VOTO", "INDICADOR", "ANTES", "DEPOIS") if c in df.columns]  # para a dica do mapa
+    extras = [c for c in ("VOTO", "INDICADOR", "ANTES", "DEPOIS", "CV") if c in df.columns]  # para a dica do mapa
     itens = {r["CD_BAIRRO"]: {"valor": r["VALOR"], "municipio": " — ".join(nomes.get(r["CD_BAIRRO"], ("?", "?"))),
                               "rotulo": r.get("ROTULO"), **{c.lower(): r[c] for c in extras}}
              for r in df.drop_nulls("VALOR").iter_rows(named=True)}
+    cobertura = {"areas_com_dado": len(itens), "areas": com_local.height}
+    if "CV" in df.columns:
+        cobertura["areas_cv_fragil"] = sum(1 for i in itens.values() if faixa_cv(i.get("cv")) == "fragil")
+        cobertura["areas_cv_cautela"] = sum(1 for i in itens.values() if faixa_cv(i.get("cv")) == "cautela")
     return {"camada": camada, "metrica": metrica if camada == "voto" else None, "tipo": tipo, "rotulo": rotulo,
-            "unidade": unidade, "ano": ano, "itens": itens,
-            "cobertura": {"areas_com_dado": len(itens), "areas": com_local.height}, **extra}
+            "unidade": unidade, "ano": ano, "itens": itens, "cobertura": cobertura, **extra}

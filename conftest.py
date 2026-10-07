@@ -471,10 +471,17 @@ def escrever_areas(cache: Path) -> None:
                   "CD_MUN": [int(a[:7]) for a in AREAS_SETORES.values()]}).write_parquet(pasta / "ap_composicao.parquet")
     # % de evangélicos: 10 (Rio 1), 40 (Rio 2), 25 (Niterói); os demais indicadores da amostra = 50
     evang = {AREA_RIO_1: 10.0, AREA_RIO_2: 40.0, AREA_NIT: 25.0}
+    # contagem estimada (o numerador) de cada indicador da amostra: dá o erro amostral; a área 001 do Rio tem só
+    # 50 evangélicos estimados → CV acima de 30% pela tabela abaixo (estimativa pouco confiável)
+    contagem = {AREA_RIO_1: 50.0, AREA_RIO_2: 4000.0, AREA_NIT: 2500.0}
     linhas = [{"CD_AP": a, "CD_MUN": int(a[:7]), "NM_MUN": "Rio de Janeiro" if a.startswith("3304557") else "Niterói",
-               "NM_AP": f"Área {a[-3:]}", **{k: (evang[a] if k == "pct_evangelicos" else 50.0) for k in ap.AMOSTRA}}
+               "NM_AP": f"Área {a[-3:]}", **{k: (evang[a] if k == "pct_evangelicos" else 50.0) for k in ap.AMOSTRA},
+               **{f"N_{k}": contagem[a] for k, it in ap.AMOSTRA.items() if it.denominador is not None}}
               for a in evang]
     pl.DataFrame(linhas).write_parquet(pasta / "ap_amostra.parquet")
+    # CV (%) pelo tamanho da estimativa, como na planilha do IBGE (RJ): ~ 400 / √tamanho
+    pl.DataFrame({"UF": ["RJ"] * 3, "TAMANHO": [100.0, 1000.0, 10000.0], "CV": [40.0, 12.65, 4.0]}).write_parquet(
+        pasta / "ap_cv.parquet")
 
 
 def escrever_setores(cache: Path) -> None:

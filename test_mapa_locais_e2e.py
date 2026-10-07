@@ -215,3 +215,22 @@ def test_area_destino_dos_eliminados(pagina, site) -> None:
         assert "camada=transferencia" in h and "transf=elim_para_a" in h and "detalhe=areas" in h
     finally:
         pagina.unroute("**/api/mapa/areas?*camada=transferencia*")
+
+
+def test_area_com_erro_amostral_alto_fica_marcada(pagina, site) -> None:
+    """Rodada 53: indicador da amostra por área — a área com CV > 30% (50 evangélicos estimados) fica mais clara e
+    tracejada; a legenda explica e a dica dá o CV."""
+    abrir(pagina, site, f"{AREAS}&camada=perfil&indicador=pct_evangelicos")
+    pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
+                             "estado.mapa._export.titulo.includes('evangélicos')")
+    tracejadas = pagina.evaluate("estado.mapa._camada.getLayers().filter(l => l.options.dashArray)"
+                                 ".map(l => l.feature.properties.CD_AP)")
+    assert tracejadas == ["3304557001"]
+    assert "pouco confiável" in pagina.inner_text("#mapa-legenda") and "1 áreas" in pagina.inner_text("#mapa-legenda")
+    assert "pouco confiáveis" in pagina.inner_text("#areas-nota")
+    assert pagina.evaluate("estado.mapa._export.extras.length") == 1  # o aviso vai junto na exportação
+    # indicador do TSE (sem amostra): nenhuma marcação
+    pagina.select_option("#mapa-indicador", "pct_superior")
+    pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('superior')")
+    assert pagina.evaluate("estado.mapa._camada.getLayers().filter(l => l.options.dashArray).length") == 0
+    assert "pouco confiável" not in pagina.inner_text("#mapa-legenda")
