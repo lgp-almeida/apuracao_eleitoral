@@ -67,6 +67,7 @@ from apuracao import projecao_cadeiras as pcad
 from apuracao import transferencia as tf
 from apuracao import comparacao as cp
 from apuracao import perfil as pf
+from apuracao import areas_ponderacao as ap
 from apuracao import perfil_local as pfl
 from apuracao.web import exportar as ex
 from apuracao.divulgacao import modelo as m
@@ -879,10 +880,12 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
                                        "b": r["VALOR_B"]} for r in df.iter_rows(named=True)},
         }
 
-    perfis = {"bairro": pf.PerfilVoto(comp_bairros), "local": pfl.PerfilVotoLocal(comp_bairros)}
+    perfis = {"bairro": pf.PerfilVoto(comp_bairros), "local": pfl.PerfilVotoLocal(comp_bairros),
+              "area": ap.PerfilVotoArea(comp_bairros)}
 
     def _pv(unidade: str) -> pf.PerfilVoto:
-        """Unidade de análise: "bairro" (malha de bairros do IBGE) ou "local" (local de votação, estado todo)."""
+        """Unidade de análise: "bairro" (malha de bairros do IBGE), "local" (local de votação, estado todo) ou
+        "area" (área de ponderação do Censo: a única com religião e os demais resultados da amostra)."""
         if unidade not in perfis:
             raise HTTPException(400, f"unidade deve ser uma de {sorted(perfis)}")
         return perfis[unidade]

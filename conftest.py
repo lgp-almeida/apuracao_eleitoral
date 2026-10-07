@@ -450,11 +450,40 @@ DEMOGRAFIA_SETORES = {"330455705000001": (1000, 520, 100, 150, 300), "3304557050
                       "330330205000099": (50, 25, 10, 5, 10)}
 
 
+# catálogo de contagens (apuracao.censo, rodada 49): N = fração × D, D = 100 em todo indicador; o setor do CIEP
+# tem sigilo SÓ na alfabetização. CD_BAIRRO = o bairro da malha sintética em que o centro do setor cai
+CATALOGO_SETORES = {"330455705000001": (0.9, BAIRRO_A), "330455705000002": (0.5, BAIRRO_B),
+                    "330455705000003": (0.2, BAIRRO_B), "330330205000001": (0.6, None), "330330205000099": (0.1, None)}
+# áreas de ponderação sintéticas: Pedro II sozinho na área 001 do Rio; Escola X e CIEP na 002; Niterói numa só
+AREA_RIO_1, AREA_RIO_2, AREA_NIT = "3304557001", "3304557002", "3303302001"
+AREAS_SETORES = {"330455705000001": AREA_RIO_1, "330455705000002": AREA_RIO_2, "330455705000003": AREA_RIO_2,
+                 "330330205000001": AREA_NIT, "330330205000099": AREA_NIT}
+
+
+def escrever_areas(cache: Path) -> None:
+    """ap_composicao.parquet e ap_amostra.parquet (o que `areas_ponderacao` gravaria)."""
+    import polars as pl
+
+    from apuracao import areas_ponderacao as ap
+    pasta = cache / "ibge_censo2022"
+    pasta.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"CD_SETOR": list(AREAS_SETORES), "CD_AP": list(AREAS_SETORES.values()),
+                  "CD_MUN": [int(a[:7]) for a in AREAS_SETORES.values()]}).write_parquet(pasta / "ap_composicao.parquet")
+    # % de evangélicos: 10 (Rio 1), 40 (Rio 2), 25 (Niterói); os demais indicadores da amostra = 50
+    evang = {AREA_RIO_1: 10.0, AREA_RIO_2: 40.0, AREA_NIT: 25.0}
+    linhas = [{"CD_AP": a, "CD_MUN": int(a[:7]), "NM_MUN": "Rio de Janeiro" if a.startswith("3304557") else "Niterói",
+               "NM_AP": f"Área {a[-3:]}", **{k: (evang[a] if k == "pct_evangelicos" else 50.0) for k in ap.AMOSTRA}}
+              for a in evang]
+    pl.DataFrame(linhas).write_parquet(pasta / "ap_amostra.parquet")
+
+
 def escrever_setores(cache: Path) -> None:
     """censo_setores_RJ.parquet (o que `perfil_local.setores` gravaria), a malha em shapefile (para o
     método "contém") e o mapa TSE → IBGE dos municípios (para `perfil_local.locais`)."""
     import geopandas as gpd
     import polars as pl
+
+    from apuracao.censo import INDICADORES as INDICADORES_CATALOGO
     from shapely.geometry import box
 
     pasta = cache / "ibge_censo2022"
@@ -467,8 +496,12 @@ def escrever_setores(cache: Path) -> None:
                        **{k: (None if x is None else float(x)) for k, x in zip(("BRANCOS", "PRETOS", "AMARELOS", "PARDOS",
                                                                                 "INDIGENAS"), cor)},
                        **{k: (None if x is None else float(x)) for k, x in zip(
-                           ("MORADORES_DEM", "MULHERES", "IDADE_0_14", "IDADE_15_24", "IDADE_60_MAIS"), DEMOGRAFIA_SETORES[cd])}})
-    pl.DataFrame(linhas).write_parquet(pasta / "censo_setores_RJ.parquet")
+                           ("MORADORES_DEM", "MULHERES", "IDADE_0_14", "IDADE_15_24", "IDADE_60_MAIS"), DEMOGRAFIA_SETORES[cd])},
+                       "CD_BAIRRO": CATALOGO_SETORES[cd][1],
+                       **{f"{x}_{k}": (None if cd == "330455705000003" and k == "pct_alfabetizados"
+                                       else (100.0 * CATALOGO_SETORES[cd][0] if x == "N" else 100.0))
+                          for k in INDICADORES_CATALOGO for x in ("N", "D")}})
+    pl.DataFrame(linhas, schema_overrides={"CD_BAIRRO": pl.String}).write_parquet(pasta / "censo_setores_RJ.parquet")
     d = 0.001  # ~110 m para cada lado
     g = gpd.GeoDataFrame({"CD_SETOR": [x[0] for x in SETORES]},
                          geometry=[box(x[3] - d, x[2] - d, x[3] + d, x[2] + d) for x in SETORES], crs="EPSG:4326")
@@ -529,6 +562,7 @@ def site(tmp_path_factory: pytest.TempPathFactory):
     (cache / "malhas" / "ufs_BR.geojson").write_text(json.dumps(ufs))
     escrever_bairros(cache)
     escrever_setores(cache)
+    escrever_areas(cache)
 
     fake = FakeTSE()
     gov = fake._doc("rj-c0003-e021272-u.json")["carg"][0]

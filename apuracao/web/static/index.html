@@ -330,6 +330,7 @@
             <select id="pf-unidade">
               <option value="bairro">Bairros do IBGE (31 municípios)</option>
               <option value="local">Locais de votação (estado inteiro)</option>
+              <option value="area">Áreas de ponderação do IBGE (estado inteiro; religião e amostra do Censo)</option>
             </select>
           </label>
           <label>Município <select id="pf-municipio"><option value="">Todos com bairros</option></select></label>
@@ -338,6 +339,10 @@
         </fieldset>
         <button type="submit">Analisar</button>
       </form>
+      <p id="pf-nota-area" class="nota" hidden>Área de ponderação: a unidade em que o IBGE publica os resultados da
+        <strong>amostra</strong> do Censo 2022 (religião, instrução, renda per capita, trabalho, internet, migração,
+        deslocamento) — estimativas com erro amostral, em áreas de ~10 mil pessoas (cidade pequena = uma área). O voto
+        é o dos locais de votação dentro da área; os demais indicadores somam os setores da área.</p>
       <p class="nota">
         <button type="button" id="pf-copiar" class="link">Copiar link desta análise</button>
         <span id="pf-copiar-msg" aria-live="polite"></span>

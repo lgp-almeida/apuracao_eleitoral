@@ -2267,8 +2267,12 @@ const pf = (id) => document.getElementById(`pf-${id}`);
 estado.pf = { info: null, listas: {}, feito: false, dados: null, pedido: 0 };
 
 const REG_PADRAO = ["pct_superior", "renda_media", "pct_pretos_pardos", "pct_60_mais"];
-const ehLocal = () => pf("unidade").value === "local";
-const nomeUnidade = (plural = true) => (ehLocal() ? (plural ? "locais" : "local") : (plural ? "bairros" : "bairro"));
+// unidade de análise: bairro (malha de bairros), local de votação ou área de ponderação (estas duas: estado inteiro)
+const UNIDADES_PF = { bairro: ["bairro", "bairros"], local: ["local", "locais"], area: ["área", "áreas"] };
+const unidadePf = () => (pf("unidade").value in UNIDADES_PF ? pf("unidade").value : "bairro");
+const ehLocal = () => unidadePf() !== "bairro";  // estado inteiro (local ou área)
+const nomeUnidade = (plural = true) => UNIDADES_PF[unidadePf()][plural ? 1 : 0];
+const NomeUnidade = (plural = true) => nomeUnidade(plural).replace(/^./, (c) => c.toUpperCase());
 
 // info da unidade escolhida (bairro ou local): municípios e indicadores mudam com ela
 async function carregarInfoPerfil() {
@@ -2276,6 +2280,7 @@ async function carregarInfoPerfil() {
   estado.pf.infos ||= {};
   if (!estado.pf.infos[u]) estado.pf.infos[u] = await api(`api/perfil/info?unidade=${u}`);
   estado.pf.info = estado.pf.infos[u];
+  pf("nota-area").hidden = u !== "area";
   const info = estado.pf.info;
   const xAtual = pf("x").value, munAtual = pf("municipio").value;
   const grupos = {};
@@ -2401,7 +2406,7 @@ function enderecoPerfil() {
     if (pf("x-tipo").value === "partido") q.set("x_partido", pf("x-partido").value);
     else q.set("x_numero", numeroPerfil("x-"));
   }
-  if (ehLocal()) q.set("unidade", "local");
+  if (ehLocal()) q.set("unidade", unidadePf());
   if (pf("municipio").value) q.set("municipio", pf("municipio").value);
   q.set("min_validos", pf("min").value || "0");
   if (pf("ponderar").checked) q.set("ponderar", "true");
@@ -2414,7 +2419,7 @@ async function aplicarEnderecoPerfil(params) {
   estado.pf.feito = true;  // o endereço manda; nada de análise padrão por cima
   mostrarAba("perfil");
   const q = new URLSearchParams(params);
-  pf("unidade").value = q.get("unidade") === "local" ? "local" : "bairro";
+  pf("unidade").value = q.get("unidade") in UNIDADES_PF ? q.get("unidade") : "bairro";
   if (q.get("reg")) estado.pf.reg = q.get("reg").split(",").filter(Boolean);
   await iniciarPerfil();
   const def = (id, k) => { if (q.get(k) !== null) pf(id).value = q.get(k); };
@@ -2481,7 +2486,7 @@ async function analisarPerfil() {
   const xk = params.get("x");
   const unidadeX = xk === "voto" || !INDICADOR_FMT[xk] ? "p.p." : xk.startsWith("renda") ? "R$" : "unidade";
   pf("fichas").replaceChildren(
-    ficha(`${ehLocal() ? "Locais" : "Bairros"} na análise`, int(e.n) + (d.ponderado ? ` (n efetivo ${int(Math.round(e.n_efetivo || 0))})` : "")),
+    ficha(`${NomeUnidade()} na análise`, int(e.n) + (d.ponderado ? ` (n efetivo ${int(Math.round(e.n_efetivo || 0))})` : "")),
     ficha("Pearson r", e.pearson === null ? "—" : `${fmtR(e.pearson)} (${forca(e.pearson)})`),
     ficha("IC 95% de r", e.ic95 ? `${fmtR(e.ic95[0])} a ${fmtR(e.ic95[1])}` : "—"),
     ficha("Spearman ρ", fmtR(e.spearman)),
@@ -2500,9 +2505,9 @@ async function analisarPerfil() {
     el("td", { class: "num" }, k.ic95 ? `${fmtR(k.ic95[0])} a ${fmtR(k.ic95[1])}` : "—"), el("td", { class: "num" }, int(k.n)),
     el("td", { title: k.fonte }, k.fonte.startsWith("TSE") ? "TSE" : "IBGE")));
   pf("correlacoes").replaceChildren(el("table", {}, el("thead", {}, el("tr", {},
-    ["Indicador", "r", "ρ", "IC 95% (r)", ehLocal() ? "Locais" : "Bairros", "Fonte"].map((t, i) => el("th", { class: i && i < 5 ? "num" : null }, t)))),
+    ["Indicador", "r", "ρ", "IC 95% (r)", NomeUnidade(), "Fonte"].map((t, i) => el("th", { class: i && i < 5 ? "num" : null }, t)))),
   el("tbody", {}, linhas)));
-  const tab = (rows) => el("table", {}, el("thead", {}, el("tr", {}, [ehLocal() ? "Local" : "Bairro", "Eixo X", "Voto", "Resíduo"].map((t, i) =>
+  const tab = (rows) => el("table", {}, el("thead", {}, el("tr", {}, [NomeUnidade(false), "Eixo X", "Voto", "Resíduo"].map((t, i) =>
     el("th", { class: i ? "num" : null }, t)))), el("tbody", {}, rows.map((r) => el("tr", {},
     el("td", {}, r.BAIRRO), el("td", { class: "num" }, fmtX(xk, r.X)), el("td", { class: "num" }, pct(r.Y)),
     el("td", { class: "num" }, `${r.RESIDUO >= 0 ? "+" : "−"}${fmtPct.format(Math.abs(r.RESIDUO))} p.p.`)))));
@@ -2514,7 +2519,7 @@ async function analisarPerfil() {
 function desenharRegressao(rg) {
   if (!rg) { pf("reg").replaceChildren(el("p", { class: "nota" }, "Marque ao menos um indicador.")); pf("reg-fichas").replaceChildren(); return; }
   if (rg.erro) { pf("reg").replaceChildren(el("p", { class: "nota" }, `Regressão indisponível: ${rg.erro}`)); pf("reg-fichas").replaceChildren(); return; }
-  pf("reg-fichas").replaceChildren(ficha(`${ehLocal() ? "Locais" : "Bairros"}`, int(rg.n)),
+  pf("reg-fichas").replaceChildren(ficha(NomeUnidade(), int(rg.n)),
     ficha("R² (juntos)", fmtPct.format(100 * rg.r2) + "%"), ficha("R² ajustado", fmtPct.format(100 * rg.r2_ajustado) + "%"));
   const sinal = (x) => `${x >= 0 ? "+" : "−"}${fmtPct.format(Math.abs(x))}`;
   pf("reg").replaceChildren(el("table", {}, el("thead", {}, el("tr", {},
@@ -2596,7 +2601,7 @@ function graficoDispersao(d, xk) {
     dica.style.top = `${Math.max(4, ev.clientY - r.top - 70)}px`;
   });
   g.addEventListener("mouseleave", () => { dica.hidden = true; if (ativo) ativo.classList.remove("ativo"); ativo = null; });
-  const u = ehLocal() ? "Local" : "Bairro";
+  const u = NomeUnidade(false);
   const itensLeg = [[cAcima, `${u} acima da tendência`], [cAbaixo, `${u} abaixo da tendência`],
     [cor("--texto-2"), `Tendência (mínimos quadrados${d.ponderado ? ", ponderada" : ""})`]];
   const legenda = el("div", { class: "legenda-linha" }, itensLeg.map(([c, t]) => el("span", {},

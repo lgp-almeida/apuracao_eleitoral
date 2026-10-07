@@ -48,6 +48,7 @@ dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](
 | 22 | Quem migrou para quem de 2022 para 2026 (inferência ecológica por seção) | após os microdados de 2026 | **feito**: [RODADA_46](RODADA_46_2026-10-06_migracao_2022_2026.md) (`migracao_votos.py`, por local; fora da amostra 0,83 p.p. × swing 1,14 no Presidente RJ) |
 | 23 | Mesmo denominador do "% dos válidos" no tempo real e no histórico (o TSE divulga sobre válidos + sub judice) | antes de comparar 2026 × 2022 com sub judice | **feito**: [RODADA_42](RODADA_42_2026-10-06_analise_coleta_e_percentuais.md) (comparações sobre os válidos oficiais; o painel mantém o % do TSE) |
 | 24 | Manter `apuracao/partidos.py` (`EVENTOS`/`NOVOS`) a cada partido novo, fusão ou renomeação; conferir as datas para comparar com eleições municipais | a cada cadastro novo do TSE | contínuo — o teste com os cadastros reais acusa |
+| 25 | Mapa por área de ponderação (aba Mapas): malha das áreas pela fusão dos setores, camadas de voto e de perfil (religião e amostra do Censo) | a definir | proposto em 06/10/2026 (rodada 49; a área já é unidade do Perfil × voto) |
 
 ---
 
@@ -296,3 +297,18 @@ Registrado em 06/10/2026 (rodada 40).
   novo, fusão, incorporação ou renomeação). Registre o evento em `EVENTOS` (ou em `NOVOS`) com a fonte.
 - **Eleições municipais:** a tabela usa a 1ª eleição GERAL em que cada mudança vale. Para comparar com 2020/2024,
   confirmar as datas de PMN → MOBILIZA, PMB → DEMOCRATA e PC do B → PCDOB.
+
+## 25. Mapa por área de ponderação
+
+- **Contexto:** [RODADA_49](RODADA_49_2026-10-06_censo_amostra_e_universo.md). A área de ponderação já é unidade do
+  Perfil × voto, a única com religião e os demais resultados da amostra do Censo 2022. O usuário pediu o mapa para
+  depois.
+- **O quê:**
+  - **Malha:** a fusão (`dissolve`) dos setores da malha do IBGE pela composição (`ap_composicao.parquet`), com cache
+    `cache_tse/malhas/areas_ponderacao_<UF>.geojson` gerado pelo `ibge.py` (um derivado a mais da malha de
+    setores).
+  - **Na aba Mapas:** um Detalhe "Áreas de ponderação", com camadas de voto (as métricas do mapa por bairro sobre
+    `PerfilVotoArea._vb`) e de perfil (os indicadores da área, inclusive a religião).
+  - **Exportação** PNG/SVG e os testes e2e (cores, dica, endereço `detalhe=areas`).
+- **Cuidado:** são poucas áreas por município pequeno (uma área = a cidade inteira). Avisar na legenda que os
+  valores da amostra têm erro amostral (o IBGE publica os coeficientes de variação por área).

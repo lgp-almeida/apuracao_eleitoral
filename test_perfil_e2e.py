@@ -88,6 +88,20 @@ def test_baixar_grafico_de_dispersao(pagina: Page, site: dict) -> None:
     assert texto.startswith("<svg") and texto.count("<circle") == 2 and "Bairro acima da tendência" in texto
 
 
+def test_unidade_area_de_ponderacao(pagina: Page, site: dict) -> None:
+    """Rodada 49: religião (amostra do Censo) só por área de ponderação; os 4 locais caem em 3 áreas."""
+    abrir(pagina, site, f"{BASE}&x=pct_evangelicos&unidade=area")
+    pagina.wait_for_function("() => document.querySelectorAll('#pf-grafico circle.ponto').length === 3", timeout=20_000)
+    assert pagina.input_value("#pf-unidade") == "area" and pagina.is_visible("#pf-nota-area")
+    assert "Áreas na análise\n3" in pagina.inner_text("#pf-fichas")
+    assert pagina.locator("#pf-x optgroup[label='IBGE — Censo 2022 (amostra, área de ponderação)'] option").count() > 0
+    aba, q = endereco(pagina)
+    assert aba == "perfil" and q["unidade"] == "area" and q["x"] == "pct_evangelicos"
+    pagina.select_option("#pf-unidade", "local")
+    pagina.wait_for_function("() => document.querySelectorAll('#pf-grafico circle.ponto').length === 4", timeout=20_000)
+    assert pagina.is_hidden("#pf-nota-area")
+
+
 def test_unidade_local_de_votacao(pagina: Page, site: dict) -> None:
     abrir(pagina, site, f"{BASE}&x=renda_media&unidade=local")
     pagina.wait_for_function("() => document.querySelectorAll('#pf-grafico circle.ponto').length === 4", timeout=20_000)

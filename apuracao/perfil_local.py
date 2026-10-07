@@ -30,6 +30,7 @@ import numpy as np
 import polars as pl
 
 import votos_por_local_votacao as v
+from apuracao import censo as cs
 from apuracao import eleitorado as el
 from apuracao import ibge
 from apuracao import perfil as pf
@@ -59,23 +60,35 @@ def _baixar(fonte: str, cache: Path, uf: str) -> Path:
 
 
 def _ler_setores_csv(zp: Path, prefixo: str, colunas: list[str]) -> pl.DataFrame:
-    """Só as linhas da UF (o CSV é nacional, até 200 MB): filtra pelo prefixo do CD_SETOR ao ler."""
+    """Só as linhas da UF: o CSV é nacional (a alfabetização passa de 1 GB descomprimida), então é lido em
+    STREAMING, linha a linha, filtrando pelo prefixo do CD_SETOR (com ou sem aspas). Coluna pedida que não
+    existe no arquivo fica de fora (quem usa trata como sem dado)."""
     with zipfile.ZipFile(zp) as z:
         membro = next(n for n in z.namelist() if n.lower().endswith(".csv"))
-        texto = z.read(membro).decode("latin-1")
-    cab = texto.split("\n", 1)[0]
-    corpo = [ln for ln in texto.splitlines()[1:] if ln[1:3] == prefixo]
-    df = pl.read_csv(io.StringIO(cab + "\n" + "\n".join(corpo)), separator=";", infer_schema=False)
+        with z.open(membro) as bruto:
+            texto = io.TextIOWrapper(bruto, encoding="latin-1", newline="")
+            linhas = [next(texto)] + [ln for ln in texto if ln.lstrip('"')[:2] == prefixo]
+    df = pl.read_csv(io.StringIO("".join(linhas)), separator=";", infer_schema=False)
     df = df.rename({c: c.upper() for c in df.columns})
-    return df.select([c.upper() for c in colunas])
+    if "CD_SETOR" not in df.columns and "SETOR" in df.columns:  # o domicílio 2 chama a chave de "setor"
+        df = df.rename({"SETOR": "CD_SETOR"})
+    pedidas = list(dict.fromkeys(c.upper() for c in colunas))  # sem repetição (o catálogo também pede V0001)
+    faltam = [c for c in pedidas if c not in df.columns]
+    if faltam:
+        logger.warning("%s sem as colunas %s", zp.name, ", ".join(faltam))
+    return df.select([c for c in pedidas if c in df.columns])
 
 
 def _pontos(g) -> pl.DataFrame:
-    """Malha de setores → CD_SETOR, CD_MUN, LON, LAT (ponto representativo, WGS 84). Setor sem município sai:
-    no RS, a Lagoa dos Patos e a Lagoa Mirim são setores sem CD_MUN (e sem população)."""
+    """Malha de setores → CD_SETOR, CD_MUN, CD_BAIRRO (nulo onde o IBGE não tem bairro), LON, LAT (ponto
+    representativo, WGS 84). Setor sem município sai: no RS, a Lagoa dos Patos e a Lagoa Mirim são setores sem
+    CD_MUN (e sem população)."""
     g = g[g["CD_MUN"].notna()].to_crs("EPSG:4326")
     pt = g.geometry.representative_point()
+    bairro = ([None if b is None or b != b else str(b) for b in g["CD_BAIRRO"]] if "CD_BAIRRO" in g.columns
+              else [None] * len(g))  # b != b: NaN
     return pl.DataFrame({"CD_SETOR": g["CD_SETOR"].astype(str).to_list(), "CD_MUN": g["CD_MUN"].astype(int).to_list(),
+                         "CD_BAIRRO": pl.Series(bairro, dtype=pl.String),
                          "LON": pt.x.to_numpy(), "LAT": pt.y.to_numpy()})
 
 
@@ -83,20 +96,22 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
     """Um setor por linha: CD_SETOR, CD_MUN (IBGE), LON, LAT (ponto representativo), TIPO, AREA_KM2,
     POP, DOMICILIOS, MORADORES_DOM, RESP (responsáveis com renda), RENDA_MEDIA, RENDA_MEDIANA,
     BRANCOS…INDIGENAS (cor ou raça), MORADORES_DEM, MULHERES, IDADE_0_14, IDADE_15_24, IDADE_60_MAIS (sexo e
-    idade). Cache: ibge_censo2022/censo_setores_<UF>.parquet (refeito se gravado antes de uma coluna nova)."""
+    idade), CD_BAIRRO e N_<chave>/D_<chave> do catálogo `apuracao.censo` (rodada 49).
+    Cache: ibge_censo2022/censo_setores_<UF>.parquet (refeito se gravado antes de uma coluna nova)."""
     destino = cache / "ibge_censo2022" / f"censo_setores_{uf.upper()}.parquet"
     if destino.exists():
         df = pl.read_parquet(destino)
-        if set(DEMOGRAFIA_SETOR) <= set(df.columns):
+        if set(DEMOGRAFIA_SETOR) | set(cs.COLUNAS) | {"CD_BAIRRO"} <= set(df.columns):
             return df
-        logger.info("%s sem sexo e idade: refazendo", destino.name)
+        logger.info("%s sem colunas novas: refazendo", destino.name)
     import geopandas as gpd
 
     prefixo = str(pf.UF_IBGE[uf.upper()])
     malha = _baixar("malha_setores", cache, uf)
-    geo = _pontos(gpd.read_file(f"zip://{malha}", columns=["CD_SETOR", "CD_MUN"]))
+    geo = _pontos(gpd.read_file(f"zip://{malha}", columns=["CD_SETOR", "CD_MUN", "CD_BAIRRO"]))
     b = _ler_setores_csv(_baixar(AGREGADOS_SETOR["basico"], cache, uf), prefixo,
-                         ["CD_SETOR", "CD_TIPO", "AREA_KM2", "v0001", "v0005", "v0007"])
+                         ["CD_SETOR", "CD_TIPO", "AREA_KM2", "v0001", "v0005", "v0007",
+                          *cs.colunas_por_fonte().get(AGREGADOS_SETOR["basico"], [])])
     r = _ler_setores_csv(_baixar(AGREGADOS_SETOR["renda"], cache, uf), prefixo, ["CD_SETOR", "V06001", "V06004", "V06006"])
     c = _ler_setores_csv(_baixar(AGREGADOS_SETOR["cor"], cache, uf), prefixo,
                          ["CD_SETOR", "V01317", "V01318", "V01319", "V01320", "V01321"])
@@ -112,6 +127,13 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
                          _num("V01321").alias("INDIGENAS")), on="CD_SETOR", how="left")
           .join(d.select("CD_SETOR", *[sum(_num(x) for x in cols).alias(k)  # um "X" (sigilo) → nulo
                                        for k, cols in DEMOGRAFIA_SETOR.items()]), on="CD_SETOR", how="left"))
+    brutos = geo.select("CD_SETOR")  # catálogo de contagens: as colunas de cada fonte, juntas por setor
+    for fonte, cols in cs.colunas_por_fonte().items():
+        quadro = b if fonte == AGREGADOS_SETOR["basico"] else _ler_setores_csv(_baixar(fonte, cache, uf), prefixo,
+                                                                               ["CD_SETOR", *cols])
+        brutos = brutos.join(quadro.select("CD_SETOR", *[c for c in cols if c in quadro.columns]
+                                           ).unique("CD_SETOR"), on="CD_SETOR", how="left")
+    df = df.join(cs.contagens(brutos), on="CD_SETOR", how="left")
     tmp = destino.with_suffix(".parquet.tmp")
     df.write_parquet(tmp)
     tmp.replace(destino)
@@ -201,6 +223,7 @@ def agregar(setores_: pl.DataFrame, ligacao: pl.DataFrame) -> pl.DataFrame:
         (100 * pl.col("POP").filter(pl.col("_FAVELA")).sum() / pl.col("POP").sum()).alias("pct_favela"),
         dem("MULHERES").alias("pct_mulheres_censo"), dem("IDADE_0_14").alias("pct_0_14_censo"),
         dem("IDADE_15_24").alias("pct_15_24_censo"), dem("IDADE_60_MAIS").alias("pct_60_mais_censo"),
+        *[cs.taxa(k) for k in cs.INDICADORES],  # catálogo de contagens (rodada 49)
         pl.len().alias("SETORES"), pl.col("POP").sum().alias("MORADORES"),
     ).with_columns([pl.when(pl.col(c).is_finite()).then(pl.col(c)).alias(c)
                     for c in ("renda_media", "renda_mediana", "pct_pretos_pardos", "densidade", "moradores_domicilio",

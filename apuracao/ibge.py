@@ -80,6 +80,10 @@ _SETORES_PQ = ("ibge_censo2022/censo_setores_{uf}.parquet",)
 _AG_BAIRRO = f"{CENSO}/Agregados_por_Setores_Censitarios/Agregados_por_Bairro_csv"
 _AG_SETOR = f"{CENSO}/Agregados_por_Setores_Censitarios/Agregados_por_Setor_csv"
 _RENDA = f"{CENSO}/Agregados_por_Setores_Censitarios_Rendimento_do_Responsavel"
+_ENTORNO = f"{CENSO}/Agregados_por_Setores_Censitarios_Caracteristicas_urbanisticas_do_entorno_dos_domicilios/Agregados_por_Setor_csv"
+_AP = f"{CENSO}/Microdados_e_Areas_de_Ponderacao"
+_AP_PQ = ("ibge_censo2022/ap_composicao.parquet",)
+_AMOSTRA_PQ = ("ibge_censo2022/ap_amostra.parquet",)
 FONTES = [
     Fonte("malha_municipios", "api", API_MALHA, "municipios_{uf}.geojson", "", "malhas", (),
           "mapas por município (todas as abas)"),
@@ -105,6 +109,26 @@ FONTES = [
           "ibge_censo2022", _BAIRROS_PQ, "Perfil × voto por bairro (sexo e idade dos moradores)"),
     Fonte("setores_demografia", "ftp", _AG_SETOR, "Agregados_por_setores_demografia_BR{versao}.zip", "",
           "ibge_censo2022", _SETORES_PQ, "Perfil × voto por local (sexo e idade dos moradores)"),
+    # rodada 49: catálogo de contagens por setor (`apuracao.censo`), nas três unidades do Perfil × voto
+    Fonte("setores_alfabetizacao", "ftp", _AG_SETOR, "Agregados_por_setores_alfabetizacao_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (alfabetização)"),
+    Fonte("setores_domicilio1", "ftp", _AG_SETOR, "Agregados_por_setores_caracteristicas_domicilio1_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (apartamento, um morador; domicílios)"),
+    Fonte("setores_domicilio2", "ftp", _AG_SETOR, "Agregados_por_setores_caracteristicas_domicilio2_BR{versao}.zip",
+          "20250417", "ibge_censo2022", _SETORES_PQ, "Perfil × voto (água, esgoto, lixo, banheiro)"),
+    Fonte("setores_parentesco", "ftp", _AG_SETOR, "Agregados_por_setores_parentesco_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (domicílios chefiados por mulher)"),
+    Fonte("setores_indigenas", "ftp", _AG_SETOR, "Agregados_por_setores_pessoas_indigenas_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (pessoas indígenas)"),
+    Fonte("setores_quilombolas", "ftp", _AG_SETOR, "Agregados_por_setores_pessoas_quilombolas_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (pessoas quilombolas)"),
+    Fonte("setores_entorno", "ftp", _ENTORNO, "Agregados_por_setores_entorno_moradores_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto (pavimentação, iluminação, calçada, árvores)"),
+    # amostra do Censo por área de ponderação (religião, educação, renda per capita, trabalho…), nacionais
+    Fonte("ap_composicao", "fixo", f"{_AP}/Documentacao/Áreas de ponderação", "Composição das Áreas de Ponderação.xlsx",
+          "", "ibge_censo2022", _AP_PQ, "Perfil × voto por área de ponderação (setor → área)"),
+    Fonte("ap_tabelas", "fixo", f"{_AP}/Areas_de_Ponderacao", "tabelas_xlsx.zip", "", "ibge_censo2022", _AMOSTRA_PQ,
+          "Perfil × voto por área de ponderação (religião e demais resultados da amostra)"),
 ]
 POR_CHAVE = {f.chave: f for f in FONTES}
 
@@ -295,12 +319,15 @@ def verificar(cache: Path, uf: str, sessao: Any = requests, forcar_api: bool = F
 
 def _geradores() -> dict[str, Callable[[str, Path], Any]]:
     """Derivado (modelo do caminho) → função que o gera (importação tardia: esses módulos usam este)."""
+    from apuracao import areas_ponderacao as ap
     from apuracao import bairros as br
     from apuracao import perfil as pf
     from apuracao import perfil_local as pfl
     return {"malhas/bairros_{uf}.geojson": lambda uf, cache: br.malha(uf, cache),
             "ibge_censo2022/censo_bairros_{uf}.parquet": pf.censo_por_bairro,
-            "ibge_censo2022/censo_setores_{uf}.parquet": pfl.setores}
+            "ibge_censo2022/censo_setores_{uf}.parquet": pfl.setores,
+            "ibge_censo2022/ap_composicao.parquet": lambda uf, cache: ap.composicao(cache),  # nacionais
+            "ibge_censo2022/ap_amostra.parquet": lambda uf, cache: ap.amostra(cache)}
 
 
 def _guardar(p: Path) -> Path | None:

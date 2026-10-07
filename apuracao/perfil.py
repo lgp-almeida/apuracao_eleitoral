@@ -34,6 +34,7 @@ import requests
 
 import votos_por_local_votacao as v
 from apuracao import bairros as br
+from apuracao import censo as cs
 from apuracao import ibge
 
 logger = logging.getLogger("apuracao.perfil")
@@ -94,7 +95,8 @@ def perfil_por_bairro(perfil: pl.LazyFrame, local_bairro: pl.DataFrame) -> pl.Da
 # --------------------------------------------------------------------------
 CENSO_FONTES = {"renda": "bairros_renda", "basico": "bairros_basico", "cor": "bairros_cor",
                 "demografia": "bairros_demografia"}  # apuracao.ibge.FONTES
-INDICADORES_CENSO = {
+# os que vêm dos agregados POR BAIRRO do IBGE (censo_bairros_<UF>.parquet)
+INDICADORES_CENSO_BAIRRO = {
     "renda_media": "Renda média do responsável (R$)",
     "renda_mediana": "Renda mediana do responsável (R$)",
     "pct_pretos_pardos": "% de pretos e pardos (moradores)",
@@ -106,6 +108,9 @@ INDICADORES_CENSO = {
     "pct_15_24_censo": "% de 15 a 24 anos (moradores)",
     "pct_60_mais_censo": "% com 60 anos ou mais (moradores)",
 }
+# + o catálogo de contagens por setor (rodada 49), somado pelos setores do bairro (CD_BAIRRO da malha de setores)
+INDICADORES_CENSO = INDICADORES_CENSO_BAIRRO | cs.ROTULOS
+FONTE_CENSO_PADRAO = "IBGE — Censo 2022 (moradores)"
 # agregados "demografia": V01006 moradores, V01008 mulheres; faixas de idade V01031 (0 a 4) … V01041 (70 ou mais)
 DEMOGRAFIA = {"pct_mulheres_censo": ["V01008"], "pct_0_14_censo": ["V01031", "V01032", "V01033"],
               "pct_15_24_censo": ["V01034", "V01035"], "pct_60_mais_censo": ["V01040", "V01041"]}
@@ -141,7 +146,7 @@ def indicadores_censo(renda: pl.DataFrame, basico: pl.DataFrame, cor: pl.DataFra
     d = demografia.select("CD_BAIRRO", *[pl.when(tot > 0).then(100 * sum(_num(x) for x in cols) / tot)
                                          .alias(k) for k, cols in DEMOGRAFIA.items()])  # um "X" (sigilo) → nulo
     return (b.join(r, on="CD_BAIRRO", how="left").join(c, on="CD_BAIRRO", how="left")
-            .join(d, on="CD_BAIRRO", how="left").select("CD_BAIRRO", *INDICADORES_CENSO))
+            .join(d, on="CD_BAIRRO", how="left").select("CD_BAIRRO", *INDICADORES_CENSO_BAIRRO))
 
 
 def censo_por_bairro(uf: str, cache: Path) -> pl.DataFrame:
@@ -149,7 +154,7 @@ def censo_por_bairro(uf: str, cache: Path) -> pl.DataFrame:
     destino = cache / "ibge_censo2022" / f"censo_bairros_{uf.upper()}.parquet"
     if destino.exists():
         df = pl.read_parquet(destino)
-        if set(INDICADORES_CENSO) <= set(df.columns):
+        if set(INDICADORES_CENSO_BAIRRO) <= set(df.columns):
             return df
         logger.info("%s sem os indicadores novos: refazendo", destino.name)  # gravado antes de um indicador novo
     prefixo = str(UF_IBGE[uf.upper()])
@@ -311,6 +316,7 @@ class PerfilVoto:
     `indicador`, `municipios` e `CENSO`."""
 
     CENSO = INDICADORES_CENSO
+    FONTES_CENSO = cs.FONTES_ROTULO  # fonte de cada indicador do Censo; o que não está aqui: FONTE_CENSO_PADRAO
     UNIDADE = "bairro"
 
     def __init__(self, comp: br.ComparacaoBairros) -> None:
@@ -329,13 +335,25 @@ class PerfilVoto:
     def censo(self) -> pl.DataFrame:
         with self.b.trava:
             if self._censo is None:
-                self._censo = self.b._carregar(("censo",), lambda: censo_por_bairro(self.b.uf, self.b.cache))
+                base = self.b._carregar(("censo",), lambda: censo_por_bairro(self.b.uf, self.b.cache))
+                self._censo = base.join(self._catalogo_por_bairro(), on="CD_BAIRRO", how="left")
             return self._censo
+
+    def _catalogo_por_bairro(self) -> pl.DataFrame:
+        """O catálogo de contagens (`apuracao.censo`) somado pelos setores de cada bairro. Sem os setores no
+        IBGE/cache, os indicadores do catálogo ficam sem dado e os demais seguem."""
+        from apuracao import perfil_local as pfl
+        try:
+            st = self.b._carregar(("setores",), lambda: pfl.setores(self.b.uf, self.b.cache))
+        except (v.TseDataError, requests.RequestException, OSError) as exc:
+            logger.warning("setores do Censo indisponíveis (%s): indicadores do catálogo sem dado por bairro", exc)
+            return pl.DataFrame(schema={"CD_BAIRRO": pl.String, **{k: pl.Float64 for k in cs.INDICADORES}})
+        return cs.taxas(st, "CD_BAIRRO")
 
     @classmethod
     def indicadores(cls) -> dict[str, dict[str, str]]:
         tse = {k: {"rotulo": r, "fonte": "TSE — eleitores inscritos"} for k, (r, _) in INDICADORES_TSE.items()}
-        return tse | {k: {"rotulo": r, "fonte": "IBGE — Censo 2022 (moradores)"} for k, r in cls.CENSO.items()}
+        return tse | {k: {"rotulo": r, "fonte": cls.FONTES_CENSO.get(k, FONTE_CENSO_PADRAO)} for k, r in cls.CENSO.items()}
 
     def _vb(self, ano: int, cargo: int, turno: int) -> pl.DataFrame:
         """Votos por unidade e votável (CD_BAIRRO, NR_VOTAVEL, QT_VOTOS, NM_VOTAVEL)."""
