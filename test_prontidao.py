@@ -76,3 +76,31 @@ def test_segundo_turno_por_uf(tmp_path: Path) -> None:
     (tmp_path / "oficial_t2_SP" / "status.json").write_text(json.dumps({"ambiente": "simulado"}))
     linhas = {item: (sit, det) for sit, item, det in vp._segundo_turno(["SP"], tmp_path)}
     assert linhas["SP: dados do 2º turno"][0] == "FALHA"  # pasta da noite com dados de outro ambiente
+
+
+def test_relogio_usa_o_oficial_e_cai_no_simulado(monkeypatch) -> None:
+    """07/10/2026: o simulado saiu do ar (o nome nem resolvia) e a checagem do relógio só olhava para ele."""
+    from datetime import datetime, timezone
+    from email.utils import format_datetime
+
+    import requests
+
+    import verificar_prontidao as vp
+
+    pedidos: list[str] = []
+
+    class Resp:
+        headers = {"Date": format_datetime(datetime.now(timezone.utc), usegmt=True)}
+
+    def get(url, **kw):
+        pedidos.append(url)
+        if "resultados-sim" in url or fora_do_ar:
+            raise requests.ConnectionError("Name or service not known")
+        return Resp()
+    monkeypatch.setattr(vp.requests, "get", get)
+    fora_do_ar = False
+    ((sit, _, detalhe),) = vp._relogio()
+    assert sit == "OK" and len(pedidos) == 1 and "resultados.tse.jus.br" in pedidos[0]
+    fora_do_ar = True
+    ((sit, _, detalhe),) = vp._relogio()
+    assert sit == "AVISO" and "oficial: ConnectionError" in detalhe and "simulado: ConnectionError" in detalhe

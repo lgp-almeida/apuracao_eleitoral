@@ -100,11 +100,18 @@ def _ibge(cache: Path) -> list[Resultado]:
 
 
 def _relogio() -> list[Resultado]:
-    try:  # a hora vem no cabeçalho Date de uma resposta pequena do simulado
-        r = requests.get(ClienteDivulgacao("simulado").url(ClienteDivulgacao.caminho_config()), timeout=15)
-        servidor = email.utils.parsedate_to_datetime(r.headers["Date"])
-    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
-        return [("AVISO", "relógio × TSE", f"não deu para ler a hora do TSE ({exc})")]
+    """A hora vem no cabeçalho Date de uma resposta pequena (o ele-c.json): do oficial e, se ele falhar, do
+    simulado (o simulado sai do ar depois do 1º turno: em 07/10/2026 o nome nem resolvia)."""
+    erros = []
+    for ambiente in ("oficial", "simulado"):
+        try:
+            r = requests.get(ClienteDivulgacao(ambiente).url(ClienteDivulgacao.caminho_config()), timeout=15)
+            servidor = email.utils.parsedate_to_datetime(r.headers["Date"])
+            break
+        except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+            erros.append(f"{ambiente}: {exc.__class__.__name__}")
+    else:
+        return [("AVISO", "relógio × TSE", f"não deu para ler a hora do TSE ({'; '.join(erros)})")]
     dif = abs((datetime.now(timezone.utc) - servidor).total_seconds())
     return [("OK" if dif < 60 else "AVISO", "relógio × TSE", f"diferença de {dif:.0f} s")]
 
