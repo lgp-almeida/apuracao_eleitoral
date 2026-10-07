@@ -342,3 +342,21 @@ Registrado em 07/10/2026 (pedido do usuário: "Coloque no TODO a prontidão do 2
   [RODADA_54](RODADA_54_2026-10-07_cdn_versao_antiga.md)). A CDN fecha conexões no meio de arquivos de ~290 MB.
 - **Depois de 25/10 (já previsto em outros itens):** item 4b (refazer a margem do 2º turno com 2026) e o 2º turno
   de 2026 nos itens 17b e 20, quando saírem os microdados.
+
+---
+
+Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-end, só a proposta).
+
+## 27. Refatoração do front-end (Vite + TypeScript + design system)
+
+- **Proposta completa:** [PROPOSTA_REFATORACAO_FRONTEND.md](PROPOSTA_REFATORACAO_FRONTEND.md). Traz o diagnóstico com
+  números, a arquitetura por módulos, o design system, a robustez, as fases e os riscos.
+- **O quê:** tirar o `app.js` de 3.117 linhas do arquivo único. O código vai para `apuracao/web/frontend/src/` (TypeScript
+  strict, Vite) e o build é versionado em `apuracao/web/static/`. Uma aba = uma pasta; o roteador fica numa tabela única;
+  todo pedido tem cancelamento e tempo-limite. O design system traz tokens, `@layer`, Public Sans e a régua de apuração,
+  sem mudar as cores da dataviz nem as dos mapas.
+- **Como:** 7 fases no padrão estrangulador: andaime → núcleo → roteador → componentes → abas (transferência →
+  perfil → comparação → candidato → mapas → painel) → design system → limpeza. Cada fase passa nos 64 e2e sem
+  mudar asserções, no Vitest, no `tsc --strict` e no ensaio geral.
+- **Quando:** num ramo (`frontend-refatoracao`), que só entra em `main` **depois do 2º turno (25/10/2026)**. Até lá,
+  as correções do front-end vão para o `app.js` atual.
