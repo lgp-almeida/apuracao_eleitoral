@@ -58,8 +58,13 @@ Lá, a área de ponderação do Censo 2022 virou unidade do Perfil × voto; aqui
 - **O problema:** trocar a camada e logo o indicador dispara dois pedidos. Se o primeiro respondia por último, o
   mapa ficava com o indicador errado.
 - **Como apareceu:** o e2e novo falhava de vez em quando.
-- **Correção:** `atualizarMapaAreas` numera os pedidos (`estado.pedidoAreas`) e descarta a resposta superada.
-- **Pendente:** o `atualizarMapaLocais` (mapa por local, rodada 32) tem a mesma corrida e não foi mexido.
+- **Correção:** `atualizarMapaAreas` e `atualizarMapaLocais` (mapa por local, rodada 32, que tinha a mesma corrida)
+  numeram os pedidos com um contador **único** (`estado.pedidoMapa`, `novoPedidoMapa`) e descartam a resposta
+  superada. Um contador só para os dois detalhes também cobre a troca rápida local ↔ área.
+- **Teste determinístico:** `test_troca_rapida_vale_o_ultimo_pedido` segura a resposta do 1º pedido
+  (`page.route`) até o 2º desenhar e só depois a libera.
+  - **Sem a correção:** falha ("% com superior completo" por cima de "Renda média").
+  - **Com ela:** passa 5 vezes seguidas.
 
 ## Números reais (RJ, Presidente 2022, 1º turno)
 
@@ -76,7 +81,7 @@ Lá, a área de ponderação do Censo 2022 virou unidade do Perfil × voto; aqui
 - **Pacote:** `apuracao/areas_ponderacao.py` (`malha`, `mapa`, `CAMADAS_MAPA`), `apuracao/ibge.py` (derivado
   `malhas/areas_ponderacao_{uf}.geojson` + gerador).
 - **Site:** `apuracao/web/app.py` (rotas, exportação), `apuracao/web/static/{index.html,app.js}`.
-- **Testes:** `test_areas_ponderacao.py` (+4) e `test_mapa_locais_e2e.py` (+1).
+- **Testes:** `test_areas_ponderacao.py` (+4) e `test_mapa_locais_e2e.py` (+2: áreas e troca rápida).
 - **Documentação:** `docs/TODO.md` (item 25 feito), `CLAUDE.md` (módulo e endereço).
 
 ## Verificação
@@ -92,6 +97,5 @@ Lá, a área de ponderação do Censo 2022 virou unidade do Perfil × voto; aqui
 
 ## Pendências
 
-1. **Corrida no mapa por local:** a mesma correção em `atualizarMapaLocais`.
-2. **Escala divergente:** com ela no `desenharMapa`, as camadas resíduo e variação entrariam por área.
-3. **Erro amostral:** marcar no mapa as áreas com coeficiente de variação alto nos indicadores da amostra.
+1. **Escala divergente:** com ela no `desenharMapa`, as camadas resíduo e variação entrariam por área.
+2. **Erro amostral:** marcar no mapa as áreas com coeficiente de variação alto nos indicadores da amostra.

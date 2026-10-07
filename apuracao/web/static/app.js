@@ -1480,8 +1480,10 @@ async function atualizarMapaLocais(cargo, legenda) {
   }
   if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
   legenda.replaceChildren(el("p", { class: "nota" }, "carregando os locais…"));
+  const pedido = novoPedidoMapa();
   try {
     const d = await api(`api/mapa/locais?${q}`);
+    if (pedido !== estado.pedidoMapa) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
     await desenharPontos(estado.mapa, d, legenda);
     const c = d.cobertura;
     const est = d.estatistica;
@@ -1498,6 +1500,7 @@ async function atualizarMapaLocais(cargo, legenda) {
       (!d.itens.length && camada === "residuo" ? ` Nenhum local com ${int(d.min_validos)} votos válidos ou mais ` +
         "para o resíduo (ele só usa locais com votos suficientes)." : "");
   } catch (e) {
+    if (pedido !== estado.pedidoMapa) return;
     for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
     estado.mapa._export = null;
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
@@ -1505,6 +1508,10 @@ async function atualizarMapaLocais(cargo, legenda) {
   }
   gravarEnderecoMapa();
 }
+
+// Mudanças seguidas (camada, indicador, detalhe local ↔ área) disparam vários pedidos: vale só o último. Contador
+// único para os dois detalhes, para a resposta atrasada de um não desenhar por cima do outro.
+const novoPedidoMapa = () => (estado.pedidoMapa = (estado.pedidoMapa || 0) + 1);
 
 // ---------------------------------------------------------------- mapa por área de ponderação (TODO 25)
 // Polígonos = fusão dos setores do Censo pela composição do IBGE. Voto: soma dos locais de votação da área (o local
@@ -1524,10 +1531,10 @@ async function atualizarMapaAreas(cargo, legenda) {
   const mun = municipioLocSel.value;
   if (mun) q.set("municipio", mun);
   legenda.replaceChildren(el("p", { class: "nota" }, "carregando as áreas…"));
-  const pedido = (estado.pedidoAreas = (estado.pedidoAreas || 0) + 1);  // mudanças seguidas: vale só a última
+  const pedido = novoPedidoMapa();
   try {
     const d = await api(`api/mapa/areas?${q}`);
-    if (pedido !== estado.pedidoAreas) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
+    if (pedido !== estado.pedidoMapa) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
     await desenharMapa(estado.mapa, d, legenda, d.unidade === "%" ? "%" : "", null, "areas");
     if (mun) {  // enquadra o município escolhido (as demais áreas ficam "sem dado")
       const b = L.latLngBounds([]);
@@ -1542,7 +1549,7 @@ async function atualizarMapaAreas(cargo, legenda) {
         "que contém a sua coordenada)." : `Fonte: ${d.fonte_indicador}.` +
         (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : ""));
   } catch (e) {
-    if (pedido !== estado.pedidoAreas) return;
+    if (pedido !== estado.pedidoMapa) return;
     for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
     estado.mapa._export = null;
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));

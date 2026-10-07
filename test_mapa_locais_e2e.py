@@ -107,6 +107,33 @@ def test_camada_destino_dos_eliminados(pagina, site) -> None:
     assert "camada=transferencia" in h and "transf=abst_extra" in h and "indicador=" not in h
 
 
+def test_troca_rapida_vale_o_ultimo_pedido(pagina, site) -> None:
+    """Camada e indicador trocados em seguida: a resposta atrasada do 1º pedido não pode desenhar por cima."""
+    abrir(pagina, site, f"{BASE}&camada=voto&numero={CAND}")
+    _pronto(pagina)
+    retidos = []  # a resposta do 1º pedido (o 1º indicador da lista) fica presa até o 2º desenhar: chega ATRASADA
+
+    def segurar(route) -> None:
+        if "indicador=renda_media" in route.request.url:
+            route.continue_()
+        else:
+            retidos.append(route)
+
+    pagina.route("**/api/mapa/locais*", segurar)
+    try:
+        pagina.select_option("#mapa-camada", "perfil")
+        pagina.select_option("#mapa-indicador", "renda_media")
+        pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('Renda média')")
+        assert retidos, "o 1º pedido deveria ter ficado preso"
+        for r in retidos:
+            r.continue_()
+        pagina.wait_for_timeout(800)  # a resposta atrasada chega e tem de ser descartada
+        assert "Renda média" in pagina.evaluate("estado.mapa._export.titulo")
+        assert "indicador=renda_media" in pagina.evaluate("location.hash")
+    finally:
+        pagina.unroute("**/api/mapa/locais*")
+
+
 # --------------------------------------------------------------------------- áreas de ponderação (TODO 25)
 AREAS = "#mapas?cargo=13&metrica=pct_candidato&detalhe=areas&ano_bairros=2024"
 
