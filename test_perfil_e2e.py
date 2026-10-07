@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Page  # noqa: E402
 
+from apuracao import perfil as pf  # noqa: E402
 from conftest import CAND, abrir, endereco  # noqa: E402
 
 pytestmark = pytest.mark.e2e
@@ -29,7 +30,7 @@ def test_endereco_abre_a_analise(pagina: Page, site: dict) -> None:
     titulo = pagina.inner_text("#pf-titulo-grafico")
     assert f"nº {CAND} FULANA DE TAL" in titulo and "% com superior completo" in titulo
     linhas = pagina.locator("#pf-correlacoes tbody tr")
-    assert linhas.count() == 10  # 5 indicadores do TSE + 5 do Censo
+    assert linhas.count() == len(pf.INDICADORES_TSE) + len(pf.INDICADORES_CENSO)  # TSE + Censo
     assert pagina.locator("#pf-correlacoes tr.selecionado td").first.inner_text() == "% com superior completo"
     aba, q = endereco(pagina)
     assert aba == "perfil" and (q["numero"], q["x"], q["min_validos"]) == (str(CAND), "pct_superior", "0")

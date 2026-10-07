@@ -111,6 +111,11 @@ CENSO_BASICO = [("3304557001", "Centro Sintético", "2,0", "10000", "2,5"), ("33
                 ("3550308001", "Sé (SP)", "1", "1", "1")]
 CENSO_COR = [("3304557001", "Centro Sintético", "600", "100", "0", "300", "0"),
              ("3304557002", "Lapa Sintética", "X", "X", "X", "X", "X")]  # sigilo do IBGE
+# demografia: V01006 moradores, V01008 mulheres, V01031–V01033 (0 a 14), V01034–V01035 (15 a 24), V01040–V01041 (60+)
+CENSO_DEMOGRAFIA_COLS = ["V01006", "V01008", "V01031", "V01032", "V01033", "V01034", "V01035", "V01040", "V01041"]
+CENSO_DEMOGRAFIA = [("3304557001", "Centro Sintético", "1000", "550", "50", "50", "50", "60", "40", "150", "100"),
+                    ("3304557002", "Lapa Sintética", "800", "400", "X", "X", "X", "100", "60", "40", "40"),  # sigilo em 0–14
+                    ("3550308001", "Sé (SP)", "1", "1", "0", "0", "0", "0", "0", "1", "0")]
 
 # (muni, zona, seção, principal, local, nome, endereço, bairro, lat, lon, eleitores, local_original)
 EL_2024 = [
@@ -207,6 +212,7 @@ def write_cache(root: Path) -> Path:
         ("Agregados_por_bairros_basico_BR_20260520", ["CD_BAIRRO", "NM_BAIRRO", "AREA_KM2", "v0001", "v0005"], CENSO_BASICO),
         ("Agregados_por_bairros_cor_ou_raca_BR", ["CD_BAIRRO", "NM_BAIRRO", "V01317", "V01318", "V01319", "V01320",
                                                   "V01321"], CENSO_COR),
+        ("Agregados_por_bairros_demografia_BR", ["CD_BAIRRO", "NM_BAIRRO", *CENSO_DEMOGRAFIA_COLS], CENSO_DEMOGRAFIA),
     ):
         with zipfile.ZipFile(censo / f"{nome}.zip", "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(nome.removesuffix("_csv") + ".csv", _csv(header, [list(x) for x in linhas]))
@@ -438,6 +444,12 @@ SETORES = [  # (CD_SETOR, CD_MUN, lat, lon, tipo, área km², pop, moradores/dom
 ]
 
 
+# sexo e idade por setor: (moradores, mulheres, 0 a 14, 15 a 24, 60 ou mais); o do CIEP sob sigilo
+DEMOGRAFIA_SETORES = {"330455705000001": (1000, 520, 100, 150, 300), "330455705000002": (2000, 1000, 600, 400, 100),
+                      "330455705000003": (None, None, None, None, None), "330330205000001": (500, 260, 50, 50, 150),
+                      "330330205000099": (50, 25, 10, 5, 10)}
+
+
 def escrever_setores(cache: Path) -> None:
     """censo_setores_RJ.parquet (o que `perfil_local.setores` gravaria), a malha em shapefile (para o
     método "contém") e o mapa TSE → IBGE dos municípios (para `perfil_local.locais`)."""
@@ -453,7 +465,9 @@ def escrever_setores(cache: Path) -> None:
                        "POP": float(pop), "MORADORES_DOM": mor, "DOMICILIOS": float(dom), "RESP": float(resp),
                        "RENDA_MEDIA": rm, "RENDA_MEDIANA": rmed,
                        **{k: (None if x is None else float(x)) for k, x in zip(("BRANCOS", "PRETOS", "AMARELOS", "PARDOS",
-                                                                                "INDIGENAS"), cor)}})
+                                                                                "INDIGENAS"), cor)},
+                       **{k: (None if x is None else float(x)) for k, x in zip(
+                           ("MORADORES_DEM", "MULHERES", "IDADE_0_14", "IDADE_15_24", "IDADE_60_MAIS"), DEMOGRAFIA_SETORES[cd])}})
     pl.DataFrame(linhas).write_parquet(pasta / "censo_setores_RJ.parquet")
     d = 0.001  # ~110 m para cada lado
     g = gpd.GeoDataFrame({"CD_SETOR": [x[0] for x in SETORES]},

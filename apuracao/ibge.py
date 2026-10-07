@@ -101,6 +101,10 @@ FONTES = [
           "ibge_censo2022", _SETORES_PQ, "Perfil × voto por local (densidade, favela)"),
     Fonte("setores_cor", "ftp", _AG_SETOR, "Agregados_por_setores_cor_ou_raca_BR{versao}.zip", "",
           "ibge_censo2022", _SETORES_PQ, "Perfil × voto por local (cor ou raça)"),
+    Fonte("bairros_demografia", "ftp", _AG_BAIRRO, "Agregados_por_bairros_demografia_BR{versao}.zip", "",
+          "ibge_censo2022", _BAIRROS_PQ, "Perfil × voto por bairro (sexo e idade dos moradores)"),
+    Fonte("setores_demografia", "ftp", _AG_SETOR, "Agregados_por_setores_demografia_BR{versao}.zip", "",
+          "ibge_censo2022", _SETORES_PQ, "Perfil × voto por local (sexo e idade dos moradores)"),
 ]
 POR_CHAVE = {f.chave: f for f in FONTES}
 

@@ -36,7 +36,12 @@ from apuracao import perfil as pf
 
 logger = logging.getLogger("apuracao.perfil_local")
 
-AGREGADOS_SETOR = {"basico": "setores_basico", "renda": "setores_renda", "cor": "setores_cor"}  # apuracao.ibge.FONTES
+AGREGADOS_SETOR = {"basico": "setores_basico", "renda": "setores_renda", "cor": "setores_cor",
+                   "demografia": "setores_demografia"}  # apuracao.ibge.FONTES
+# contagens de sexo e idade por setor (`pf.DEMOGRAFIA`): MORADORES_DEM = V01006, o denominador
+DEMOGRAFIA_SETOR = {"MORADORES_DEM": [pf.DEMOGRAFIA_TOTAL], "MULHERES": pf.DEMOGRAFIA["pct_mulheres_censo"],
+                    "IDADE_0_14": pf.DEMOGRAFIA["pct_0_14_censo"], "IDADE_15_24": pf.DEMOGRAFIA["pct_15_24_censo"],
+                    "IDADE_60_MAIS": pf.DEMOGRAFIA["pct_60_mais_censo"]}
 METODOS = ("contem", "raio", "influencia", "raio+contem")
 METODO_PADRAO = "raio+contem"  # vencedor da validação (rodada 26): raio de 800 m; sem setor no raio, o que contém
 RAIO_M = 800.0
@@ -77,10 +82,14 @@ def _pontos(g) -> pl.DataFrame:
 def setores(uf: str, cache: Path) -> pl.DataFrame:
     """Um setor por linha: CD_SETOR, CD_MUN (IBGE), LON, LAT (ponto representativo), TIPO, AREA_KM2,
     POP, DOMICILIOS, MORADORES_DOM, RESP (responsáveis com renda), RENDA_MEDIA, RENDA_MEDIANA,
-    BRANCOS…INDIGENAS (cor ou raça). Cache: ibge_censo2022/censo_setores_<UF>.parquet."""
+    BRANCOS…INDIGENAS (cor ou raça), MORADORES_DEM, MULHERES, IDADE_0_14, IDADE_15_24, IDADE_60_MAIS (sexo e
+    idade). Cache: ibge_censo2022/censo_setores_<UF>.parquet (refeito se gravado antes de uma coluna nova)."""
     destino = cache / "ibge_censo2022" / f"censo_setores_{uf.upper()}.parquet"
     if destino.exists():
-        return pl.read_parquet(destino)
+        df = pl.read_parquet(destino)
+        if set(DEMOGRAFIA_SETOR) <= set(df.columns):
+            return df
+        logger.info("%s sem sexo e idade: refazendo", destino.name)
     import geopandas as gpd
 
     prefixo = str(pf.UF_IBGE[uf.upper()])
@@ -91,6 +100,8 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
     r = _ler_setores_csv(_baixar(AGREGADOS_SETOR["renda"], cache, uf), prefixo, ["CD_SETOR", "V06001", "V06004", "V06006"])
     c = _ler_setores_csv(_baixar(AGREGADOS_SETOR["cor"], cache, uf), prefixo,
                          ["CD_SETOR", "V01317", "V01318", "V01319", "V01320", "V01321"])
+    d = _ler_setores_csv(_baixar(AGREGADOS_SETOR["demografia"], cache, uf), prefixo,
+                         ["CD_SETOR", *sorted({x for cols in DEMOGRAFIA_SETOR.values() for x in cols})])
     df = (geo.join(b.select("CD_SETOR", _num("CD_TIPO").cast(pl.Int64).alias("TIPO"), _num("AREA_KM2").alias("AREA_KM2"),
                             _num("V0001").alias("POP"), _num("V0005").alias("MORADORES_DOM"),
                             _num("V0007").alias("DOMICILIOS")), on="CD_SETOR", how="left")
@@ -98,7 +109,9 @@ def setores(uf: str, cache: Path) -> pl.DataFrame:
                          _num("V06006").alias("RENDA_MEDIANA")), on="CD_SETOR", how="left")
           .join(c.select("CD_SETOR", _num("V01317").alias("BRANCOS"), _num("V01318").alias("PRETOS"),
                          _num("V01319").alias("AMARELOS"), _num("V01320").alias("PARDOS"),
-                         _num("V01321").alias("INDIGENAS")), on="CD_SETOR", how="left"))
+                         _num("V01321").alias("INDIGENAS")), on="CD_SETOR", how="left")
+          .join(d.select("CD_SETOR", *[sum(_num(x) for x in cols).alias(k)  # um "X" (sigilo) → nulo
+                                       for k, cols in DEMOGRAFIA_SETOR.items()]), on="CD_SETOR", how="left"))
     tmp = destino.with_suffix(".parquet.tmp")
     df.write_parquet(tmp)
     tmp.replace(destino)
@@ -168,8 +181,10 @@ def ligar(uf: str, cache: Path, locais_: pl.DataFrame, metodo: str, raio_m: floa
 def agregar(setores_: pl.DataFrame, ligacao: pl.DataFrame) -> pl.DataFrame:
     """Indicadores do Censo por UNIDADE (local), somando os setores ligados a ela.
     Renda: média dos setores ponderada pelos responsáveis com renda; mediana: idem (aproximação);
-    cor: soma das contagens dos setores SEM sigilo; densidade: moradores ÷ área somadas."""
+    cor e sexo/idade: soma das contagens dos setores SEM sigilo; densidade: moradores ÷ área somadas."""
     cores = ["BRANCOS", "PRETOS", "AMARELOS", "PARDOS", "INDIGENAS"]
+    dem_ok = pl.all_horizontal([pl.col(c).is_not_null() for c in DEMOGRAFIA_SETOR])
+    dem = lambda c: (100 * pl.col(c).filter(dem_ok).sum() / pl.col("MORADORES_DEM").filter(dem_ok).sum())  # noqa: E731
     s = setores_.join(ligacao, on="CD_SETOR", how="inner").with_columns(
         pl.all_horizontal([pl.col(c).is_not_null() for c in cores]).alias("_COR_OK"),
         (pl.col("TIPO") == 1).alias("_FAVELA"))
@@ -184,10 +199,13 @@ def agregar(setores_: pl.DataFrame, ligacao: pl.DataFrame) -> pl.DataFrame:
         ((pl.col("MORADORES_DOM") * pl.col("DOMICILIOS")).sum() / pl.col("DOMICILIOS").filter(
             pl.col("MORADORES_DOM").is_not_null()).sum()).alias("moradores_domicilio"),
         (100 * pl.col("POP").filter(pl.col("_FAVELA")).sum() / pl.col("POP").sum()).alias("pct_favela"),
+        dem("MULHERES").alias("pct_mulheres_censo"), dem("IDADE_0_14").alias("pct_0_14_censo"),
+        dem("IDADE_15_24").alias("pct_15_24_censo"), dem("IDADE_60_MAIS").alias("pct_60_mais_censo"),
         pl.len().alias("SETORES"), pl.col("POP").sum().alias("MORADORES"),
     ).with_columns([pl.when(pl.col(c).is_finite()).then(pl.col(c)).alias(c)
                     for c in ("renda_media", "renda_mediana", "pct_pretos_pardos", "densidade", "moradores_domicilio",
-                              "pct_favela")])
+                              "pct_favela", "pct_mulheres_censo", "pct_0_14_censo", "pct_15_24_censo",
+                              "pct_60_mais_censo")])
 
 
 def perfil_tse_por_local(perfil_lf: pl.LazyFrame, locais_: pl.DataFrame) -> pl.DataFrame:

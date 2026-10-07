@@ -92,14 +92,24 @@ def perfil_por_bairro(perfil: pl.LazyFrame, local_bairro: pl.DataFrame) -> pl.Da
 # --------------------------------------------------------------------------
 # Censo 2022 por bairro (IBGE)
 # --------------------------------------------------------------------------
-CENSO_FONTES = {"renda": "bairros_renda", "basico": "bairros_basico", "cor": "bairros_cor"}  # apuracao.ibge.FONTES
+CENSO_FONTES = {"renda": "bairros_renda", "basico": "bairros_basico", "cor": "bairros_cor",
+                "demografia": "bairros_demografia"}  # apuracao.ibge.FONTES
 INDICADORES_CENSO = {
     "renda_media": "Renda média do responsável (R$)",
     "renda_mediana": "Renda mediana do responsável (R$)",
     "pct_pretos_pardos": "% de pretos e pardos (moradores)",
     "densidade": "Densidade (moradores/km²)",
     "moradores_domicilio": "Moradores por domicílio",
+    # sexo e idade dos MORADORES (Censo); os do TSE (pct_mulheres, pct_16_24, pct_60_mais) são dos eleitores
+    "pct_mulheres_censo": "% de mulheres (moradores)",
+    "pct_0_14_censo": "% de 0 a 14 anos (moradores)",
+    "pct_15_24_censo": "% de 15 a 24 anos (moradores)",
+    "pct_60_mais_censo": "% com 60 anos ou mais (moradores)",
 }
+# agregados "demografia": V01006 moradores, V01008 mulheres; faixas de idade V01031 (0 a 4) … V01041 (70 ou mais)
+DEMOGRAFIA = {"pct_mulheres_censo": ["V01008"], "pct_0_14_censo": ["V01031", "V01032", "V01033"],
+              "pct_15_24_censo": ["V01034", "V01035"], "pct_60_mais_censo": ["V01040", "V01041"]}
+DEMOGRAFIA_TOTAL = "V01006"
 UF_IBGE = ibge.UF_IBGE
 
 
@@ -117,7 +127,8 @@ def _ler_censo(zp: Path, prefixo: str) -> pl.DataFrame:
     return df.filter(pl.col("CD_BAIRRO").str.starts_with(prefixo))
 
 
-def indicadores_censo(renda: pl.DataFrame, basico: pl.DataFrame, cor: pl.DataFrame) -> pl.DataFrame:
+def indicadores_censo(renda: pl.DataFrame, basico: pl.DataFrame, cor: pl.DataFrame,
+                      demografia: pl.DataFrame) -> pl.DataFrame:
     """CD_BAIRRO + indicadores do Censo (sem I/O)."""
     cores = ["V01317", "V01318", "V01319", "V01320", "V01321"]  # branca, preta, amarela, parda, indígena
     r = renda.select("CD_BAIRRO", _num("V06004").alias("renda_media"), _num("V06006").alias("renda_mediana"))
@@ -126,15 +137,21 @@ def indicadores_censo(renda: pl.DataFrame, basico: pl.DataFrame, cor: pl.DataFra
     total = pl.sum_horizontal([_num(x) for x in cores])
     c = cor.select("CD_BAIRRO", pl.when(total > 0).then(100 * (_num("V01318") + _num("V01320")) / total)
                    .alias("pct_pretos_pardos"))  # bairro sem morador: nulo, não NaN
-    return b.join(r, on="CD_BAIRRO", how="left").join(c, on="CD_BAIRRO", how="left").select(
-        "CD_BAIRRO", *INDICADORES_CENSO)
+    tot = _num(DEMOGRAFIA_TOTAL)
+    d = demografia.select("CD_BAIRRO", *[pl.when(tot > 0).then(100 * sum(_num(x) for x in cols) / tot)
+                                         .alias(k) for k, cols in DEMOGRAFIA.items()])  # um "X" (sigilo) → nulo
+    return (b.join(r, on="CD_BAIRRO", how="left").join(c, on="CD_BAIRRO", how="left")
+            .join(d, on="CD_BAIRRO", how="left").select("CD_BAIRRO", *INDICADORES_CENSO))
 
 
 def censo_por_bairro(uf: str, cache: Path) -> pl.DataFrame:
     """Indicadores do Censo 2022 dos bairros da UF, com os ZIPs do IBGE em cache (baixa uma vez)."""
     destino = cache / "ibge_censo2022" / f"censo_bairros_{uf.upper()}.parquet"
     if destino.exists():
-        return pl.read_parquet(destino)
+        df = pl.read_parquet(destino)
+        if set(INDICADORES_CENSO) <= set(df.columns):
+            return df
+        logger.info("%s sem os indicadores novos: refazendo", destino.name)  # gravado antes de um indicador novo
     prefixo = str(UF_IBGE[uf.upper()])
     partes = {}
     for chave, fonte in CENSO_FONTES.items():
@@ -142,7 +159,7 @@ def censo_por_bairro(uf: str, cache: Path) -> pl.DataFrame:
             partes[chave] = _ler_censo(ibge.caminho(fonte, cache, uf), prefixo)
         except (v.TseDataError, requests.RequestException) as exc:
             raise FonteIndisponivel(f"agregados do Censo 2022 por bairro indisponíveis no IBGE ({exc})") from exc
-    df = indicadores_censo(partes["renda"], partes["basico"], partes["cor"])
+    df = indicadores_censo(partes["renda"], partes["basico"], partes["cor"], partes["demografia"])
     tmp = destino.with_suffix(".parquet.tmp")
     df.write_parquet(tmp)
     tmp.replace(destino)

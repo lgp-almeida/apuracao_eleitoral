@@ -34,7 +34,7 @@ Feito com `preparar_2026.py --so-verificar`, mais um HEAD por arquivo de UF nas 
   - **2º turno:** nada, porque o 2º turno é em 25/10.
 - **Depois da passada:** o vigia volta ao TSE a cada **60 min**. Quando os dois arquivos munzona saírem, ele
   reimporta com os totais oficiais e grava `saidas/<UF>/conferencia_totais_2026_t1.csv`.
-- **Conferência com a noite:** `saidas/<UF>/conferencia_2026_t1.xlsx`, em **25 UFs**. SP e TO ficaram sem ela,
+- **Conferência com a noite:** `saidas/<UF>/conferencia_2026_t1.xlsx`, em **25 UFs** (27 depois da coleta abaixo). SP e TO ficaram sem ela,
   porque nesta máquina falta a coleta da noite: não há `dados_2026/oficial_TO`, e `oficial_SP` só tem `raw/`
   (120 KB, sem `status.json`). A conferência é pulada sem aviso nesse caso.
 - **Transferência 2022 → 2026 por bairro:** `saidas/<UF>/transferencia_2022_2026.csv`, com 18 linhas por UF.
@@ -95,6 +95,59 @@ O `download` nunca baixa de novo um arquivo que já existe, por isso a troca foi
   depois; as demais UFs, pela "secao". As duas fontes dão os mesmos votos e eleitos (rodada 39). A diferença é
   que a "munzona" não lista candidato inapto.
 - **Pendências do lote:** as 25 que aparecem são a divulgação do 2º turno de 2026, que só existe em 25/10.
+
+## Coleta da noite de SP e TO e Censo 2022
+
+- **Coleta da noite:** `baixar_ufs.py --etapas divulgacao --ufs SP TO --turnos 1` (o TSE ainda serve os JSON da
+  noite). SP: 3.231 arquivos em 391 s. TO: 701 arquivos em 77 s.
+- **Conferência das duas:** feita em seguida, depois de reimportar.
+  - **Deputados:** sem diferença. Cadeiras iguais: SP 70/70 e 94/94, TO 8/8 e 24/24. Só o Presidente difere.
+  - **Total:** 27 UFs conferidas, e em deputado só RO difere.
+- **Censo 2022 no cache:**
+  - **Agregados nacionais:** por bairro e por setor (básico, cor ou raça, renda).
+  - **Malhas de setores** e os derivados `censo_setores_<UF>`/`censo_bairros_<UF>` nas 27 UFs.
+  - **Malha de bairros** em 25 UFs: o IBGE não publica a do DF nem a do TO.
+  - **Conferência:** soma dos setores = **203.080.756 habitantes em 5.570 municípios**, o total do Brasil no Censo
+    2022.
+
+## Sexo e idade dos moradores (Censo 2022) no Perfil × voto
+
+- **O que faltava:** dos agregados do Censo, só vinham básico, cor ou raça e renda.
+- **Sexo e idade:** estão nos agregados de **demografia**, por setor e por bairro (`V01006` moradores, `V01008`
+  mulheres, `V01031`–`V01041` faixas de idade).
+- **Religião:** não sai por setor nem por bairro, porque é pergunta da amostra. O menor nível publicado é a área
+  de ponderação (Tabela 4.1 de `Areas_de_Ponderacao/tabelas_xlsx.zip`, de 24/08/2026). Ficou de fora: seria uma
+  unidade nova.
+- **Fontes novas** (`apuracao/ibge.py`): `bairros_demografia` e `setores_demografia`.
+- **Indicadores novos** (`perfil.INDICADORES_CENSO`; também por local):
+  - **Quais:** `pct_mulheres_censo`, `pct_0_14_censo`, `pct_15_24_censo` e `pct_60_mais_censo`, todos sobre os
+    moradores.
+  - **Por que chaves próprias:** `pct_mulheres`, `pct_16_24` e `pct_60_mais` já são do TSE e medem os
+    **eleitores**.
+- **Sigilo ("X"):**
+  - **Bairro:** só a faixa com sigilo fica sem dado.
+  - **Local:** setor com qualquer contagem de sexo ou idade sob sigilo sai da conta, como já era na cor.
+  - **Somas:** usam `+`, que propaga o nulo; `sum_horizontal` trataria o nulo como zero.
+- **Cache:** `censo_bairros_<UF>`/`censo_setores_<UF>` gravados sem as colunas novas são refeitos sozinhos.
+- **Regerado nas 27 UFs.** Totais do Brasil, sobre os setores sem sigilo (198,6 de 203,1 milhões de moradores;
+  60.439 de 468.097 setores sob sigilo):
+
+  | Indicador | Calculado | IBGE |
+  |---|---|---|
+  | Mulheres | **51,62%** | 51,5% |
+  | 0 a 14 anos | **19,80%** | — |
+  | 15 a 24 anos | **14,71%** | — |
+  | 60 anos ou mais | **15,84%** | 15,6% |
+
+  DF e TO não têm agregados por bairro (o IBGE não publica bairros deles); por setor e por local, têm.
+- **Página:** a aba Perfil × voto e a camada "perfil" do mapa por local leem a lista da API, então os indicadores
+  aparecem sem mudança no JavaScript.
+- **Testes:**
+  - **Indicadores:** valores por bairro e por local, o sigilo e o cache refeito.
+  - **Contagens:** as contagens fixas de indicadores (10/11) passaram a ser o tamanho dos catálogos.
+  - **Isolamento:** `test_download_404_so_atribui_ao_tse_o_que_e_do_tse` usa o `download` verdadeiro, guardado no
+    import, porque a fixture `site` (sessão, e2e) troca o `v.download`.
+  - **Suíte completa** (com os e2e): **403 ok**, 1 pulado.
 
 ## Achado e correção: a legenda nos totais provisórios
 
@@ -204,6 +257,8 @@ noite como anulada sub judice.**
 
 - `votos_por_local_votacao.py`, `test_votos_por_local_votacao.py`: dica do 404 só para o TSE.
 - `apuracao/perfil_local.py`, `test_perfil_local.py`: `_pontos`, setor sem município.
+- `apuracao/ibge.py`, `apuracao/perfil.py`, `apuracao/perfil_local.py`, `conftest.py`, `test_perfil*.py`: sexo e
+  idade do Censo.
 - `apuracao/historico.py`, `test_historico.py`: `destino_legenda`, `_agremiacoes`, colunas de federação na
   destinação, "Válido (legenda)", legenda válida na tabela de partidos.
 - Dados (fora do git): `cache_tse/` (+ 11,7 GB: ZIPs e Parquet de 2026, malhas e Censo das UFs), `dados_2026/historico_2026_t1_<UF>`
@@ -220,7 +275,4 @@ noite como anulada sub judice.**
    do histórico de anos com `votacao_partido_munzona` poderia ler a legenda de lá, em vez da regra.
 2. **Totais oficiais:** com `detalhe_votacao_munzona` e `votacao_partido_munzona`, a importação definitiva sai
    sozinha pelo vigia em execução. Depois, conferir `conferencia_totais_2026_t1.csv`.
-3. **Coleta da noite de SP e TO nesta máquina:** rodar `baixar_ufs.py --etapas divulgacao --ufs SP TO` (se o
-   TSE ainda servir os JSON da noite) e depois `conferir_resultado.py` nas duas. Avisar quando a conferência é
-   pulada por falta da pasta da noite.
-4. **Destinação de Presidente** no `votacao_candidato_munzona`: depende do TSE.
+3. **Destinação de Presidente** no `votacao_candidato_munzona`: depende do TSE.

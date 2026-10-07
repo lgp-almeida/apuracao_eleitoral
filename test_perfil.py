@@ -86,7 +86,14 @@ def test_censo_por_bairro(tse_cache: Path) -> None:
     assert (a["renda_media"], a["renda_mediana"], a["densidade"], a["moradores_domicilio"]) == (8000.5, 6000, 5000, 2.5)
     assert a["pct_pretos_pardos"] == pytest.approx(40)  # (100 pretos + 300 pardos) / 1000
     assert b["densidade"] == 10000 and b["pct_pretos_pardos"] is None  # "X" = sigilo do IBGE
+    # sexo e idade dos moradores (rodada 48); sigilo numa faixa → só essa faixa sem dado
+    assert (a["pct_mulheres_censo"], a["pct_0_14_censo"], a["pct_15_24_censo"], a["pct_60_mais_censo"]) == (55, 15, 10, 25)
+    assert b["pct_0_14_censo"] is None and b["pct_15_24_censo"] == 20 and b["pct_mulheres_censo"] == 50
     assert (tse_cache / "ibge_censo2022" / "censo_bairros_RJ.parquet").exists()
+    # cache gravado antes de um indicador novo é refeito
+    antigo = pl.read_parquet(tse_cache / "ibge_censo2022" / "censo_bairros_RJ.parquet").drop("pct_60_mais_censo")
+    antigo.write_parquet(tse_cache / "ibge_censo2022" / "censo_bairros_RJ.parquet")
+    assert "pct_60_mais_censo" in pf.censo_por_bairro("RJ", tse_cache).columns
 
 
 def test_perfil_por_bairro(perfil: pf.PerfilVoto) -> None:
@@ -165,7 +172,7 @@ def test_api_perfil(site: TestClient) -> None:
     t = site.get(f"/api/perfil/dispersao?{base}&x=voto&x_ano=2024&x_cargo=13&x_numero={CAND}").json()
     assert all(p["X"] == p["Y"] for p in t["pontos"])  # o mesmo voto nos dois eixos
     c = site.get(f"/api/perfil/correlacoes?{base}").json()
-    assert c["rotulo_y"].startswith("% dos válidos") and len(c["correlacoes"]) == 10
+    assert c["rotulo_y"].startswith("% dos válidos") and len(c["correlacoes"]) == len(pf.INDICADORES_TSE) + len(pf.INDICADORES_CENSO)
     assert site.get(f"/api/perfil/dispersao?{base}&x=voto").status_code == 400          # falta a outra eleição
     assert site.get(f"/api/perfil/dispersao?{base}&x=signo").status_code == 400
     assert site.get("/api/perfil/dispersao?ano=2024&cargo=13&x=pct_superior").status_code == 400  # sem alvo
@@ -181,7 +188,7 @@ def test_pedidos_paralelos_nao_colidem_na_conversao(perfil: pf.PerfilVoto) -> No
         feitos = [ex.submit(perfil.dispersao, y, k, 0) for k in ("pct_superior", "pct_mulheres", "renda_media")] + [
             ex.submit(perfil.correlacoes, y, 0) for _ in range(3)]
         resultados = [f.result() for f in feitos]  # sem exceção
-    assert all(len(r) == 10 for r in resultados[3:])
+    assert all(len(r) == len(pf.INDICADORES_TSE) + len(pf.INDICADORES_CENSO) for r in resultados[3:])
 
 
 def test_numero_municipal_e_de_uma_pessoa_por_municipio(perfil: pf.PerfilVoto, monkeypatch: pytest.MonkeyPatch) -> None:

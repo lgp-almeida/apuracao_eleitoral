@@ -16,6 +16,8 @@ import pytest
 
 import votos_por_local_votacao as v
 
+_DOWNLOAD = v.download  # o verdadeiro: a fixture `site` (sessão, e2e) troca v.download por um sem rede
+
 VS_HEADER = [
     "DT_GERACAO", "HH_GERACAO", "ANO_ELEICAO", "NR_TURNO", "SG_UF", "SG_UE", "NM_UE",
     "CD_MUNICIPIO", "NM_MUNICIPIO", "NR_ZONA", "NR_SECAO", "CD_CARGO", "DS_CARGO",
@@ -174,6 +176,6 @@ class _Resposta404:
 def test_download_404_so_atribui_ao_tse_o_que_e_do_tse(tmp_path, monkeypatch, url, cita_tse):
     monkeypatch.setattr(v.requests, "get", lambda *a, **k: _Resposta404())
     with pytest.raises(v.TseDataError) as exc:
-        v.download(v.DatasetSpec("x", url, "RJ"), tmp_path)
+        _DOWNLOAD(v.DatasetSpec("x", url, "RJ"), tmp_path)
     assert url in str(exc.value)
     assert ("TSE" in str(exc.value)) is cita_tse

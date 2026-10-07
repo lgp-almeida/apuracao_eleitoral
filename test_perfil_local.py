@@ -107,6 +107,11 @@ def test_agregar_indicadores_do_censo(cache: Path) -> None:
     n = ag[NITEROI]  # urbano + rural: renda ponderada pelos responsáveis, densidade = moradores ÷ área somados
     assert n["pct_pretos_pardos"] == pytest.approx(100 * (50 + 150) / 500)  # rural com sigilo parcial fica fora
     assert n["renda_media"] == pytest.approx((5000 * 180 + 900 * 15) / 195) and n["densidade"] == pytest.approx(550 / 5.04)
+    # sexo e idade dos moradores (rodada 48): soma das contagens dos setores sem sigilo
+    assert (p["pct_mulheres_censo"], p["pct_0_14_censo"], p["pct_15_24_censo"], p["pct_60_mais_censo"]) == (52, 10, 15, 30)
+    assert n["pct_mulheres_censo"] == pytest.approx(100 * (260 + 25) / 550)
+    assert n["pct_60_mais_censo"] == pytest.approx(100 * (150 + 10) / 550)
+    assert ag[CIEP]["pct_mulheres_censo"] is None  # setor sob sigilo: sem dado, nunca zero
 
 
 # --------------------------------------------------------------------------- perfil × voto por local
@@ -152,7 +157,8 @@ def test_api_por_local(site: TestClient) -> None:
     base = f"ano=2024&cargo=13&numero={CAND}&min_validos=0&unidade=local"
     d = site.get(f"/api/perfil/dispersao?{base}&x=pct_favela").json()
     assert len(d["pontos"]) == 4
-    assert len(site.get(f"/api/perfil/correlacoes?{base}").json()["correlacoes"]) == 11
+    n_indicadores = len(pf.INDICADORES_TSE) + len(pfl.INDICADORES_CENSO_LOCAL)
+    assert len(site.get(f"/api/perfil/correlacoes?{base}").json()["correlacoes"]) == n_indicadores
     r = site.get(f"/api/perfil/regressao?{base}&indicadores=pct_superior").json()
     assert r["n"] == 4 and r["coeficientes"][0]["indicador"] == "pct_superior"
     assert site.get(f"/api/perfil/regressao?{base}&indicadores=pct_superior,renda_media").status_code == 400
