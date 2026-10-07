@@ -186,7 +186,10 @@ def serie_candidato(destino: Path, cargo: int, numero: int, abrangencias: list[t
     for abr, mun in abrangencias:
         cond = pl.col("ABRANGENCIA") == abr
         cond &= pl.col("CD_MUNICIPIO").is_null() if mun is None else pl.col("CD_MUNICIPIO") == mun
-        df = lf.filter(cond).collect().unique(subset=["DT_TOTALIZACAO", "NUMERO"], keep="first")
+        # sem hora de totalização (o TSE publica a abrangência com a data vazia antes de começar a totalizar: 790
+        # linhas na coleta de 4/10) não há ponto no tempo; quebrava a rota com AttributeError (07/10/2026)
+        df = (lf.filter(cond & pl.col("DT_TOTALIZACAO").is_not_null()).collect()
+              .unique(subset=["DT_TOTALIZACAO", "NUMERO"], keep="first"))
         ref = df.filter(pl.col("NUMERO") == REFERENCIA).select(
             "DT_TOTALIZACAO", "PCT_SECOES_TOTALIZADAS", pl.col("VOTOS").alias("VALIDOS"))
         c = df.filter(pl.col("NUMERO") == numero).select("DT_TOTALIZACAO", "VOTOS", "PCT_VALIDOS")

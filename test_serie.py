@@ -132,3 +132,19 @@ def test_mapa_no_momento(fake_tse: FakeTSE, tmp_path: Path) -> None:
     # com fuso (ex.: link montado à mão em UTC): vira a hora de Brasília, a do TSE, em vez de erro 500
     utc = site.get(f"/api/mapa?cargo=3&metrica=votos_candidato&numero={n}&momento=2026-09-29T21:30:00%2B00:00")
     assert utc.status_code == 200 and utc.json()["momento"] == "2026-09-29T18:30:00"
+
+
+def test_serie_por_municipio_ignora_linha_sem_hora(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """Abrangência publicada antes de totalizar vem com a data vazia: a série descarta o ponto em vez de quebrar
+    a rota (/api/candidato/serie, AttributeError em 07/10/2026 com os dados da noite de 4/10)."""
+    n = _numero_governador(fake_tse)
+    col = Coletor(ClienteDivulgacao("simulado", sessao=fake_tse, limitador=LimitadorTaxa(1e9)), tmp_path)
+    col.ciclo()
+    pasta = tmp_path / sr.CANDIDATOS_DIR
+    bloco = pl.read_parquet(next(pasta.glob("*.parquet")))
+    bloco.with_columns(pl.lit(None, bloco.schema["DT_TOTALIZACAO"]).alias("DT_TOTALIZACAO")).write_parquet(
+        pasta / "sem_hora.parquet")
+    (rio,) = sr.serie_candidato(tmp_path, 3, n, [("mun", 60011)])
+    assert len(rio["pontos"]) == 1 and rio["pontos"][0]["dt"]
+    site = TestClient(create_app(tmp_path, "RJ", tmp_path))
+    assert site.get(f"/api/candidato/serie?cargo=3&numero={n}&municipio=60011").status_code == 200

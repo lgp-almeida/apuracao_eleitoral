@@ -197,6 +197,23 @@ def test_de_cedo_demais_direto_para_uma_leitura_definida_e_noticia(cenario) -> N
     assert cenario.vigia.verificar()[0]["titulo"].startswith("Governador: 2º turno projetado")
 
 
+def test_leitura_definida_logo_no_inicio_da_apuracao_e_noticia(cenario) -> None:
+    """Ensaio AM 2º turno (07/10/2026): antes de qualquer seção nada é lido; no ciclo seguinte a projeção já
+    diz "vitória projetada". Antes, essa era a 1ª observação e não saía alerta."""
+    cenario.dados.cargo(3, 0.0, datetime(2026, 10, 4, 17, 0))
+    cenario.brasilia.t = datetime(2026, 10, 4, 17, 5)
+    assert cenario.vigia.verificar() == []
+    cenario.dados.cargo(3, 8.0, datetime(2026, 10, 4, 17, 20))
+    cenario.brasilia.t = datetime(2026, 10, 4, 17, 21)
+    cenario.leitura["situacao"] = "vitória projetada (acima de 50% mesmo na margem)"
+    (a,) = cenario.vigia.verificar()
+    assert a["titulo"] == "Governador: vitória projetada (acima de 50% mesmo na margem)"
+    assert a["detalhe"].startswith("Antes: sem apuração.")
+    # um site que sobe no meio da apuração, sem alertas.json, continua sem alertar a 1ª leitura
+    cenario.arquivo.unlink()
+    assert cenario.novo().verificar() == []
+
+
 def test_deputado_de_interesse(cenario) -> None:
     v_ = cenario.novo(interesse=[(7, 13713)])
     cenario.dados.cargo(7, 20.0, datetime(2026, 10, 4, 18, 58))

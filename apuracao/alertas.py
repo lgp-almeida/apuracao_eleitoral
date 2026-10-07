@@ -192,7 +192,13 @@ class Vigia:
         novos = []
         for cargo in MAJORITARIOS:
             linha = uf.filter(pl.col("CARGO") == cargo)
-            if linha.is_empty() or not (linha["PCT_SECOES_TOTALIZADAS"][0] or 0) > 0:
+            if linha.is_empty():
+                continue
+            if not (linha["PCT_SECOES_TOTALIZADAS"][0] or 0) > 0:
+                # grava "sem apuração": a 1ª leitura real passa a ser MUDANÇA. Sem isto, na UF que já começa com
+                # uma leitura definida (AM, 2º turno de 2022: "vitória projetada" no 1º minuto com votos), ela
+                # era a 1ª observação e saía em silêncio (ensaio de 07/10/2026)
+                self.estado["leituras"].setdefault(str(cargo), "sem apuração")
                 continue
             try:
                 p = self.consultas.projecao(cargo)
