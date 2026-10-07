@@ -97,5 +97,5 @@ Lá, a área de ponderação do Censo 2022 virou unidade do Perfil × voto; aqui
 
 ## Pendências
 
-1. **Escala divergente:** com ela no `desenharMapa`, as camadas resíduo e variação entrariam por área.
+1. **Escala divergente:** feita na [RODADA_51](RODADA_51_2026-10-06_area_escala_divergente.md) (resíduo e variação por área).
 2. **Erro amostral:** marcar no mapa as áreas com coeficiente de variação alto nos indicadores da amostra.

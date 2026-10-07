@@ -48,6 +48,14 @@ def alvo(ano: int, cargo: int, turno: int, numero: int) -> pf.Alvo:
     return pf.Alvo(ano, cargo, turno, numero, None)
 
 
+def participacao(unidade: Any, ano: int, cargo: int, turno: int, metrica: str) -> pl.DataFrame:
+    """CD_BAIRRO (= a unidade), VALOR, NUM, DEN — abstenção ou comparecimento. A unidade que soma locais (área
+    de ponderação) tem o próprio método `participacao`; o local usa `_participacao`."""
+    if hasattr(unidade, "participacao"):
+        return unidade.participacao(ano, cargo, turno, metrica)
+    return _participacao(unidade, ano, cargo, turno, metrica)
+
+
 def _participacao(plocal: Any, ano: int, cargo: int, turno: int, metrica: str) -> pl.DataFrame:
     """CD_BAIRRO (= UNIDADE do local), VALOR, NUM, DEN — abstenção ou comparecimento por local."""
     det = plocal.b._carregar(("detalhe", ano), lambda: v.load_section_details(ano, plocal.b.uf, plocal.b.cache))
@@ -67,7 +75,7 @@ def variacao(plocal: Any, ano: int, ano_ref: int, cargo: int, turno: int, metric
         raise ValueError(f"variação por local: {', '.join(METRICAS_VARIACAO)}")
     m = METRICAS_VARIACAO[metrica]
     if m in br.PARTICIPACAO:
-        a, b = (_participacao(plocal, x, cargo, turno, m) for x in (ano_ref, ano))
+        a, b = (participacao(plocal, x, cargo, turno, m) for x in (ano_ref, ano))
         rotulo = br.METRICAS[metrica]
     else:
         nums_a = nums_b = None

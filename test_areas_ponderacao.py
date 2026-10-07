@@ -168,7 +168,9 @@ def test_valores_do_mapa_por_area(pva: ap.PerfilVotoArea) -> None:
     rio = ap.mapa(pva, 2024, "perfil", indicador="pct_evangelicos", municipio=3304557)
     assert set(rio["itens"]) == {AREA_RIO_1, AREA_RIO_2} and rio["cobertura"]["areas"] == 2
     with pytest.raises(ValueError):
-        ap.mapa(pva, 2024, "residuo", indicador="pct_evangelicos")  # por área: só voto e perfil
+        ap.mapa(pva, 2024, "transferencia")  # por área: voto, perfil, resíduo e variação
+    with pytest.raises(ValueError):
+        ap.mapa(pva, 2024, "residuo", indicador="pct_evangelicos")  # o resíduo precisa do número
 
 
 def test_abstencao_por_area_soma_os_aptos(pva: ap.PerfilVotoArea) -> None:
@@ -191,3 +193,32 @@ def test_api_do_mapa_por_area(cache: Path, tmp_path: Path, monkeypatch: pytest.M
     r = site.post("/api/exportar/mapa", json={"formato": "svg", "camada": "areas", "titulo": "t",
                                               "cores": {AREA_RIO_1: "#ff0000"}, "legenda": [["#ff0000", "x"]]})
     assert r.status_code == 200 and b"<svg" in r.content[:400]
+
+
+def test_residuo_por_area_divergente(pva: ap.PerfilVotoArea, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 3 áreas sintéticas não dão reta (mínimo de 5 unidades): sem resíduo, mapa vazio e a estatística diz por quê
+    vazio = ap.mapa(pva, 2024, "residuo", cargo=13, numero=CAND, indicador="pct_evangelicos", min_validos=0)
+    assert vazio["itens"] == {} and vazio["estatistica"]["n"] == 3 and vazio["tipo"] == "divergente"
+    pontos = pl.DataFrame({"CD_BAIRRO": [AREA_RIO_1, AREA_RIO_2], "RESIDUO": [-4.0, 6.5], "Y": [30.0, 52.0],
+                           "X": [10.0, 40.0]})
+    monkeypatch.setattr(pva, "dispersao", lambda y, x, mv, pond, mun: {
+        "pontos": pontos, "estatistica": {"n": 2, "pearson": 0.9, "r2": 0.81, "a": 1.0, "b": 2.0, "p": 0.1},
+        "rotulo_x": "% de evangélicos", "rotulo_y": "% dos válidos"})
+    d = ap.mapa(pva, 2024, "residuo", cargo=13, numero=CAND, indicador="pct_evangelicos", min_validos=0)
+    assert d["unidade"] == "p.p." and d["sentido"] == "residuo" and d["estatistica"]["pearson"] == 0.9
+    assert {a: i["valor"] for a, i in d["itens"].items()} == {AREA_RIO_1: -4.0, AREA_RIO_2: 6.5}
+    assert (d["itens"][AREA_RIO_2]["voto"], d["itens"][AREA_RIO_2]["indicador"]) == (52.0, 40.0)  # para a dica
+
+
+def test_variacao_por_area(pva: ap.PerfilVotoArea, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A área é a mesma nos dois anos: a variação é a métrica de 2024 − a de 2020, área por área (p.p.)."""
+    abst = {2020: {AREA_RIO_1: 20.0, AREA_RIO_2: 30.0}, 2024: {AREA_RIO_1: 25.0, AREA_RIO_2: 22.5, AREA_NIT: 10.0}}
+    monkeypatch.setattr(pva, "participacao", lambda ano, cargo, turno, metrica: pl.DataFrame(
+        {"CD_BAIRRO": list(abst[ano]), "VALOR": list(abst[ano].values())}).with_columns(
+        pl.lit(1).alias("NUM"), pl.lit(1).alias("DEN")))
+    d = ap.mapa(pva, 2024, "variacao", cargo=13, metrica="abstencao_pct", ano_ref=2020)
+    assert d["tipo"] == "divergente" and d["lados"] == ["2020", "2024"] and d["sentido"] == "variacao"
+    assert {a: i["valor"] for a, i in d["itens"].items()} == {AREA_RIO_1: 5.0, AREA_RIO_2: -7.5}  # Niterói: sem 2020
+    assert (d["itens"][AREA_RIO_2]["antes"], d["itens"][AREA_RIO_2]["depois"]) == (30.0, 22.5)
+    with pytest.raises(ValueError):
+        ap.mapa(pva, 2024, "variacao", cargo=13, metrica="abstencao_pct", ano_ref=2024)

@@ -288,6 +288,15 @@ class PerfilVotoArea(pfl.PerfilVotoLocal):
                 self._censo_ap = universo.join(am, on="CD_BAIRRO", how="left")
             return self._censo_ap
 
+    def participacao(self, ano: int, cargo: int, turno: int, metrica: str) -> pl.DataFrame:
+        """CD_BAIRRO (= área), VALOR, NUM, DEN: abstenção ou comparecimento somando os aptos dos locais da área."""
+        from apuracao import mapa_locais as ml
+        por_local = ml._participacao(self, ano, cargo, turno, metrica)  # CD_BAIRRO = UNIDADE do local
+        return (por_local.join(self.local_area(ano).rename({"UNIDADE": "CD_BAIRRO"}), on="CD_BAIRRO", how="inner")
+                .group_by("CD_AP").agg(pl.col("NUM").sum(), pl.col("DEN").sum())
+                .select(pl.col("CD_AP").alias("CD_BAIRRO"),
+                        pl.when(pl.col("DEN") > 0).then(100 * pl.col("NUM") / pl.col("DEN")).alias("VALOR"), "NUM", "DEN"))
+
     def _nomes(self) -> dict[str, tuple[str, str]]:
         return {a: (n, m) for a, n, m in self._amostra().select("CD_AP", "NM_AP", "NM_MUN").iter_rows()}
 
@@ -304,7 +313,8 @@ class PerfilVotoArea(pfl.PerfilVotoLocal):
 # --------------------------------------------------------------------------
 MALHA = "malhas/areas_ponderacao_{uf}.geojson"
 SIMPLIFICAR_GRAUS = 0.0006  # ~60 m; com 5 casas (~1 m) o RJ fica com ~1,5 MB e SP com ~6 MB (bairros RJ: 2,7 MB)
-CAMADAS_MAPA = {"voto": "Voto", "perfil": "Perfil (Censo e eleitorado)"}
+CAMADAS_MAPA = {"voto": "Voto", "perfil": "Perfil (Censo e eleitorado)", "residuo": "Resíduo do Perfil × voto",
+                "variacao": "Variação desde a eleição anterior"}  # as duas últimas: escala divergente (p.p.)
 
 
 def malha(uf: str, cache: Path) -> dict[str, Any]:
@@ -338,10 +348,15 @@ def malha(uf: str, cache: Path) -> dict[str, Any]:
 
 
 def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int = 1, metrica: str | None = None,
-         numero: int | None = None, indicador: str | None = None, municipio: int | None = None) -> dict[str, Any]:
+         numero: int | None = None, indicador: str | None = None, municipio: int | None = None,
+         min_validos: int = 50, ano_ref: int | None = None) -> dict[str, Any]:
     """Valor por área de ponderação, no formato do mapa por bairro (`itens` por código da área).
     "voto": as métricas do mapa por bairro (votos dos locais da área; abstenção/comparecimento somando os aptos);
-    "perfil": um indicador da unidade área (TSE, universo e amostra do Censo). ValueError = pedido inválido;
+    "perfil": um indicador da unidade área (TSE, universo e amostra do Censo);
+    "residuo": o resíduo do Perfil × voto por área (p.p.; nº de 2 dígitos em proporcional = partido);
+    "variacao": a métrica no `ano` − na referência (`ano_ref`, padrão ano − 4), em p.p., pela mesma regra do
+    mapa por local (`mapa_locais.variacao`: partido pela entidade). A área não muda entre eleições (é a do Censo
+    2022): os locais de cada ano entram na área do setor que os contém. ValueError = pedido inválido;
     TseDataError = microdados ausentes."""
     from apuracao import bairros as br
     from apuracao import mapa_locais as ml
@@ -354,11 +369,7 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
             raise ValueError(f"métrica indisponível por área: {metrica}. Use: {', '.join(br.METRICAS)}")
         cargo_nome = br.CARGOS[cargo].title()
         if metrica in br.PARTICIPACAO:
-            por_local = ml._participacao(pva, ano, cargo, turno, metrica)  # CD_BAIRRO = UNIDADE do local
-            df = (por_local.join(pva.local_area(ano).rename({"UNIDADE": "CD_BAIRRO"}), on="CD_BAIRRO", how="inner")
-                  .group_by("CD_AP").agg(pl.col("NUM").sum(), pl.col("DEN").sum())
-                  .select(pl.col("CD_AP").alias("CD_BAIRRO"),
-                          pl.when(pl.col("DEN") > 0).then(100 * pl.col("NUM") / pl.col("DEN")).alias("VALOR")))
+            df = pva.participacao(ano, cargo, turno, metrica).select("CD_BAIRRO", "VALOR")
             rotulo = f"{br.METRICAS[metrica]} — {cargo_nome} {ano}"
         else:
             vb = pva._vb(ano, cargo, turno)
@@ -371,7 +382,7 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
                 extra["categorias"] = br.categorias(vb, cargo)
         tipo = "categorico" if metrica == "vencedor" else "sequencial"
         unidade = "%" if metrica.endswith("_pct") or metrica == "pct_candidato" else ""
-    else:
+    elif camada == "perfil":
         indicadores = pva.indicadores()
         if indicador not in indicadores:
             raise ValueError(f"indicador desconhecido: {indicador}")
@@ -379,14 +390,32 @@ def mapa(pva: PerfilVotoArea, ano: int, camada: str, cargo: int = 3, turno: int 
         rotulo, tipo = f"{indicadores[indicador]['rotulo']} — por área de ponderação", "sequencial"
         unidade = "%" if indicador.startswith("pct_") else ""
         extra["fonte_indicador"] = indicadores[indicador]["fonte"]
+    elif camada == "variacao":
+        ano_ref = ano_ref or ano - 4
+        if ano_ref >= ano:
+            raise ValueError("a eleição de referência deve ser anterior")
+        df, rotulo = ml.variacao(pva, ano, ano_ref, cargo, turno, metrica, numero, municipio)
+        tipo, unidade = "divergente", "p.p."
+        extra.update(ano_ref=ano_ref, lados=[str(ano_ref), str(ano)], sentido="variacao")
+    else:  # resíduo
+        if numero is None or indicador is None:
+            raise ValueError("o resíduo precisa do número (candidato; 2 dígitos = partido) e do indicador")
+        d = pva.dispersao(ml.alvo(ano, cargo, turno, numero), indicador, min_validos, False, municipio)
+        df = d["pontos"].select("CD_BAIRRO", pl.col("RESIDUO").alias("VALOR"), pl.col("Y").alias("VOTO"),
+                                pl.col("X").alias("INDICADOR"))
+        est = d["estatistica"]
+        rotulo, tipo, unidade = f"Resíduo (p.p.): {d['rotulo_y']} × {d['rotulo_x']}", "divergente", "p.p."
+        extra.update(sentido="residuo", rotulo_x=d["rotulo_x"], rotulo_y=d["rotulo_y"], min_validos=min_validos,
+                     estatistica={k: est.get(k) for k in ("n", "pearson", "r2", "a", "b", "p")})
     com_local = pva.local_area(ano).select(pl.col("CD_AP").unique().alias("CD_BAIRRO"))
     df = df.join(com_local, on="CD_BAIRRO", how="inner")  # só áreas com local de votação (as da UF)
     if municipio is not None:
         df = df.filter(pf.municipio_do_bairro() == municipio)
         com_local = com_local.filter(pf.municipio_do_bairro() == municipio)
     nomes = pva._nomes()
+    extras = [c for c in ("VOTO", "INDICADOR", "ANTES", "DEPOIS") if c in df.columns]  # para a dica do mapa
     itens = {r["CD_BAIRRO"]: {"valor": r["VALOR"], "municipio": " — ".join(nomes.get(r["CD_BAIRRO"], ("?", "?"))),
-                              "rotulo": r.get("ROTULO")}
+                              "rotulo": r.get("ROTULO"), **{c.lower(): r[c] for c in extras}}
              for r in df.drop_nulls("VALOR").iter_rows(named=True)}
     return {"camada": camada, "metrica": metrica if camada == "voto" else None, "tipo": tipo, "rotulo": rotulo,
             "unidade": unidade, "ano": ano, "itens": itens,

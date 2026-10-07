@@ -1146,6 +1146,10 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
     const idx = new Map(top.map((c, i) => [c.NUMERO, i]));
     corDe = (it) => (it ? (idx.has(it.valor) ? cores[idx.get(it.valor)] : cor("--outros")) : semDado);
     itensLegenda = [...top.map((c, i) => [cores[i], `${c.NUMERO} ${c.NOME_URNA} (${c.PARTIDO})`]), [cor("--outros"), "Outros"]];
+  } else if (dados.tipo === "divergente") {  // resíduo e variação (p.p.) por área de ponderação
+    const esc = escalaDivergente(vals, dados.sentido);
+    corDe = (it) => (!it || it.valor === null || it.valor === undefined ? semDado : esc.corValor(it.valor));
+    itensLegenda = [...esc.itensLegenda];
   } else {
     const valores = Object.values(dados.itens).map((i) => i.valor);
     if (!escala) {
@@ -1164,7 +1168,13 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
     itensLegenda = lim.slice(0, -1).map((a, i) => [seq[i], `${fmt(a)} – ${fmt(lim[i + 1])}`]);
   }
   itensLegenda.push([semDado, "sem dado"]);
-  const f = (it) => (!it ? "sem dado" : dados.tipo === "categorico" ? it.rotulo : fmt(it.valor));
+  const f = (it) => (!it ? "sem dado" : dados.tipo === "categorico" ? it.rotulo
+    : dados.tipo === "divergente" ? fmtPP(it.valor) : fmt(it.valor));
+  const pct2 = (x) => `${x.toFixed(2).replace(".", ",")}%`;
+  const detalhe = (it) => (!it ? null  // dica das camadas divergentes: os dois lados da conta
+    : dados.lados && it.antes != null ? [el("br"), `${dados.lados[0]}: ${pct2(it.antes)} → ${dados.lados[1]}: ${pct2(it.depois)}`]
+    : dados.tipo === "divergente" && it.voto != null ? [el("br"), `voto ${pct2(it.voto)} · indicador ${int(Math.round(it.indicador * 100) / 100)}`]
+    : null);
   const coresExport = {};
   mapa._camada = L.geoJSON(geo, {
     style: (ft) => {
@@ -1177,7 +1187,7 @@ async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, 
       const nome = it ? it.municipio
         : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}`
         : camada === "areas" ? `${ft.properties.NM_AP} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
-      layer.bindTooltip(() => { const d = el("div", {}, el("strong", {}, nome), el("br"), f(it)); return d; }, { sticky: true });
+      layer.bindTooltip(() => el("div", {}, el("strong", {}, nome), el("br"), f(it), detalhe(it)), { sticky: true });
       layer.on("mouseover", () => layer.setStyle({ weight: 3, color: cor("--texto") }));
       layer.on("mouseout", () => layer.setStyle({ weight: poligonos ? 0.5 : 1, color: cor("--superficie") }));
     },
@@ -1423,7 +1433,7 @@ async function prepararLocais(unidade = "local") {
   if ([...municipioLocSel.options].some((o) => o.value === munAtual)) municipioLocSel.value = munAtual;
 }
 
-const CAMADAS_AREA = ["voto", "perfil"];  // por área de ponderação (TODO 25)
+const CAMADAS_AREA = ["voto", "perfil", "residuo", "variacao"];  // por área de ponderação (sem transferência)
 
 function ajustarControlesLocais() {
   const locais = estado.detalhe === "locais" || estado.detalhe === "areas";  // os dois usam camada/indicador/município
@@ -1452,8 +1462,8 @@ transfSel.addEventListener("change", () => atualizarMapa());
 municipioLocSel.addEventListener("change", () => { if (estado.mapa) estado.mapa._enquadrado = false; atualizarMapa(); });
 metricaSel.addEventListener("change", ajustarControlesLocais);
 
-async function atualizarMapaLocais(cargo, legenda) {
-  const nota = document.getElementById("locais-nota");
+// parâmetros da camada escolhida, comuns ao mapa por local e por área; null (com o aviso na legenda) se falta o nº
+function consultaCamada(cargo, legenda) {
   const camada = camadaSel.value;
   const q = new URLSearchParams({ ano: anoBairrosSel.value, camada, cargo, turno: estado.turno || 1 });
   const num = numeroMapa.value.trim();
@@ -1462,7 +1472,7 @@ async function atualizarMapaLocais(cargo, legenda) {
     if (metricaSel.value.endsWith("_candidato")) {
       if (!/^\d+$/.test(num)) {
         legenda.replaceChildren(el("p", {}, camada === "variacao" ? "Informe o número de um candidato ou partido (vale o partido)."
-          : "Informe o número de um candidato.")); return;
+          : "Informe o número de um candidato.")); return null;
       }
       q.set("numero", num);
     }
@@ -1473,12 +1483,31 @@ async function atualizarMapaLocais(cargo, legenda) {
     q.set("indicador", indicadorSel.value);
     if (camada === "residuo") {
       if (!/^\d+$/.test(num)) {
-        legenda.replaceChildren(el("p", {}, "Informe o número do candidato (ou 2 dígitos para o partido).")); return;
+        legenda.replaceChildren(el("p", {}, "Informe o número do candidato (ou 2 dígitos para o partido).")); return null;
       }
       q.set("numero", num);
     }
   }
   if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
+  return q;
+}
+
+// a leitura das camadas divergentes (resíduo e variação) no mapa por área
+function notaDivergenteArea(d) {
+  const est = d.estatistica;
+  return (est && est.pearson !== null ? ` Reta voto × indicador: r = ${est.pearson.toFixed(2).replace(".", ",")}, ` +
+    `R² = ${est.r2.toFixed(2).replace(".", ",")}, ${int(est.n)} áreas com ≥ ${int(d.min_validos)} votos válidos. ` +
+    "Azul: o voto foi MAIOR que o esperado pelo indicador; vermelho: menor. Correlação ecológica." : "") +
+    (d.camada === "variacao" ? " Partido pela entidade (fusões e trocas de nº). Azul: subiu; vermelho: caiu." : "") +
+    (!Object.keys(d.itens).length && d.camada === "residuo" ? ` Nenhuma área com ${int(d.min_validos)} votos válidos ` +
+      "ou mais para o resíduo (ele só usa áreas com votos suficientes)." : "");
+}
+
+async function atualizarMapaLocais(cargo, legenda) {
+  const nota = document.getElementById("locais-nota");
+  const camada = camadaSel.value;
+  const q = consultaCamada(cargo, legenda);
+  if (!q) return;
   legenda.replaceChildren(el("p", { class: "nota" }, "carregando os locais…"));
   const pedido = novoPedidoMapa();
   try {
@@ -1519,17 +1548,9 @@ const novoPedidoMapa = () => (estado.pedidoMapa = (estado.pedidoMapa || 0) + 1);
 async function atualizarMapaAreas(cargo, legenda) {
   const nota = document.getElementById("areas-nota");
   const camada = camadaSel.value;
-  const q = new URLSearchParams({ ano: anoBairrosSel.value, camada, cargo, turno: estado.turno || 1 });
-  if (camada === "voto") {
-    q.set("metrica", metricaSel.value);
-    if (metricaSel.value.endsWith("_candidato")) {
-      const num = numeroMapa.value.trim();
-      if (!/^\d+$/.test(num)) { legenda.replaceChildren(el("p", {}, "Informe o número de um candidato.")); return; }
-      q.set("numero", num);
-    }
-  } else q.set("indicador", indicadorSel.value);
+  const q = consultaCamada(cargo, legenda);
+  if (!q) return;
   const mun = municipioLocSel.value;
-  if (mun) q.set("municipio", mun);
   legenda.replaceChildren(el("p", { class: "nota" }, "carregando as áreas…"));
   const pedido = novoPedidoMapa();
   try {
@@ -1545,9 +1566,10 @@ async function atualizarMapaAreas(cargo, legenda) {
     const amostra = (d.fonte_indicador || "").includes("amostra");
     nota.textContent = `Áreas de ponderação do Censo 2022 (IBGE): ${int(c.areas_com_dado)} de ${int(c.areas)} áreas ` +
       "com local de votação têm valor; uma cidade pequena é uma área só. " +
-      (camada === "voto" ? "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor " +
-        "que contém a sua coordenada)." : `Fonte: ${d.fonte_indicador}.` +
-        (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : ""));
+      (camada === "perfil" ? `Fonte: ${d.fonte_indicador}.` + (amostra ? " Estimativa da amostra do Censo: tem erro amostral." : "")
+        : "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor que contém a sua " +
+          "coordenada)." + (camada === "variacao" ? ` A área é a mesma nos dois anos (${d.ano_ref} e ${d.ano}).` : "")) +
+      notaDivergenteArea(d);
   } catch (e) {
     if (pedido !== estado.pedidoMapa) return;
     for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
@@ -1568,6 +1590,29 @@ function formatoLocais(d) {
   return (x) => int(Math.round(x));
 }
 
+// escala DIVERGENTE em p.p. (resíduo do Perfil × voto, variação desde a eleição anterior), comum aos pontos (locais)
+// e aos polígonos (áreas): faixas pelos quantis de |valor| (com milhares de unidades, o máximo seria um extremo),
+// azul acima de zero, vermelho abaixo, tokens --div-*. `sentido` = "variacao" (subiu/caiu) ou "residuo".
+function escalaDivergente(vals, sentido) {
+  const abs = vals.map(Math.abs).sort((a, b) => a - b);
+  const q = (f) => abs[Math.min(abs.length - 1, Math.floor(f * abs.length))] || 1e-9;
+  const lim = [q(0.33), q(0.66), q(0.9)];
+  const cores = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"].map(cor);
+  const corValor = (v) => {
+    const a = Math.abs(v); const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3;
+    return cores[v < 0 ? 3 - k : 3 + k];
+  };
+  const m = (x) => Math.abs(x).toFixed(1).replace(".", ",");
+  const variacao = sentido === "variacao";
+  const itensLegenda = [[cores[6], `${variacao ? "subiu" : "voto maior que o esperado:"} mais de ${m(lim[2])} p.p.`],
+    [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
+    [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `${variacao ? "estável" : "como esperado"} (±${m(lim[0])} p.p.)`],
+    [cores[2], `−${m(lim[0])} a −${m(lim[1])} p.p.`], [cores[1], `−${m(lim[1])} a −${m(lim[2])} p.p.`],
+    [cores[0], `${variacao ? "caiu" : "voto menor que o esperado:"} mais de ${m(lim[2])} p.p.`]];
+  return { corValor, itensLegenda };
+}
+const fmtPP = (x) => `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(1).replace(".", ",")} p.p.`;
+
 async function desenharPontos(mapa, d, legendaEl) {
   for (const k of ["_camada", "_contornos"]) if (mapa[k]) { mapa.removeLayer(mapa[k]); mapa[k] = null; }
   const fmt = formatoLocais(d);
@@ -1580,19 +1625,7 @@ async function desenharPontos(mapa, d, legendaEl) {
     corDe = (v) => (idx.has(v) ? cores[idx.get(v)] : cor("--outros"));
     itensLegenda = [...top.map((c, i) => [cores[i], `${c.NUMERO} ${c.NOME_URNA}`]), [cor("--outros"), "Outros"]];
   } else if (d.tipo === "divergente") {
-    // faixas pelos quantis de |resíduo| (5 mil pontos: o máximo seria um ponto extremo)
-    const abs = vals.map(Math.abs).sort((a, b) => a - b);
-    const q = (f) => abs[Math.min(abs.length - 1, Math.floor(f * abs.length))] || 1e-9;
-    const lim = [q(0.33), q(0.66), q(0.9)];
-    const cores = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"].map(cor);
-    corDe = (v) => { const a = Math.abs(v); const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3; return cores[v < 0 ? 3 - k : 3 + k]; };
-    const m = (x) => Math.abs(x).toFixed(1).replace(".", ",");
-    const variacao = d.sentido === "variacao";
-    itensLegenda = [[cores[6], `${variacao ? "subiu" : "voto maior que o esperado:"} mais de ${m(lim[2])} p.p.`],
-      [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
-      [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `${variacao ? "estável" : "como esperado"} (±${m(lim[0])} p.p.)`],
-      [cores[2], `−${m(lim[0])} a −${m(lim[1])} p.p.`], [cores[1], `−${m(lim[1])} a −${m(lim[2])} p.p.`],
-      [cores[0], `${variacao ? "caiu" : "voto menor que o esperado:"} mais de ${m(lim[2])} p.p.`]];
+    ({ corValor: corDe, itensLegenda } = escalaDivergente(vals, d.sentido));
   } else {
     const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);  // amarelo (menos) -> vermelho (mais)
     const qb = quebrasQuantis(vals);

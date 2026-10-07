@@ -1003,14 +1003,15 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
 
     @app.get("/api/mapa/areas")
     def mapa_areas(ano: int, camada: str = "voto", cargo: int = 3, turno: int = 1, metrica: str | None = None,
-                   numero: int | None = None, indicador: str | None = None,
-                   municipio: int | None = None) -> dict[str, Any]:
-        """Valor por área de ponderação do Censo (TODO 25): voto (microdados somados pelos locais da área) ou um
-        indicador de perfil da unidade área (inclusive a religião e a amostra do Censo)."""
-        chave = (ano, camada, cargo, turno, metrica, numero, indicador, municipio)
+                   numero: int | None = None, indicador: str | None = None, municipio: int | None = None,
+                   min_validos: int = Query(50, ge=0), ano_ref: int | None = None) -> dict[str, Any]:
+        """Valor por área de ponderação do Censo (TODO 25): voto (microdados somados pelos locais da área), um
+        indicador de perfil da unidade área (inclusive a religião e a amostra do Censo), o resíduo do Perfil × voto
+        ou a variação desde `ano_ref` (padrão ano − 4) — estas duas em p.p., escala divergente."""
+        chave = (ano, camada, cargo, turno, metrica, numero, indicador, municipio, min_validos, ano_ref)
         if chave not in mapa_areas_cache:
             d = _perfil(lambda: ap.mapa(perfis["area"], ano, camada, cargo, turno, metrica, numero, indicador,
-                                        municipio), "area")
+                                        municipio, min_validos, ano_ref), "area")
             if len(mapa_areas_cache) > 24:
                 mapa_areas_cache.clear()
             mapa_areas_cache[chave] = d

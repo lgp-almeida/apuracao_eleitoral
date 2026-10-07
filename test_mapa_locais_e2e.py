@@ -150,9 +150,9 @@ def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
                             ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())")
     assert len(cores) == 3 and set(cores.values()) <= set(rampa)  # 3 áreas sintéticas, rampa de mapas
     assert pagina.locator("#areas-nota").is_visible() and "áreas" in pagina.inner_text("#areas-nota")
-    # só voto e perfil por área: as outras camadas ficam desabilitadas
+    # por área: só a transferência fica desabilitada
     assert pagina.evaluate("[...document.querySelectorAll('#mapa-camada option')].filter(o => !o.disabled)"
-                           ".map(o => o.value)") == ["voto", "perfil"]
+                           ".map(o => o.value)") == ["voto", "perfil", "residuo", "variacao"]
     # perfil: a religião (amostra do Censo) está entre os indicadores da área
     pagina.select_option("#mapa-camada", "perfil")
     pagina.select_option("#mapa-indicador", "pct_evangelicos")
@@ -165,3 +165,30 @@ def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
     pagina.wait_for_function("() => document.getElementById('mapa-municipio').value === '3303302' && "
                              "location.hash.includes('municipio=3303302') && estado.mapa._export")
     assert pagina.input_value("#mapa-detalhe") == "areas" and pagina.input_value("#mapa-indicador") == "pct_evangelicos"
+
+
+def test_area_em_escala_divergente(pagina, site) -> None:
+    """Variação por área: polígonos nas cores --div-*, legenda subiu/caiu (resposta pronta: o sintético só tem 2024)."""
+    import json
+    resposta = {"camada": "variacao", "metrica": None, "tipo": "divergente", "unidade": "p.p.", "ano": 2024,
+                "ano_ref": 2020, "lados": ["2020", "2024"], "sentido": "variacao",
+                "rotulo": "Variação (p.p.) de Abstenção (%) — Vereador, 2020 → 2024",
+                "cobertura": {"areas_com_dado": 3, "areas": 3},
+                "itens": {a: {"valor": v, "municipio": f"Área {a[-3:]}", "rotulo": None, "antes": 30.0, "depois": 30.0 + v}
+                          for a, v in (("3304557001", -6.0), ("3304557002", 0.4), ("3303302001", 8.0))}}
+    pagina.route("**/api/mapa/areas?*camada=variacao*",
+                 lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(resposta)))
+    try:
+        abrir(pagina, site, AREAS.replace("metrica=pct_candidato", "metrica=abstencao_pct") + "&camada=variacao")
+        pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
+                                 "estado.mapa._export.titulo.startsWith('Variação')")
+        cores = set(pagina.evaluate("Object.values(estado.mapa._export.cores)"))
+        div = set(pagina.evaluate("['--div-n3','--div-n2','--div-n1','--div-0','--div-p1','--div-p2','--div-p3']"
+                                  ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())"))
+        assert len(cores) == 3 and cores <= div  # cai, estável e sobe: três cores divergentes
+        leg = pagina.inner_text("#mapa-legenda")
+        assert "subiu mais de" in leg and "caiu mais de" in leg and "estável" in leg
+        assert "mesma nos dois anos" in pagina.inner_text("#areas-nota")
+        assert "camada=variacao" in pagina.evaluate("location.hash")
+    finally:
+        pagina.unroute("**/api/mapa/areas?*camada=variacao*")
