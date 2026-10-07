@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cache-dir", type=Path, default=Path("cache_tse"))
     p.add_argument("--max-rps", type=float, default=10.0, help="acessos por segundo ao TSE, somando TODAS as UFs")
     p.add_argument("--refazer", action="store_true", help="refazer também o que já está completo")
+    p.add_argument("--politica-totais", choices=["auto", "oficial", "secoes", "bweb"], default="auto",
+                   help="microdados: nível dos totais (auto = o melhor disponível; fixo falha se indisponível)")
+    p.add_argument("--bweb-brasil", action="store_true",
+                   help="microdados: com o Boletim de Urna, baixar os das 27 UFs + exterior (Presidente no Brasil)")
     p.add_argument("--so-plano", action="store_true", help="só mostrar o que seria feito (nada é baixado)")
     p.add_argument("--vigiar", action="store_true", help="repetir o que ficou 'aguardando' a cada --intervalo")
     p.add_argument("--intervalo", type=float, default=3600, help="segundos entre repetições com --vigiar (mín. 600)")
@@ -66,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     cfg = lt.Config(ufs=ufs, etapas=tuple(a.etapas), anos=tuple(a.anos), turnos=tuple(a.turnos),
                     anos_eleitorado=tuple(a.anos_eleitorado), ambiente=a.ambiente, raiz=a.raiz, cache=a.cache_dir,
-                    max_rps=a.max_rps, refazer=a.refazer)
+                    max_rps=a.max_rps, refazer=a.refazer, politica_totais=a.politica_totais,
+                    bweb_brasil=a.bweb_brasil)
     lote = lt.Lote(cfg)
     tarefas = lote.tarefas()
     faltam = [(c, u) for c, u, _ in tarefas if not lote.ja_feita(c, u)]

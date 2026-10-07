@@ -123,13 +123,14 @@ def test_microdados_provisorio_aguarda_e_oficial_fica_ok(tmp_path: Path, monkeyp
 
     importados: list[str] = []
 
-    def importar(a, totais_de):
+    def importar(a, totais_de, turno, memo=None):
         importados.append(totais_de)
-        destino = dir_uf(a.raiz / f"historico_{a.ano}_t1", a.uf)
+        destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
         destino.mkdir(parents=True, exist_ok=True)
         (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
-        return {1: totais_de}
+        return True
     monkeypatch.setattr(p26, "importar", importar)
+    monkeypatch.setattr(md, "turnos", lambda *a: {1})  # os ZIPs falsos não têm NR_TURNO: só o 1º turno
     monkeypatch.setattr(p26, "transferencia", lambda a: None)
     monkeypatch.setattr(md, "converter", lambda *a: [])
     monkeypatch.setattr(ibge, "preparar", lambda *a, **k: [])

@@ -220,20 +220,27 @@ def _ler_uf(zp: Path, uf: str, colunas: list[str]) -> pl.DataFrame:
                        null_values=v.TSE_NULL_MARKERS)
 
 
-def entrada_munzona(ano: int, uf: str, cargo: int, cache: Path) -> tuple[pl.DataFrame, pl.DataFrame, int, int]:
-    """(agremiações, candidatos com SITUACAO_TSE oficial, vagas, válidos) dos microdados oficiais.
+def entrada_munzona(ano: int, uf: str, cargo: int, cache: Path, partidos: pl.DataFrame | None = None
+                    ) -> tuple[pl.DataFrame, pl.DataFrame, int, int]:
+    """(agremiações, candidatos com SITUACAO_TSE oficial, vagas, válidos) dos microdados.
 
     `votacao_partido_munzona` dá os válidos da agremiação (legenda + nominais válidos + nominais
     convertidos em legenda); `votacao_candidato_munzona` dá os nominais válidos, a destinação e a
-    situação final de cada candidato (o gabarito). Vagas = eleitos oficiais."""
+    situação final de cada candidato (o gabarito). Vagas = eleitos oficiais. `partidos`: o
+    votacao_partido_munzona RECONSTRUÍDO (`historico.partidos_munzona`, rodada 55) no lugar do oficial,
+    enquanto o TSE não o publica (RJ 2022: igual ao oficial em todas as linhas)."""
     base = f"{v.CDN_BASE}"
-    zp_p = v.download(v.DatasetSpec(f"votacao_partido_munzona_{ano}",
-                                    f"{base}/votacao_partido_munzona/votacao_partido_munzona_{ano}.zip", uf), cache)
     zp_c = v.download(v.DatasetSpec(f"votacao_candidato_munzona_{ano}",
                                     f"{base}/votacao_candidato_munzona/votacao_candidato_munzona_{ano}.zip", uf), cache)
     ordin = (pl.col("CD_TIPO_ELEICAO") == "2") & (pl.col("NR_TURNO") == "1") & (pl.col("CD_CARGO") == str(cargo))
-    p = _ler_uf(zp_p, uf, ["CD_TIPO_ELEICAO", "NR_TURNO", "CD_CARGO", "SG_PARTIDO", "NR_FEDERACAO", "SG_FEDERACAO",
-                           "QT_TOTAL_VOTOS_LEG_VALIDOS", "QT_VOTOS_NOMINAIS_VALIDOS"]).filter(ordin)
+    colunas_p = ["CD_TIPO_ELEICAO", "NR_TURNO", "CD_CARGO", "SG_PARTIDO", "NR_FEDERACAO", "SG_FEDERACAO",
+                 "QT_TOTAL_VOTOS_LEG_VALIDOS", "QT_VOTOS_NOMINAIS_VALIDOS"]
+    if partidos is None:
+        zp_p = v.download(v.DatasetSpec(f"votacao_partido_munzona_{ano}",
+                                        f"{base}/votacao_partido_munzona/votacao_partido_munzona_{ano}.zip", uf), cache)
+        p = _ler_uf(zp_p, uf, colunas_p).filter(ordin)
+    else:  # tipado: como texto, igual ao CSV
+        p = partidos.filter(pl.col("SG_UF") == uf.upper()).select(pl.col(colunas_p).cast(pl.String)).filter(ordin)
     p = p.with_columns(pl.when(pl.col("NR_FEDERACAO").cast(pl.Int64, strict=False) > 0).then(pl.col("SG_FEDERACAO"))
                        .alias("FEDERACAO"))
     agr = (p.with_columns(_chave_agremiacao("FEDERACAO", "SG_PARTIDO").alias("AGREMIACAO"))

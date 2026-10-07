@@ -89,7 +89,7 @@ def load_votos(ano: int, uf: str, cache: Path) -> tuple[pl.LazyFrame, pl.LazyFra
     return uf_votes, pl.scan_parquet(pq)
 
 
-FONTES = ("secao", "munzona")
+FONTES = ("secao", "munzona", "bweb")
 _COLS_MUNZONA = ["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "CD_CARGO"]
 # votos de legenda no votacao_secao = todos os digitados para o partido (válidos, anulados e anulados sub judice)
 _LEGENDA = ["QT_VOTOS_LEGENDA_VALIDOS", "QT_VOTOS_LEGENDA_ANUL_SUBJUD", "QT_VOTOS_LEGENDA_ANULADOS"]
@@ -292,21 +292,28 @@ def detalhe_de_secoes(votos: pl.LazyFrame, detalhe: pl.LazyFrame, destinacao: pl
     soma = lambda c: pl.col("QT_VOTOS").filter(pl.col("_C") == c).sum().alias(c)  # noqa: E731
     por_zona = v.with_columns(cat.alias("_C")).group_by(_CHAVE_ZONA).agg(
         pl.col("QT_VOTOS").sum().alias("QT_VOTOS"), *[soma(c) for c in _CATEGORIAS])
+    tem = set(detalhe.collect_schema().names())
+    # o detalhe por seção só lista as seções PRINCIPAIS; o oficial soma as agregadas (RJ 2022: 34.068 + 2.482 =
+    # 36.550). O BU traz a lista das agregadas de cada principal (`bweb.detalhe_por_secao`): com ela, igual ao
+    # oficial; sem ela, só as principais (entra só no % de seções totalizadas, 100% aqui)
+    agregadas = pl.col("QT_SECOES_AGREGADAS").sum() if "QT_SECOES_AGREGADAS" in tem else pl.lit(0, pl.Int64)
     det = (detalhe.with_columns(pl.col("NR_TURNO", "CD_CARGO", "CD_MUNICIPIO", "NR_ZONA").cast(pl.Int64))
            .group_by(_CHAVE_ZONA).agg(
                pl.col("QT_APTOS").sum(), pl.col("QT_COMPARECIMENTO").sum(), pl.col("QT_ABSTENCOES").sum(),
-               # só as seções PRINCIPAIS: o detalhe por seção não lista as agregadas, que o oficial soma
-               # (RJ 2022: 34.068 + 2.482 = 36.550); só entra no % de seções totalizadas, 100% aqui
-               pl.col("NR_SECAO").n_unique().cast(pl.Int64).alias("QT_TOTAL_SECOES"),
+               (pl.col("NR_SECAO").n_unique().cast(pl.Int64) + agregadas).alias("QT_TOTAL_SECOES"),
                pl.col("DS_CARGO").first().str.to_titlecase(),  # a conversão põe em maiúsculas; oficial: "Governador"
                pl.col("DT_PRIM_TOT_PARCIAL_HOR_TSE").cast(pl.String)
-               .str.to_datetime("%d/%m/%Y %H:%M:%S", strict=False).max().alias("_HORA"))
+               .str.to_datetime("%d/%m/%Y %H:%M:%S", strict=False).max().alias("_HORA"),
+               # o BU traz o código da eleição: reserva quando a destinação do turno ainda não saiu
+               (pl.col("CD_ELEICAO").cast(pl.Int64).drop_nulls().first() if "CD_ELEICAO" in tem
+                else pl.lit(None, pl.Int64)).alias("_ELEICAO_SECAO"))
            .collect())
     eleicao = destinacao.group_by("NR_TURNO", "CD_CARGO").agg(pl.col("CD_ELEICAO").drop_nulls().first())
     zero = pl.lit(0, pl.Int64)
     return (
         det.join(por_zona, on=_CHAVE_ZONA, how="full", coalesce=True).rechunk()
         .join(eleicao, on=["NR_TURNO", "CD_CARGO"], how="left")
+        .with_columns(pl.coalesce("CD_ELEICAO", "_ELEICAO_SECAO").alias("CD_ELEICAO")).drop("_ELEICAO_SECAO")
         .with_columns(*[pl.col(c).fill_null(zero) for c in ("QT_VOTOS", *_CATEGORIAS)])
         .with_columns(
             (pl.col("NOMINAIS") + pl.col("LEGENDA")).alias("QT_TOTAL_VOTOS_VALIDOS"),
@@ -355,6 +362,155 @@ def load_detalhe_secoes(ano: int, uf: str, cache: Path) -> pl.DataFrame:
         ((pl.col("SG_UF") == uf.upper()) & pl.col("CD_CARGO").is_in(list(CARGOS_UF)))
         | (pl.col("CD_CARGO") == CARGO_PRESIDENTE))
     return detalhe_de_secoes(votos, det, destinacao_oficial(ano, cache))
+
+
+# --------------------------------------------------------------------------
+# Boletim de Urna (fonte "bweb", rodada 55): os mesmos intermediários da fonte "secao", traduzidos do BU
+# --------------------------------------------------------------------------
+_DESTINACAO_VAZIA = {"NR_TURNO": pl.Int64, "SG_UF": pl.String, "CD_CARGO": pl.Int64, "NUMERO": pl.Int64,
+                     "NR_PARTIDO": pl.Int64, "CD_ELEICAO": pl.Int64, "DESTINACAO_TSE": pl.String,
+                     "SITUACAO_TSE": pl.String, "SG_PARTIDO": pl.String, "NR_FEDERACAO": pl.Int64,
+                     "COMPOSICAO_FEDERACAO": pl.String}
+
+
+def _bus(ano: int, turno: int, uf: str, cache: Path, brasil: bool) -> dict[str, Path]:
+    """UF → BU conferido no cache: a pedida e, com `brasil`, as 27 + o exterior (Presidente na abrangência
+    Brasil). Faltando algum, `TseDataError` (nada de Brasil pela metade)."""
+    from apuracao import bweb
+    from apuracao.ufs import UFS
+
+    quais = [*UFS, bweb.EXTERIOR] if brasil else [uf.upper()]
+    achados = {u: bweb.no_cache(cache, ano, turno, u) for u in quais}
+    faltam = sorted(u for u, zp in achados.items() if zp is None)
+    if faltam:
+        raise v.TseDataError(f"Boletim de Urna de {ano}, {turno}º turno, fora do cache: {', '.join(faltam)}")
+    return achados  # type: ignore[return-value]
+
+
+def load_votos_bweb(ano: int, turno: int, uf: str, cache: Path, brasil: bool = False
+                    ) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """Os mesmos (votos da UF, votos nacionais) de `load_votos`, dos BUs do turno. Sem `brasil`, os votos
+    "nacionais" são só os da UF: quem importa tira a abrangência Brasil (`importar`)."""
+    from apuracao import bweb
+
+    bus = _bus(ano, turno, uf, cache, brasil)
+    votos = {u: bweb.votos_por_secao(bweb.ler(zp, u)) for u, zp in bus.items()}
+    nacional = pl.concat(list(votos.values()), how="vertical_relaxed").filter(pl.col("CD_CARGO") == CARGO_PRESIDENTE)
+    return votos[uf.upper()], nacional
+
+
+def load_detalhe_bweb(ano: int, turno: int, uf: str, cache: Path, brasil: bool = False,
+                      destinacao: pl.DataFrame | None = None) -> pl.DataFrame:
+    """`detalhe_de_secoes` sobre os BUs do turno (nenhuma regra de classificação nova). Sem a destinação do
+    turno (2º turno antes do candidato_munzona), os votos nominais e de legenda contam como válidos, como na
+    fonte "secoes" (aviso no status.json)."""
+    from apuracao import bweb
+
+    bus = _bus(ano, turno, uf, cache, brasil)
+    lidos = {u: bweb.ler(zp, u) for u, zp in bus.items()}
+    for u, bu in lidos.items():
+        logger.info("Boletim de Urna %s: %s", bus[u].name, bweb.verificar(bu))
+    colunas = _CHAVE_ZONA + ["NR_VOTAVEL", "QT_VOTOS"]
+    votos = pl.concat([bweb.votos_por_secao(bu).filter(
+        (pl.col("CD_CARGO") == CARGO_PRESIDENTE) | ((pl.col("SG_UF") == uf.upper()) & pl.col("CD_CARGO").is_in(list(CARGOS_UF))))
+        .select(colunas) for bu in lidos.values()], how="vertical_relaxed")
+    det = pl.concat([bweb.detalhe_por_secao(bu) for bu in lidos.values()], how="vertical_relaxed").filter(
+        (pl.col("CD_CARGO") == CARGO_PRESIDENTE) | ((pl.col("SG_UF") == uf.upper()) & pl.col("CD_CARGO").is_in(list(CARGOS_UF))))
+    if destinacao is None:
+        destinacao = _destinacao_ou_nada(ano, cache)
+    if destinacao is None:
+        destinacao = pl.DataFrame(schema=_DESTINACAO_VAZIA)
+    return detalhe_de_secoes(votos, det.lazy(), destinacao)
+
+
+# --------------------------------------------------------------------------
+# votacao_partido_munzona reconstruído (rodada 55): para as cadeiras enquanto o TSE não publica o oficial
+# --------------------------------------------------------------------------
+QT_PARTIDO_MUNZONA = ["QT_VOTOS_LEGENDA_VALIDOS", "QT_VOTOS_NOM_CONVR_LEG_VALIDOS", "QT_TOTAL_VOTOS_LEG_VALIDOS",
+                      "QT_VOTOS_NOMINAIS_VALIDOS", "QT_VOTOS_LEGENDA_ANUL_SUBJUD", "QT_VOTOS_NOMINAIS_ANUL_SUBJUD",
+                      "QT_VOTOS_LEGENDA_ANULADOS", "QT_VOTOS_NOMINAIS_ANULADOS"]
+# atributos da agremiação (iguais em todas as zonas): copiados do votacao_candidato_munzona, no formato dele
+_ATRIBUTOS_PARTIDO = ["CD_ELEICAO", "DS_CARGO", "TP_AGREMIACAO", "SG_PARTIDO", "NM_PARTIDO", "NR_FEDERACAO",
+                      "NM_FEDERACAO", "SG_FEDERACAO", "DS_COMPOSICAO_FEDERACAO", "SQ_COLIGACAO", "NM_COLIGACAO",
+                      "DS_COMPOSICAO_COLIGACAO"]
+_CHAVE_PARTIDO = ["NR_TURNO", "SG_UF", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_PARTIDO"]
+# esquema de saída: o cabeçalho real do votacao_partido_munzona (2022), tipado; sem DT/HH_GERACAO, NM_UE etc.
+ESQUEMA_PARTIDO_MUNZONA = {
+    "ANO_ELEICAO": pl.Int64, "CD_TIPO_ELEICAO": pl.Int64, "NR_TURNO": pl.Int64, "CD_ELEICAO": pl.Int64,
+    "SG_UF": pl.String, "CD_MUNICIPIO": pl.Int64, "NM_MUNICIPIO": pl.String, "NR_ZONA": pl.Int64,
+    "CD_CARGO": pl.Int64, "DS_CARGO": pl.String, "TP_AGREMIACAO": pl.String, "NR_PARTIDO": pl.Int64,
+    "SG_PARTIDO": pl.String, "NM_PARTIDO": pl.String, "NR_FEDERACAO": pl.Int64, "NM_FEDERACAO": pl.String,
+    "SG_FEDERACAO": pl.String, "DS_COMPOSICAO_FEDERACAO": pl.String, "SQ_COLIGACAO": pl.Int64,
+    "NM_COLIGACAO": pl.String, "DS_COMPOSICAO_COLIGACAO": pl.String, "ST_VOTO_EM_TRANSITO": pl.String,
+    **{c: pl.Int64 for c in QT_PARTIDO_MUNZONA}}
+
+
+def load_candidatos_zona(ano: int, uf: str, cache: Path) -> pl.DataFrame:
+    """As linhas do votacao_candidato_munzona da UF (Presidente: as da UF), tipadas, por município × zona.
+    Só do CACHE, como a destinação."""
+    if not (cache / f"votacao_candidato_munzona_{ano}.zip").exists():
+        raise v.TseDataError(f"votacao_candidato_munzona_{ano}.zip não está no cache")
+    colunas = _COLS_MUNZONA + ["NR_ZONA", "NM_MUNICIPIO", "QT_VOTOS_NOMINAIS"] + _COLS_DESTINACAO
+    pq = _parquet_com_colunas("votacao_candidato_munzona", ano, cache, colunas,
+                              tuple(dict.fromkeys((*_COLS_FEDERACAO, *_ATRIBUTOS_PARTIDO, "ST_VOTO_EM_TRANSITO"))))
+    lf = pl.scan_parquet(pq).filter(pl.col("SG_UF") == uf.upper())
+    tem = set(lf.collect_schema().names())
+    inteiro = lambda c: pl.col(c).cast(pl.String).str.strip_chars().cast(pl.Int64, strict=False)  # noqa: E731
+    ints = {"NR_TURNO", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_CANDIDATO", "NR_PARTIDO", "CD_ELEICAO",
+            "QT_VOTOS_NOMINAIS", "NR_FEDERACAO", "SQ_COLIGACAO"}
+    return lf.select([(inteiro(c) if c in ints else pl.col(c).cast(pl.String)).alias(c) if c in tem
+                      else pl.lit(None, pl.Int64 if c in ints else pl.String).alias(c)
+                      for c in dict.fromkeys(colunas + list(_COLS_FEDERACAO) + _ATRIBUTOS_PARTIDO)]).collect()
+
+
+def legenda_por_zona(votos: pl.LazyFrame) -> pl.DataFrame:
+    """Votos de legenda (votável de 2 dígitos nos proporcionais) somados por zona, dos votos por seção
+    (fonte "secao" ou "bweb")."""
+    return (votos.filter(pl.col("CD_CARGO").is_in(list(PROPORCIONAIS)) & (pl.col("NR_VOTAVEL") < 100)
+                         & ~pl.col("NR_VOTAVEL").is_in(ESPECIAIS))
+            .group_by(_CHAVE_ZONA + ["NR_VOTAVEL"]).agg(pl.col("QT_VOTOS").sum()).collect()
+            .with_columns(pl.col("NR_TURNO", "CD_MUNICIPIO", "NR_ZONA", "CD_CARGO", "NR_VOTAVEL", "QT_VOTOS")
+                          .cast(pl.Int64)))
+
+
+def partidos_munzona(candidatos: pl.DataFrame, legenda: pl.DataFrame, destinacao: pl.DataFrame,
+                     ano: int) -> pl.DataFrame:
+    """O votacao_partido_munzona reconstruído, por município × zona × cargo × partido. Sem I/O.
+
+    `candidatos`: `load_candidatos_zona` (nominais por candidato, com a destinação da totalização);
+    `legenda`: `legenda_por_zona`; `destinacao`: `destinacao_oficial`.
+      nominais, pela destinação do candidato: "Válido (legenda)" → convertidos em legenda; outra "Válido*" →
+        nominais válidos; "Anulado sub judice" → nominais sub judice; outra "Anulado*" → nominais anulados;
+      legenda, pela agremiação (`destino_legenda`, a mesma regra dos totais): válida, sub judice, anulada; o
+        nulo técnico (agremiação sem candidato no cargo) não é do partido;
+      QT_TOTAL_VOTOS_LEG_VALIDOS = legenda válida + nominais convertidos.
+    ST_VOTO_EM_TRANSITO fica nulo: a legenda por seção não se separa por voto em trânsito (soma dos dois)."""
+    d, q = pl.col("NM_TIPO_DESTINACAO_VOTOS"), pl.col("QT_VOTOS_NOMINAIS")
+    valido_legenda = d == "Válido (legenda)"
+    nom = candidatos.group_by(_CHAVE_PARTIDO).agg(
+        q.filter(d.str.starts_with("Válido") & ~valido_legenda).sum().alias("QT_VOTOS_NOMINAIS_VALIDOS"),
+        q.filter(valido_legenda).sum().alias("QT_VOTOS_NOM_CONVR_LEG_VALIDOS"),
+        q.filter(d == "Anulado sub judice").sum().alias("QT_VOTOS_NOMINAIS_ANUL_SUBJUD"),
+        q.filter(d.str.starts_with("Anulado") & (d != "Anulado sub judice")).sum().alias("QT_VOTOS_NOMINAIS_ANULADOS"))
+    destino = pl.col("_DESTINO_LEGENDA")
+    leg = (destino_legenda(legenda, destinacao).filter(destino != "NULOS_TECNICOS")
+           .rename({"NR_VOTAVEL": "NR_PARTIDO"}).group_by(_CHAVE_PARTIDO).agg(
+               pl.col("QT_VOTOS").filter(destino == "LEGENDA").sum().alias("QT_VOTOS_LEGENDA_VALIDOS"),
+               pl.col("QT_VOTOS").filter(destino == "SUBJUDICE").sum().alias("QT_VOTOS_LEGENDA_ANUL_SUBJUD"),
+               pl.col("QT_VOTOS").filter(destino == "ANULADOS").sum().alias("QT_VOTOS_LEGENDA_ANULADOS")))
+    atributos = (candidatos.sort("NR_CANDIDATO").group_by("NR_TURNO", "SG_UF", "CD_CARGO", "NR_PARTIDO")
+                 .agg(pl.col(_ATRIBUTOS_PARTIDO).drop_nulls().first()))
+    municipios = candidatos.group_by("CD_MUNICIPIO").agg(pl.col("NM_MUNICIPIO").drop_nulls().first())
+    return (nom.join(leg, on=_CHAVE_PARTIDO, how="full", coalesce=True).rechunk()
+            .with_columns(pl.col(c).fill_null(0) for c in QT_PARTIDO_MUNZONA if c != "QT_TOTAL_VOTOS_LEG_VALIDOS")
+            .with_columns((pl.col("QT_VOTOS_LEGENDA_VALIDOS") + pl.col("QT_VOTOS_NOM_CONVR_LEG_VALIDOS"))
+                          .alias("QT_TOTAL_VOTOS_LEG_VALIDOS"))
+            .join(atributos, on=["NR_TURNO", "SG_UF", "CD_CARGO", "NR_PARTIDO"], how="left")
+            .join(municipios, on="CD_MUNICIPIO", how="left")
+            .with_columns(pl.lit(ano).alias("ANO_ELEICAO"), pl.lit(int(v.ORDINARY_ELECTION)).alias("CD_TIPO_ELEICAO"),
+                          pl.lit(None, pl.String).alias("ST_VOTO_EM_TRANSITO"))
+            .select([pl.col(c).cast(t) for c, t in ESQUEMA_PARTIDO_MUNZONA.items()])
+            .sort(_CHAVE_PARTIDO))
 
 
 def municipios_tse_ibge(uf: str, cache: Path) -> pl.DataFrame:
@@ -620,9 +776,15 @@ def conferir_totais(antes: pl.DataFrame, depois: pl.DataFrame) -> pl.DataFrame:
 # --------------------------------------------------------------------------
 # Orquestração
 # --------------------------------------------------------------------------
-TOTAIS = ("munzona", "secoes")
+TOTAIS = ("munzona", "secoes", "bweb")
 DESCRICAO_TOTAIS = {"munzona": "oficiais (detalhe_votacao_munzona)",
-                    "secoes": "reconstruídos das seções (provisório, até o TSE publicar o detalhe_votacao_munzona)"}
+                    "secoes": "reconstruídos das seções (provisório, até o TSE publicar o detalhe_votacao_munzona)",
+                    "bweb": "reconstruídos do Boletim de Urna (provisório, até o TSE publicar os microdados)"}
+DESCRICAO_PARTIDOS = {"munzona": "oficiais (votacao_partido_munzona)",
+                      "secoes": "reconstruídos: candidato_munzona + legenda das seções (provisório)",
+                      "bweb": "reconstruídos: candidato_munzona + legenda do Boletim de Urna (provisório)"}
+_PROVISORIO = {"munzona": "", "secoes": " · totais provisórios", "bweb": " · totais provisórios (BU)"}
+PARTIDOS_MUNZONA = "partidos_munzona.parquet"  # em <destino>/ultimo/: o reconstruído, lido pelas cadeiras
 
 
 def _destinacao_ou_nada(ano: int, cache: Path) -> pl.DataFrame | None:
@@ -633,56 +795,132 @@ def _destinacao_ou_nada(ano: int, cache: Path) -> pl.DataFrame | None:
         return None
 
 
+def partido_oficial_publicado(ano: int, uf: str, cache: Path) -> bool:
+    """O votacao_partido_munzona oficial do ano está no cache com linhas da UF (só cabeçalho não conta)."""
+    from apuracao import microdados as md
+
+    zp = cache / f"votacao_partido_munzona_{ano}.zip"
+    try:
+        return zp.exists() and md.tem_dados(zp, f"_{uf.upper()}.csv")
+    except (OSError, ValueError):
+        return False
+
+
+def _partidos_reconstruidos(ano: int, uf: str, turno: int, cache: Path, votos_uf: pl.LazyFrame,
+                            destinacao: pl.DataFrame | None) -> pl.DataFrame | None:
+    """`partidos_munzona` do turno, ou None se faltar o candidato_munzona/destinação ou o turno não tiver
+    cargo proporcional (2º turno)."""
+    if destinacao is None:
+        return None
+    try:
+        cand = load_candidatos_zona(ano, uf, cache).filter(pl.col("NR_TURNO") == turno)
+    except (v.TseDataError, requests.RequestException) as exc:
+        logger.warning("votos por partido não reconstruídos (%s): %s", ano, exc)
+        return None
+    if cand.filter(pl.col("CD_CARGO").is_in(list(PROPORCIONAIS))).is_empty():
+        return None
+    legenda = legenda_por_zona(votos_uf.filter(pl.col("NR_TURNO") == turno))
+    return partidos_munzona(cand, legenda, destinacao, ano)
+
+
 def importar(ano: int, uf: str, turno: int, cache: Path, destino: Path, fonte: str | None = None,
-             totais_de: str = "munzona", detalhe: pl.DataFrame | None = None) -> dict[str, int]:
+             totais_de: str = "munzona", detalhe: pl.DataFrame | None = None, brasil: bool = False
+             ) -> dict[str, int]:
     """Grava destino/ultimo/*.parquet + status.json no formato lido pelo site. `fonte` dos votos:
-    "secao" (votacao_secao da UF + BR) ou "munzona" (arquivos nacionais por município e zona);
-    padrão: `fonte_padrao`. `totais_de`: "munzona" (oficiais) ou "secoes" (reconstruídos das seções —
-    exige a fonte "secao"; status.json marca como provisório). `detalhe`: o de `load_detalhe`/
-    `load_detalhe_secoes` já carregado (traz os dois turnos; evita refazer a reconstrução, ~1 min no RJ)."""
+    "secao" (votacao_secao da UF + BR), "munzona" (arquivos nacionais por município e zona) ou "bweb"
+    (Boletim de Urna do turno, rodada 55); padrão: `fonte_padrao`. `totais_de`: "munzona" (oficiais),
+    "secoes" (reconstruídos das seções — exige a fonte "secao") ou "bweb" (reconstruídos do BU — exige a fonte
+    "bweb"); os dois últimos são marcados como provisórios no status.json. `detalhe`: o de `load_detalhe`/
+    `load_detalhe_secoes` já carregado (traz os dois turnos; evita refazer a reconstrução, ~1 min no RJ).
+    `brasil` (só "bweb"): usa os BUs das 27 UFs + exterior para o Presidente no Brasil; sem ele, a abrangência
+    Brasil sai (com aviso), porque o BU da UF não dá o total do país.
+
+    Votos por partido (as cadeiras): os oficiais (votacao_partido_munzona) se publicados; senão reconstruídos
+    (`partidos_munzona`, gravado em ultimo/partidos_munzona.parquet) com a fonte "secao" ou "bweb"; o
+    status.json diz qual (`partidos_de`)."""
     if totais_de not in TOTAIS:
-        raise ValueError(f"totais desconhecidos: {totais_de} (use {' ou '.join(TOTAIS)})")
-    fonte = fonte or ("secao" if totais_de == "secoes" else fonte_padrao(ano, uf, cache))
+        raise ValueError(f"totais desconhecidos: {totais_de} (use {', '.join(TOTAIS)})")
+    fonte = fonte or {"secoes": "secao", "bweb": "bweb"}.get(totais_de) or fonte_padrao(ano, uf, cache)
     if fonte not in FONTES:
-        raise ValueError(f"fonte desconhecida: {fonte} (use {' ou '.join(FONTES)})")
+        raise ValueError(f"fonte desconhecida: {fonte} (use {', '.join(FONTES)})")
     if totais_de == "secoes" and fonte != "secao":
         raise ValueError("totais reconstruídos das seções exigem a fonte de votos \"secao\"")
+    if (totais_de == "bweb") != (fonte == "bweb"):
+        raise ValueError("o Boletim de Urna é fonte e totais ao mesmo tempo (fonte \"bweb\" com totais \"bweb\")")
     cand = load_candidatos(ano, cache)
-    det = detalhe if detalhe is not None else (
-        load_detalhe(ano, cache) if totais_de == "munzona" else load_detalhe_secoes(ano, uf, cache))
+    destinacao = _destinacao_ou_nada(ano, cache)
+    if detalhe is not None:
+        det = detalhe
+    elif totais_de == "munzona":
+        det = load_detalhe(ano, cache)
+    elif totais_de == "secoes":
+        det = load_detalhe_secoes(ano, uf, cache)
+    else:
+        det = load_detalhe_bweb(ano, turno, uf, cache, brasil, destinacao)
     tot = totais(det, uf, turno)
     if tot.is_empty():
         raise v.TseDataError(f"sem totais para {uf} {ano}, {turno}º turno")
-    votos_uf, votos_br = (load_votos if fonte == "secao" else load_votos_munzona)(ano, uf, cache)
-    destinacao = _destinacao_ou_nada(ano, cache)
+    if fonte == "bweb":
+        votos_uf, votos_br = load_votos_bweb(ano, turno, uf, cache, brasil)
+    else:
+        votos_uf, votos_br = (load_votos if fonte == "secao" else load_votos_munzona)(ano, uf, cache)
     candidatos, partidos = candidatos_e_partidos(votos_uf, votos_br, cand, tot, uf, turno, destinacao)
     sem_destinacao = cargos_sem_destinacao(destinacao, uf, turno, tot["CARGO"].unique().to_list())
     tot = vagas(tot, candidatos)
+    sem_brasil = fonte == "bweb" and not brasil
+    if sem_brasil:  # o "Brasil" seria só a UF
+        tot, candidatos, partidos = (df.filter(pl.col("ABRANGENCIA") != "br") for df in (tot, candidatos, partidos))
     municipios = municipios_tse_ibge(uf, cache)
+
+    if partido_oficial_publicado(ano, uf, cache):
+        partidos_de, partidos_mz = "munzona", None
+    else:
+        partidos_mz = (_partidos_reconstruidos(ano, uf, turno, cache, votos_uf, destinacao)
+                       if fonte in ("secao", "bweb") else None)
+        partidos_de = None if partidos_mz is None else ("secoes" if fonte == "secao" else "bweb")
 
     ultimo = destino / "ultimo"
     ultimo.mkdir(parents=True, exist_ok=True)
-    for nome, df in (("totais", tot), ("candidatos", candidatos), ("partidos", partidos), ("municipios", municipios),
-                     ("acompanhamento", pl.DataFrame(schema=m.ACOMPANHAMENTO_SCHEMA))):
+    tabelas = [("totais", tot), ("candidatos", candidatos), ("partidos", partidos), ("municipios", municipios),
+               ("acompanhamento", pl.DataFrame(schema=m.ACOMPANHAMENTO_SCHEMA))]
+    if partidos_mz is not None:
+        tabelas.append((PARTIDOS_MUNZONA.removesuffix(".parquet"), partidos_mz))
+    else:
+        (ultimo / PARTIDOS_MUNZONA).unlink(missing_ok=True)  # de uma importação provisória anterior
+    for nome, df in tabelas:
         tmp = ultimo / f"{nome}.parquet.tmp"
         df.write_parquet(tmp)
         tmp.replace(ultimo / f"{nome}.parquet")
     agora = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    provisorio = totais_de == "secoes"
+    provisorio = totais_de != "munzona"
+    avisos = ([f"cargos {', '.join(map(str, sem_destinacao))}: o TSE ainda não publicou a destinação dos votos "
+               f"(votacao_candidato_munzona_{ano}); "
+               + ("votos nominais contados como válidos e " if provisorio else "")
+               + "situação/destinação dos candidatos vêm do consulta_cand"] if sem_destinacao else [])
+    if sem_brasil:
+        avisos.append("Presidente sem a abrangência Brasil: só o Boletim de Urna da UF no cache "
+                      "(os 27 + exterior com --bweb-brasil)")
+    if fonte == "bweb":
+        from apuracao import bweb
+        bus = [f"{zp.stem} (Boletim de Urna, SHA-512 conferido)" for zp in
+               (bweb.no_cache(cache, ano, turno, u) for u in ([uf.upper()] if not brasil else _bus(ano, turno, uf, cache, True)))
+               if zp is not None]
+        fontes_totais = [*bus, f"votacao_candidato_munzona_{ano} (destinação)"]
+        fontes_votos: list[str] = []
+    else:
+        fontes_totais = ([f"detalhe_votacao_munzona_{ano}"] if not provisorio
+                         else [f"detalhe_votacao_secao_{ano}", f"votacao_candidato_munzona_{ano} (destinação)"])
+        fontes_votos = ([f"votacao_secao_{ano}_{uf.upper()}", f"votacao_secao_{ano}_BR"] if fonte == "secao"
+                        else [f"votacao_candidato_munzona_{ano}", f"votacao_partido_munzona_{ano}"])
     status = {
-        "ambiente": f"{ano} · {turno}º turno (microdados{' · totais provisórios' if provisorio else ''})",
+        "ambiente": f"{ano} · {turno}º turno (microdados{_PROVISORIO[totais_de]})",
         "ano": ano, "uf": uf.upper(), "turno": turno,
         "ciclo_tse": f"microdados {ano}", "ultimo_ciclo_inicio": agora, "ultimo_ciclo_fim": agora, "erro": None,
         "totais": DESCRICAO_TOTAIS[totais_de], "totais_de": totais_de,
-        "avisos": ([f"cargos {', '.join(map(str, sem_destinacao))}: o TSE ainda não publicou a destinação dos votos "
-                    f"(votacao_candidato_munzona_{ano}); "
-                    + ("votos nominais contados como válidos e " if provisorio else "")
-                    + "situação/destinação dos candidatos vêm do consulta_cand"] if sem_destinacao else []),
-        "fontes": [*([f"detalhe_votacao_munzona_{ano}"] if not provisorio
-                     else [f"detalhe_votacao_secao_{ano}", f"votacao_candidato_munzona_{ano} (destinação)"]),
-                   *([f"votacao_secao_{ano}_{uf.upper()}", f"votacao_secao_{ano}_BR"] if fonte == "secao"
-                     else [f"votacao_candidato_munzona_{ano}", f"votacao_partido_munzona_{ano}"]),
-                   f"consulta_cand_{ano}", "EA12 (divulgação TSE 2026) para o código IBGE"],
+        "partidos": DESCRICAO_PARTIDOS.get(partidos_de or "", "da divulgação importada (sem microdados por partido)"),
+        "partidos_de": partidos_de,
+        "avisos": avisos,
+        "fontes": [*fontes_totais, *fontes_votos, f"consulta_cand_{ano}", "EA12 (divulgação TSE 2026) para o código IBGE"],
     }
     (destino / "status.json").write_text(json.dumps(status, indent=2, ensure_ascii=False))
     return {"totais": tot.height, "candidatos": candidatos.height, "partidos": partidos.height,

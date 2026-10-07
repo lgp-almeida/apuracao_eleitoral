@@ -55,6 +55,8 @@ class Config:
     max_ciclos: int = 3        # divulgação: ciclos por UF para buscar o que deu 404 ou veio na versão anterior
     pausa_ciclos: float = 2.0
     refazer: bool = False
+    politica_totais: str = "auto"  # microdados: nível dos totais (`microdados.POLITICAS`)
+    bweb_brasil: bool = False      # microdados: com o Boletim de Urna, também os 27 + exterior (Presidente BR)
 
 
 @dataclass
@@ -74,6 +76,7 @@ class Lote:
     limitador: LimitadorTaxa = field(init=False)
     estado: dict[str, dict[str, dict[str, Any]]] = field(init=False)
     _bloqueado: str | None = field(init=False, default=None)
+    _bus_ckan: dict[int, list] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.limitador = LimitadorTaxa(self.cfg.max_rps)  # UM para todas as UFs
@@ -201,6 +204,14 @@ class Lote:
         falhas = ibge.preparar(self.cfg.cache, uf, self.sessao or requests)
         return Resultado(ERRO, "; ".join(falhas)) if falhas else Resultado(OK, "malhas e Censo no cache")
 
+    def _lista_bu(self, ano: int, sessao: Any):
+        """A lista de Boletins de Urna do CKAN: UMA consulta por ano em cada execução do lote (não uma por UF)."""
+        from apuracao import bweb
+
+        if ano not in self._bus_ckan:
+            self._bus_ckan[ano] = bweb.recursos(ano, sessao)
+        return self._bus_ckan[ano]
+
     def microdados(self, uf: str, ano: int = 2026) -> Resultado:
         import argparse
 
@@ -208,9 +219,13 @@ class Lote:
         from apuracao import microdados as md
 
         args = argparse.Namespace(ano=ano, uf=uf, cache_dir=self.cfg.cache, raiz=self.cfg.raiz,
-                                  saidas=Path("saidas") / uf)
+                                  saidas=Path("saidas") / uf, politica_totais=self.cfg.politica_totais,
+                                  bweb_brasil=self.cfg.bweb_brasil)
+        sessao = self.sessao or requests
         try:
-            estados = md.preparar(self.cfg.cache, ano, uf, self.sessao or requests, ao_chegar=p26.ao_chegar(args))
+            estados = md.preparar(self.cfg.cache, ano, uf, sessao, ao_chegar=p26.ao_chegar(args))
+            if p26.procurar_bu(args, sessao, self._lista_bu(ano, sessao)):  # rodada 55: só se nada melhor existe
+                p26.atualizar(args, {md.BWEB})
         except requests.RequestException as exc:
             return Resultado(ERRO, f"rede: {exc}")
         totais = p26.garantir_importacao(args)
@@ -222,8 +237,9 @@ class Lote:
         # para o --vigiar e a próxima execução trocarem pelo oficial quando o TSE publicar (rodada 40)
         if totais == "munzona" and not faltam:
             return Resultado(OK, f"importado com os totais oficiais; no cache: {', '.join(sorted(com))}")
-        if totais == "secoes":
-            return Resultado(AGUARDANDO, f"importado com totais PROVISÓRIOS (reconstruídos das seções); "
+        if totais in ("secoes", "bweb"):
+            de = "das seções" if totais == "secoes" else "do Boletim de Urna"
+            return Resultado(AGUARDANDO, f"importado com totais PROVISÓRIOS (reconstruídos {de}); "
                                          f"falta no TSE: {', '.join(faltam)}")
         return Resultado(AGUARDANDO, f"TSE ainda não publicou o necessário ({', '.join(sorted(com)) or 'nada'} "
                                      f"com dados; falta: {', '.join(faltam)})")

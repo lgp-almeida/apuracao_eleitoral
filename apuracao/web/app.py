@@ -62,6 +62,7 @@ from apuracao import mapa_locais as ml
 from apuracao import bairros as br
 from apuracao import ibge
 from apuracao import cadeiras as cd
+from apuracao import historico as hist
 from apuracao import projecao as pj
 from apuracao import projecao_cadeiras as pcad
 from apuracao import transferencia as tf
@@ -98,7 +99,8 @@ METRICAS_CANDIDATO = {"pct_candidato": "% dos válidos do candidato", "votos_can
 SCHEMAS = {"totais": m.TOTAIS_SCHEMA, "candidatos": m.CANDIDATOS_SCHEMA, "partidos": m.PARTIDOS_SCHEMA,
            "municipios": m.MUNICIPIOS_SCHEMA, "acompanhamento": m.ACOMPANHAMENTO_SCHEMA, "serie": sr.SCHEMA,
            "historico_totais": m.TOTAIS_SCHEMA, "brasil_totais": m.TOTAIS_SCHEMA,
-           "brasil_candidatos": m.CANDIDATOS_SCHEMA}
+           "brasil_candidatos": m.CANDIDATOS_SCHEMA,
+           "partidos_munzona": hist.ESQUEMA_PARTIDO_MUNZONA}  # reconstruído na importação (rodada 55)
 NOME_UF = {"ZZ": "Exterior"}
 TOP_BRASIL = 3  # candidatos com cor própria no mapa por UF (dataviz: no máximo 3 + "Outros")
 
@@ -286,13 +288,29 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
 
     def distribuicao(cargo: int) -> tuple[cd.Distribuicao, str]:
         """Distribuição das cadeiras do cargo e a fonte. Eleição passada importada (status com "ano"):
-        microdados oficiais do TSE (validados contra as 1.572 vagas de 2022). Tempo real: o `ultimo/`."""
+        microdados do TSE (validados contra as 1.572 vagas de 2022) — os votos por partido oficiais ou, até o
+        TSE publicá-los, os reconstruídos na importação (`partidos_de` "secoes"/"bweb", rodada 55: RJ 2022 igual
+        ao oficial). Tempo real: o `ultimo/`."""
         if cargo not in cd.PROPORCIONAIS:
             raise ValueError(f"cargo {cargo} não é proporcional (use 6, 7 ou 8)")
         st = dados.status()
         tot, cand, part, versao = dados.tabelas_do_resultado()
         with cadeiras_trava:
-            if st.get("ano") and st.get("turno", 1) == 1:
+            provisorio = st.get("ano") and st.get("turno", 1) == 1 and st.get("partidos_de") in ("secoes", "bweb")
+            if provisorio:
+                pm, versao_pm = dados.com_versao("partidos_munzona")
+                chave_pm: tuple = ("reconstruido", st["ano"], cargo, versao_pm)
+                if not pm.is_empty() and chave_pm not in cadeiras_cache:
+                    try:
+                        cadeiras_cache[chave_pm] = (
+                            cd.distribuir(*cd.entrada_munzona(st["ano"], uf, cargo, cache_dir, partidos=pm)),
+                            f"microdados do TSE ({st['ano']}; votos por partido "
+                            f"{hist.DESCRICAO_PARTIDOS[st['partidos_de']]})")
+                    except (v.TseDataError, requests.RequestException) as exc:
+                        logger.warning("cadeiras com os votos por partido reconstruídos indisponíveis: %s", exc)
+                if chave_pm in cadeiras_cache:
+                    return cadeiras_cache[chave_pm]
+            elif st.get("ano") and st.get("turno", 1) == 1:
                 chave: tuple = ("munzona", st["ano"], cargo)
                 falhou = falhas_munzona.get(chave)
                 recente = falhou is not None and time.monotonic() - falhou < br.ESPERA_APOS_FALHA_S

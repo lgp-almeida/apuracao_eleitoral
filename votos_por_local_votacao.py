@@ -258,11 +258,14 @@ def zip_to_parquet(
     wanted: list[str],
     required: list[str],
     cache_dir: Path,
+    tipo_ordinario: str | None = ORDINARY_ELECTION,
 ) -> Path:
     """Converte uma vez o CSV do TSE para Parquet (UTF-8, tipado, só a UF).
 
     O Polars só lê UTF-8; por isso transcodificamos latin-1 -> UTF-8 em blocos
     (sem laço por linha), depois fazemos scan lazy + sink em streaming.
+    `tipo_ordinario`: o CD_TIPO_ELEICAO mantido; None = não filtrar (o Boletim de Urna usa outra tabela de
+    códigos — 0 = "Eleição Ordinária" — e filtra pelo nome em `apuracao.bweb`).
     """
     out = cache_dir / f"{spec.name}__{spec.uf_filter}.parquet"
     if out.exists():
@@ -287,8 +290,8 @@ def zip_to_parquet(
             tmp_csv, separator=";", quote_char='"', infer_schema=False,
             null_values=TSE_NULL_MARKERS, low_memory=True,
         )
-        if "CD_TIPO_ELEICAO" in header:  # suplementares posteriores vêm no mesmo arquivo
-            lf = lf.filter(pl.col("CD_TIPO_ELEICAO").str.strip_chars() == ORDINARY_ELECTION)
+        if "CD_TIPO_ELEICAO" in header and tipo_ordinario is not None:  # suplementares posteriores vêm no mesmo arquivo
+            lf = lf.filter(pl.col("CD_TIPO_ELEICAO").str.strip_chars() == tipo_ordinario)
         lf = lf.select(cols)
         if "SG_UF" in cols and spec.uf_filter != NATIONAL:  # NATIONAL = arquivo inteiro (todas as UFs)
             lf = lf.filter(pl.col("SG_UF") == spec.uf_filter)

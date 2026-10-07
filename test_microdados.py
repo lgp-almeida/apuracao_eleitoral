@@ -177,13 +177,14 @@ def cli_falso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cli, "transferencia", lambda a: chamadas.append(("transferencia",)))
     monkeypatch.setattr(ibge, "preparar", lambda c, uf: chamadas.append(("ibge",)) or [])
 
-    def importar(a, totais_de):
+    def importar(a, totais_de, turno, memo=None):
         chamadas.append(("importar", totais_de))
-        destino = dir_uf(a.raiz / f"historico_{a.ano}_t1", a.uf)
+        destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)
         destino.mkdir(parents=True, exist_ok=True)
         (destino / "status.json").write_text(json.dumps({"ano": a.ano, "totais_de": totais_de}))
-        return {1: totais_de}
+        return True
     monkeypatch.setattr(cli, "importar", importar)
+    monkeypatch.setattr(md, "turnos", lambda *a: {1})  # os ZIPs falsos não têm NR_TURNO: só o 1º turno
     args = ["--cache-dir", str(tmp_path / "cache"), "--raiz", str(tmp_path / "dados"), "--saidas", str(tmp_path / "s")]
     return cli, chamadas, args
 
@@ -269,8 +270,9 @@ def test_so_verificar_nao_baixa_nem_importa(cli_falso, capsys) -> None:
     publicar(cdn, PROVISORIO)
     assert cli.main(["--so-verificar", *args], sessao=cdn) == 0
     saida = capsys.readouterr().out
-    assert cdn.gets == 0 and cdn.heads == len(md.ARQUIVOS) and chamadas == []
-    assert "detalhe_votacao_munzona_2026.zip" in saida and "importado: nada" in saida
+    # só consulta: um HEAD por arquivo + a lista de Boletins de Urna no CKAN (sem baixar nada)
+    assert cdn.gets == 1 and cdn.heads == len(md.ARQUIVOS) and chamadas == []
+    assert "detalhe_votacao_munzona_2026.zip" in saida and "1º turno — importado: nada" in saida
     assert "rode sem --so-verificar" in saida
     with pytest.raises(SystemExit):
         cli.main(["--so-verificar", "--vigiar", *args], sessao=cdn)

@@ -33,6 +33,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import polars as pl
 import requests
 
 import votos_por_local_votacao as v
@@ -87,12 +88,99 @@ FINAL = BASE_IMPORTAR | TOTAIS_OFICIAIS | {"partido_munzona"}
 
 
 def fonte_dos_totais(com_dados: set[str]) -> str | None:
-    """"munzona" (oficiais), "secoes" (reconstruídos, provisórios) ou None (ainda não dá para importar)."""
+    """"munzona" (oficiais), "secoes" (reconstruídos, provisórios) ou None (ainda não dá para importar), só
+    pelos arquivos presentes (sem olhar o turno: ver `niveis_disponiveis`)."""
     if BASE_IMPORTAR | TOTAIS_OFICIAIS <= com_dados:
         return "munzona"
     if BASE_IMPORTAR | TOTAIS_DE_SECOES <= com_dados:
         return "secoes"
     return None
+
+
+# --------------------------------------------------------------------------
+# Nível dos totais por turno (rodada 55): munzona > secoes > bweb > None, sem rebaixar
+# --------------------------------------------------------------------------
+ORDEM: dict[str | None, int] = {None: 0, "bweb": 1, "secoes": 2, "munzona": 3}
+POLITICAS: dict[str, str | None] = {"auto": None, "oficial": "munzona", "secoes": "secoes", "bweb": "bweb"}
+BWEB = "bweb"  # chave de "mudou" quando chega um Boletim de Urna novo (não está em ARQUIVOS: nome com carimbo)
+
+
+class PoliticaIndisponivel(v.TseDataError):
+    """`--politica-totais` fixa um nível que o cache ainda não permite (nunca cai para outro sozinha)."""
+
+
+def turnos(cache: Path, ano: int, uf: str, chave: str) -> set[int]:
+    """Turnos com linhas DA UF no arquivo: o 1º turno nos arquivos do ano não significa o 2º (o TSE só
+    acrescenta o 2º turno dias depois). "votos" = votacao_secao da UF ∪ do BR (Presidente); "detalhe_secao";
+    "detalhe_munzona" (o CSV _BRASIL: o da UF não tem o Presidente). Ilegível ou ausente → vazio."""
+    try:
+        if chave == "votos":
+            partes = [v.load_section_votes(ano, uf, cargo, cache, False) for cargo, arq in
+                      (("governador", "votos_uf"), ("presidente", "votos_br"))
+                      if (cache / next(a for a in ARQUIVOS if a.chave == arq).zip(ano, uf)).exists()]
+            lf = pl.concat([p.select("SG_UF", "NR_TURNO") for p in partes]) if partes else None
+        elif chave == "detalhe_secao":
+            lf = v.load_section_details(ano, uf, cache).select("SG_UF", "NR_TURNO")
+        elif chave == "detalhe_munzona":
+            from apuracao import historico
+            lf = historico.load_detalhe(ano, cache).lazy().select("SG_UF", pl.col("NR_TURNO").cast(pl.Int64))
+        else:
+            raise ValueError(f"chave sem turnos: {chave}")
+        if lf is None:
+            return set()
+        return set(lf.filter(pl.col("SG_UF") == uf.upper()).select(pl.col("NR_TURNO").unique())
+                   .collect()["NR_TURNO"].drop_nulls().to_list())
+    except (v.TseDataError, requests.RequestException, OSError, pl.exceptions.PolarsError,
+            zipfile.BadZipFile) as exc:
+        logger.debug("turnos de %s (%s %s) indisponíveis: %s", chave, ano, uf, exc)
+        return set()
+
+
+def niveis_disponiveis(cache: Path, ano: int, uf: str, turno: int, com_dados: set[str] | None = None) -> list[str]:
+    """Os níveis de totais que o cache permite PARA O TURNO, do melhor para o pior:
+      munzona: detalhe munzona com linhas do turno + votos e cadastro;
+      secoes:  votos e detalhe por seção com linhas do turno + cadastro + destinação (candidato_munzona);
+      bweb:    Boletim de Urna do turno com SHA-512 conferido + cadastro."""
+    from apuracao import bweb
+
+    com = no_cache(cache, ano, uf) if com_dados is None else com_dados
+    saida = []
+    if BASE_IMPORTAR | TOTAIS_OFICIAIS <= com and turno in turnos(cache, ano, uf, "detalhe_munzona"):
+        saida.append("munzona")
+    if (BASE_IMPORTAR | TOTAIS_DE_SECOES <= com and turno in turnos(cache, ano, uf, "votos")
+            and turno in turnos(cache, ano, uf, "detalhe_secao")):
+        saida.append("secoes")
+    if "candidatos" in com and bweb.no_cache(cache, ano, turno, uf) is not None:
+        saida.append("bweb")
+    return saida
+
+
+def escolher_nivel(disponiveis: list[str], politica: str = "auto") -> str | None:
+    """`auto`: o melhor disponível (ou None). Política fixa: aquele nível, ou `PoliticaIndisponivel`."""
+    if politica not in POLITICAS:
+        raise ValueError(f"política desconhecida: {politica} (use {', '.join(POLITICAS)})")
+    alvo = POLITICAS[politica]
+    if alvo is None:
+        return disponiveis[0] if disponiveis else None
+    if alvo not in disponiveis:
+        raise PoliticaIndisponivel(f"totais \"{alvo}\" pedidos (--politica-totais {politica}), mas o cache não tem "
+                                   f"o necessário (disponível: {', '.join(disponiveis) or 'nada'})")
+    return alvo
+
+
+def fonte_dos_partidos(cache: Path, ano: int, uf: str, turno: int, com_dados: set[str] | None = None) -> str | None:
+    """De onde viriam os votos por partido das cadeiras: o votacao_partido_munzona oficial; senão o
+    candidato_munzona + a legenda das seções ("secoes") ou do BU ("bweb"); senão None (divulgação)."""
+    from apuracao import bweb
+
+    com = no_cache(cache, ano, uf) if com_dados is None else com_dados
+    if "partido_munzona" in com:
+        return "munzona"
+    if "candidato_munzona" not in com:
+        return None
+    if {"votos_uf", "votos_br"} & com and turno in turnos(cache, ano, uf, "votos"):
+        return "secoes"
+    return "bweb" if bweb.no_cache(cache, ano, turno, uf) is not None else None
 
 
 @dataclass
@@ -185,13 +273,15 @@ def _get(url: str, pedido: str, parcial: Path, sessao: Any) -> dict[str, Any]:
                 "last_modified": r.headers.get("Last-Modified"), "bytes": n, "sha512": sha.hexdigest()}
 
 
-def baixar(url: str, destino: Path, sessao: Any = requests, esperado: str | None = None) -> Path:
+def baixar(url: str, destino: Path, sessao: Any = requests, esperado: str | None = None,
+           sha512: str | None = None) -> Path:
     """Baixa para um diretório temporário e troca o ZIP (e a proveniência) de forma atômica.
 
     `esperado` = Last-Modified que o HEAD anunciou. A CDN do TSE tem nós com cópias velhas: em 07/10/2026 o
     HEAD dizia 06/10 19:22 e o GET entregava a versão de 04:58 (e o vigia baixaria tudo de novo a cada hora,
     gravando a velha como nova). GET mais velho que o HEAD é repetido UMA vez com um parâmetro que fura o
-    cache da CDN; se ainda vier velho, é recusado (`TseDataError`: o arquivo fica para a próxima verificação)."""
+    cache da CDN; se ainda vier velho, é recusado (`TseDataError`: o arquivo fica para a próxima verificação).
+    `sha512`: o publicado pelo TSE (BU, `.sha512` ao lado do ZIP); divergente → recusado sem tocar no cache."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     minimo = _data(esperado)
     with tempfile.TemporaryDirectory(dir=destino.parent) as tmp:
@@ -205,6 +295,8 @@ def baixar(url: str, destino: Path, sessao: Any = requests, esperado: str | None
                            prov["last_modified"], esperado)
         else:
             raise v.TseDataError(f"a CDN ainda entrega a versão de {prov['last_modified']} (o HEAD anuncia {esperado})")
+        if sha512 is not None and prov["sha512"] != sha512.strip().lower():
+            raise v.TseDataError(f"SHA-512 de {destino.name} não confere com o publicado pelo TSE")
         parcial.replace(destino)
     destino.with_suffix(".proveniencia.json").write_text(json.dumps(prov, indent=2))
     return destino

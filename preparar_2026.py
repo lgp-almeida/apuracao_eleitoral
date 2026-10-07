@@ -9,9 +9,13 @@ Ao chegar: baixa (e baixa de novo se o TSE atualizar o arquivo), converte para P
 comparação por bairro, Perfil × voto e planilhas passam a oferecer 2026 sozinhos), importa o resultado
 oficial para dados_2026/historico_2026_t<turno>/ (abrir com: python site_apuracao.py --dados ...)
 e grava a transferência 2022 → 2026 por bairro em saidas/transferencia_2022_2026.csv.
-Totais: os oficiais (detalhe_votacao_munzona) ou, até o TSE publicá-lo, os reconstruídos das seções
-(provisórios, marcados no status.json); quando o oficial chega, importa de novo e grava a conferência
-em saidas/conferencia_totais_<ano>_t<turno>.csv (rodada 40).
+Totais, POR TURNO, do melhor para o pior (rodada 55): os oficiais (detalhe_votacao_munzona), os
+reconstruídos das seções (rodada 40) ou os reconstruídos do Boletim de Urna (o BU sai dias antes dos
+microdados no 2º turno: procurado no CKAN só quando nada melhor existe para o turno). Os provisórios são
+marcados no status.json; um nível melhor substitui o pior (nunca o contrário) e grava a conferência entre os
+dois em saidas/conferencia_<antigo>_x_<novo>_<turno>t.csv.
+    --politica-totais {auto,oficial,secoes,bweb}  # fixa o nível (falha se indisponível; nunca cai para outro)
+    --bweb-brasil                                 # Presidente no Brasil pelo BU: baixa os 28 BUs do turno
 Estado da última verificação: cache_tse/microdados_2026.json.
 """
 
@@ -47,6 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="só consultar o TSE (um HEAD por arquivo) e mostrar o que há: não baixa nem importa")
     p.add_argument("--intervalo", type=float, default=3600, help="segundos entre verificações (mínimo 600)")
     p.add_argument("--limpar-vazios", action="store_true", help="apagar do cache os ZIPs só com cabeçalho")
+    p.add_argument("--politica-totais", choices=list(md.POLITICAS), default="auto",
+                   help="nível dos totais: o melhor disponível (auto) ou um fixo, que falha se indisponível")
+    p.add_argument("--bweb-brasil", action="store_true",
+                   help="com o Boletim de Urna, baixar os das 27 UFs + exterior (Presidente no Brasil)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -55,13 +63,10 @@ def ao_chegar(a: argparse.Namespace):
     """Reação ao que chegou ou mudou (`mudaram`). O que já existe vem do CACHE (`md.no_cache`), não da memória
     do processo: numa execução nova, chegar só o detalhe munzona ainda dispara a importação (rodada 40)."""
     def reagir(mudaram: set[str]) -> None:
-        tem = md.no_cache(a.cache_dir, a.ano, a.uf) | mudaram
         feitos = md.converter(a.cache_dir, a.ano, a.uf, mudaram)
         if feitos:
             logger.info("convertido para Parquet: %s", ", ".join(feitos))
-        totais_de = md.fonte_dos_totais(tem)
-        if totais_de and mudaram & md.PARA_IMPORTAR:
-            importar(a, totais_de)
+        atualizar(a, mudaram)
         if mudaram & {"votos_uf", "votos_br", "perfil"}:
             from apuracao import ibge
             for falha in ibge.preparar(a.cache_dir, a.uf):  # malhas e Censo para os mapas e o Perfil × voto de 2026
@@ -71,37 +76,111 @@ def ao_chegar(a: argparse.Namespace):
     return reagir
 
 
-def importar(a: argparse.Namespace, totais_de: str) -> dict[int, str]:
-    """Importa os dois turnos para dados_2026/historico_<ano>_t<turno> (na pasta da UF). Ao trocar totais
-    reconstruídos (provisórios) pelos oficiais, grava a conferência entre os dois em <saidas>/."""
-    from apuracao import historico
-    feitos: dict[int, str] = {}
-    try:
-        detalhe = (historico.load_detalhe(a.ano, a.cache_dir) if totais_de == "munzona"
-                   else historico.load_detalhe_secoes(a.ano, a.uf, a.cache_dir))  # os dois turnos, uma vez
-    except (v.TseDataError, requests.RequestException) as exc:
-        logger.error("totais de %s (%s) indisponíveis: %s", a.ano, totais_de, exc)
-        return feitos
+def _politica(a: argparse.Namespace) -> str:
+    return getattr(a, "politica_totais", "auto")
+
+
+def nivel(a: argparse.Namespace, turno: int, com: set[str] | None = None) -> str | None:
+    """O nível dos totais a importar no turno (`md.escolher_nivel`); política fixa indisponível → erro."""
+    return md.escolher_nivel(md.niveis_disponiveis(a.cache_dir, a.ano, a.uf, turno, com), _politica(a))
+
+
+def atualizar(a: argparse.Namespace, mudaram: set[str] | frozenset[str] = frozenset()) -> dict[int, str | None]:
+    """Por turno: importa quando o nível disponível é MELHOR que o importado, ou é o mesmo e um insumo dele
+    mudou; nunca troca um nível melhor por um pior (só a política fixa, pedida explicitamente). Devolve o
+    nível importado em cada turno depois disso."""
+    com = md.no_cache(a.cache_dir, a.ano, a.uf)
+    memo: dict[str, object] = {}
+    feitos: dict[int, str | None] = {}
     for turno in (1, 2):
-        destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)  # cada UF na sua pasta
-        antes = _totais_provisorios(destino) if totais_de == "munzona" else None
         try:
-            n = historico.importar(a.ano, a.uf, turno, a.cache_dir, destino, totais_de=totais_de, detalhe=detalhe)
-        except v.TseDataError as exc:
-            logger.info("%sº turno de %s ainda sem dados: %s", turno, a.ano, exc)
+            alvo = nivel(a, turno, com)
+        except md.PoliticaIndisponivel as exc:
+            logger.error("%sº turno: %s", turno, exc)
+            feitos[turno] = totais_importados(a, turno)
             continue
-        feitos[turno] = totais_de
-        logger.info("resultado oficial de %s (%sº turno, totais %s) importado em %s: %s", a.ano, turno,
-                    historico.DESCRICAO_TOTAIS[totais_de], destino, n)
-        conferir_com_a_noite(a, turno, destino)
-        if antes is not None:
-            conf = historico.conferir_totais(antes, pl.read_parquet(destino / "ultimo" / "totais.parquet"))
-            a.saidas.mkdir(parents=True, exist_ok=True)
-            alvo = a.saidas / f"conferencia_totais_{a.ano}_t{turno}.csv"
-            conf.write_csv(alvo, separator=";")
-            logger.info("totais reconstruídos × oficiais (%sº turno): %d linhas com diferença → %s",
-                        turno, conf.height, alvo)
+        atual = totais_importados(a, turno)
+        insumos = md.PARA_IMPORTAR | {md.BWEB} if alvo == "bweb" else md.PARA_IMPORTAR
+        fixa = _politica(a) != "auto"
+        if alvo and (md.ORDEM[alvo] > md.ORDEM[atual] or (alvo == atual and mudaram & insumos)
+                     or (fixa and alvo != atual)):
+            importar(a, alvo, turno, memo)
+        feitos[turno] = totais_importados(a, turno)
     return feitos
+
+
+def importar(a: argparse.Namespace, totais_de: str, turno: int, memo: dict | None = None) -> bool:
+    """Importa um turno para dados_2026/historico_<ano>_t<turno> (na pasta da UF). Ao trocar totais
+    provisórios por outros, grava a conferência entre os dois em <saidas>/. `memo` guarda o detalhe dos
+    níveis "munzona"/"secoes" (traz os dois turnos: carregado uma vez por verificação)."""
+    from apuracao import historico
+    memo = {} if memo is None else memo
+    destino = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf)  # cada UF na sua pasta
+    antes_de = totais_importados(a, turno)
+    antes = _totais_provisorios(destino) if antes_de not in (None, totais_de) else None
+    try:
+        if totais_de == "bweb":
+            detalhe = None  # por turno, do BU (historico.load_detalhe_bweb)
+        elif totais_de in memo:
+            detalhe = memo[totais_de]
+        else:
+            detalhe = memo[totais_de] = (historico.load_detalhe(a.ano, a.cache_dir) if totais_de == "munzona"
+                                         else historico.load_detalhe_secoes(a.ano, a.uf, a.cache_dir))
+        n = historico.importar(a.ano, a.uf, turno, a.cache_dir, destino, totais_de=totais_de, detalhe=detalhe,
+                               brasil=getattr(a, "bweb_brasil", False) and totais_de == "bweb")
+    except (v.TseDataError, requests.RequestException) as exc:
+        logger.info("%sº turno de %s ainda sem dados (%s): %s", turno, a.ano, totais_de, exc)
+        return False
+    logger.info("resultado de %s (%sº turno, totais %s) importado em %s: %s", a.ano, turno,
+                historico.DESCRICAO_TOTAIS[totais_de], destino, n)
+    conferir_com_a_noite(a, turno, destino)
+    if antes is not None:
+        conf = historico.conferir_totais(antes, pl.read_parquet(destino / "ultimo" / "totais.parquet"))
+        a.saidas.mkdir(parents=True, exist_ok=True)
+        alvo = a.saidas / f"conferencia_{antes_de}_x_{totais_de}_{turno}t.csv"
+        conf.write_csv(alvo, separator=";")
+        logger.info("totais %s × %s (%sº turno): %d linhas com diferença → %s", antes_de, totais_de, turno,
+                    conf.height, alvo)
+    if antes_de == "bweb" and totais_de != "bweb":  # o BU deixou de ser a fonte: os Parquet dele saem
+        from apuracao import bweb
+        zp = bweb.no_cache(a.cache_dir, a.ano, turno, a.uf)
+        for d in bweb.derivados(zp) if zp else []:
+            d.unlink(missing_ok=True)
+    return True
+
+
+def procurar_bu(a: argparse.Namespace, sessao=requests, lista: list | None = None) -> set[str]:
+    """Boletim de Urna dos turnos em que nada melhor existe (ou com `--politica-totais bweb`): uma chamada ao
+    CKAN (`lista`, se já consultada); com `--bweb-brasil`, os 27 + exterior. Devolve {md.BWEB} se chegou BU
+    novo."""
+    from apuracao import bweb
+    com = md.no_cache(a.cache_dir, a.ano, a.uf)
+    turnos = [t for t in (1, 2) if _politica(a) == "bweb"
+              or (_politica(a) == "auto" and not [n for n in md.niveis_disponiveis(a.cache_dir, a.ano, a.uf, t, com)
+                                                  if n != "bweb"])]
+    if not turnos or "candidatos" not in com:
+        return set()
+    lista = bweb.recursos(a.ano, sessao) if lista is None else lista
+    ufs = [a.uf.upper()]
+    if getattr(a, "bweb_brasil", False):
+        from apuracao.ufs import UFS
+        ufs = list(dict.fromkeys([a.uf.upper(), *UFS, bweb.EXTERIOR]))
+    chegou = set()
+    for turno in turnos:
+        for uf in ufs:
+            recurso = bweb.escolher(lista, turno, uf)
+            if recurso is None:
+                continue
+            ja = bweb.no_cache(a.cache_dir, a.ano, turno, uf)
+            if ja is not None and ja.name == recurso.nome:
+                continue
+            try:
+                bweb.baixar(recurso, a.cache_dir, sessao)
+            except (v.TseDataError, requests.RequestException) as exc:
+                logger.error("Boletim de Urna %s: %s (tento de novo na próxima verificação)", recurso.nome, exc)
+                continue
+            chegou.add(md.BWEB)
+    return chegou
 
 
 def conferir_com_a_noite(a: argparse.Namespace, turno: int, importado: Path) -> None:
@@ -124,10 +203,10 @@ def conferir_com_a_noite(a: argparse.Namespace, turno: int, importado: Path) -> 
                 saida)
 
 
-def totais_importados(a: argparse.Namespace) -> str | None:
-    """"munzona"/"secoes" conforme o status.json do 1º turno importado; None se ainda não importado."""
+def totais_importados(a: argparse.Namespace, turno: int = 1) -> str | None:
+    """"munzona"/"secoes"/"bweb" conforme o status.json do turno importado; None se ainda não importado."""
     import json
-    st = dir_uf(a.raiz / f"historico_{a.ano}_t1", a.uf) / "status.json"
+    st = dir_uf(a.raiz / f"historico_{a.ano}_t{turno}", a.uf) / "status.json"
     if not st.exists():
         return None
     dados = json.loads(st.read_text())
@@ -135,23 +214,17 @@ def totais_importados(a: argparse.Namespace) -> str | None:
 
 
 def garantir_importacao(a: argparse.Namespace) -> str | None:
-    """Importa se o cache permite totais MELHORES que os importados (nada → provisório → oficial). Cobre o
-    que chegou numa execução que não importou (versão antiga do gatilho, queda no meio). Devolve os totais
-    importados depois disso."""
-    melhor = md.fonte_dos_totais(md.no_cache(a.cache_dir, a.ano, a.uf))
-    atual = totais_importados(a)
-    ordem = {None: 0, "secoes": 1, "munzona": 2}
-    if melhor and ordem[melhor] > ordem[atual]:
-        importar(a, melhor)
-        atual = totais_importados(a)
-    return atual
+    """Importa o que o cache permite e ainda não foi importado (nada → BU → seções → oficial, por turno). Cobre
+    o que chegou numa execução que não importou (versão antiga do gatilho, queda no meio). Devolve os totais
+    do 1º turno importados depois disso."""
+    return atualizar(a)[1]
 
 
 def _totais_provisorios(destino: Path) -> pl.DataFrame | None:
     """Os totais de uma importação anterior com totais reconstruídos (para conferir com os oficiais)."""
     import json
     st, tot = destino / "status.json", destino / "ultimo" / "totais.parquet"
-    if not (st.exists() and tot.exists()) or json.loads(st.read_text()).get("totais_de") != "secoes":
+    if not (st.exists() and tot.exists()) or json.loads(st.read_text()).get("totais_de") not in ("secoes", "bweb"):
         return None
     return pl.read_parquet(tot)
 
@@ -180,17 +253,22 @@ def imprimir(estados: list[md.Estado]) -> None:
                              "situação": e.situacao, "ação": e.acao} for e in estados]))
 
 
-def resumo(a: argparse.Namespace, estados: list[md.Estado]) -> list[str]:
-    """O que a verificação significa para a importação (sem baixar nada)."""
+def resumo(a: argparse.Namespace, estados: list[md.Estado], bus: dict | None = None) -> list[str]:
+    """O que a verificação significa para a importação (sem baixar nada). `bus`: turno → BU listado no CKAN."""
+    bus = bus or {}
     nomes = {x.chave: x.zip(a.ano, a.uf) for x in md.ARQUIVOS}
     fora = [e.zip for e in estados if e.http == 404]
     novos = [e.zip for e in estados if e.acao in ("baixar", "baixar de novo")]
     cache = md.no_cache(a.cache_dir, a.ano, a.uf)
-    importado = totais_importados(a)
     linhas = [f"ainda não publicados no TSE (404): {', '.join(fora) or 'nenhum'}",
               f"publicados e ainda não baixados (ou atualizados pelo TSE): {', '.join(novos) or 'nenhum'}"
-              + (" — rode sem --so-verificar para baixar e importar" if novos else ""),
-              f"importado: {historico_descricao(importado)}"]
+              + (" — rode sem --so-verificar para baixar e importar" if novos else "")]
+    for turno in (1, 2):
+        disp = md.niveis_disponiveis(a.cache_dir, a.ano, a.uf, turno, cache)
+        linhas.append(f"{turno}º turno — importado: {historico_descricao(totais_importados(a, turno))}; "
+                      f"no cache dá para: {', '.join(disp) or 'nada'}; votos por partido: "
+                      f"{md.fonte_dos_partidos(a.cache_dir, a.ano, a.uf, turno, cache) or 'divulgação'}"
+                      + (f"; Boletim de Urna no CKAN: {bu.nome}" if (bu := bus.get(turno)) else ""))
     faltam = sorted(nomes[c] for c in md.FINAL - cache)
     if faltam:
         linhas.append(f"para os totais oficiais ainda falta no cache: {', '.join(faltam)}")
@@ -199,6 +277,7 @@ def resumo(a: argparse.Namespace, estados: list[md.Estado]) -> list[str]:
 
 def historico_descricao(totais_de: str | None) -> str:
     return {None: "nada", "secoes": "sim, com totais PROVISÓRIOS (reconstruídos das seções)",
+            "bweb": "sim, com totais PROVISÓRIOS (reconstruídos do Boletim de Urna)",
             "munzona": "sim, com os totais OFICIAIS"}[totais_de]
 
 
@@ -216,7 +295,9 @@ def main(argv: list[str] | None = None, sessao=requests) -> int:
             logger.error("verificação falhou: %s", exc)
             return 1
         imprimir(estados)
-        print("\n".join(resumo(a, estados)))
+        from apuracao import bweb
+        lista = bweb.recursos(a.ano, sessao)  # uma consulta ao CKAN (sem baixar)
+        print("\n".join(resumo(a, estados, {t: bweb.escolher(lista, t, a.uf) for t in (1, 2)})))
         return 0
     intervalo = max(a.intervalo, 600)  # nunca martelar a CDN
     while True:
@@ -227,6 +308,8 @@ def main(argv: list[str] | None = None, sessao=requests) -> int:
             estados = []
         if estados:
             imprimir(estados)
+            if procurar_bu(a, sessao):
+                atualizar(a, {md.BWEB})
             garantir_importacao(a)
         # encerra só com o que a importação DEFINITIVA usa (totais oficiais): antes disso a importação, se
         # houver, é a provisória, e o vigia precisa seguir para trocá-la pela oficial quando o TSE publicar
