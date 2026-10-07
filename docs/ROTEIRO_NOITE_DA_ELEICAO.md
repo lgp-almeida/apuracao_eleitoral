@@ -1,40 +1,70 @@
-# Roteiro da noite da eleição — 1º turno, 4/10/2026 (e 2º turno, 25/10)
+# Roteiro da noite da eleição — 2º turno, 25/10/2026 (e o 1º turno, 4/10)
 
 Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de Brasília. A divulgação começa às 17h.
 
-## Resumo em uma tela
+## 2º turno — 25/10/2026
+
+**O que haverá:** Presidente em todas as UFs e Governador em **AC, AM, DF, ES, RJ, RN e TO** (lido do resultado
+oficial do 1º turno pela prontidão).
+
+**Já verificado em 07/10:**
+- **Prontidão** (`verificar_prontidao.py --turno 2 --ufs todas --testes`): 0 falhas.
+  - Códigos do 2º turno já no `ele-c.json` oficial: Governador 6260, Presidente 6258.
+  - Acompanhamento ainda em 404, o normal antes da tarde de 25/10.
+  - Referência de 2022 e 1º turno de 2026 presentes em todas as UFs.
+- **Ensaio** (`ensaio_apuracao.py --uf ES --turno 2`): OK. Votos válidos iguais ao oficial, 100% e final,
+  Casagrande eleito, cópia e boletim finais.
+  - O ensaio só passou depois de corrigir o TSE simulado dele (o EA20 era carimbado com a hora exata).
+- **Simulado do TSE:** saiu do ar depois do 1º turno. A prontidão lê a hora do oficial.
+
+| Quando | O quê | Comando |
+|---|---|---|
+| até 23/10 (opcional) | ensaio em outra UF que teve 2º turno de Governador em 2022 (AC, AM, RN ou TO) | `python ensaio_apuracao.py --uf AM --turno 2` (deve terminar em "RESULTADO DO ENSAIO: OK") |
+| 24/10 | prontidão completa | `python verificar_prontidao.py --turno 2 --ufs todas --testes` |
+| 25/10, 16h | prontidão de novo (sem os testes, é rápida) | `python verificar_prontidao.py --turno 2 --ufs todas` |
+| 25/10, 16h30 | encerrar sites de teste e vigias de microdados que estejam no ar | Ctrl+C, ou `kill` nos PIDs de `ps -eo pid,args \| grep -E "site_apuracao\|preparar_2026\|baixar_ufs"` |
+| 25/10, 16h45 | **subir o site de todas as UFs com coleta, sob o vigia** | `python vigiar_site.py --porta 8001 -- python site_apuracao.py --ambiente oficial --turno 2 --ufs todas --coletar --porta 8001 --copia-dir <pasta em OUTRO disco>/t2` |
+| 25/10, 17h em diante | acompanhar (seletor de UF no cabeçalho) | http://localhost:8001 |
+| 25/10, na TV | painel em tela cheia de uma UF | http://localhost:8001/rj/#painel?tv=1 |
+| a cada hora cheia e no fim | boletim de cada UF para a equipe | `dados_2026/oficial_t2_<UF>/boletins/boletim_ultimo.html` e `.xlsx` |
+| ao fim | conferir a cópia final e guardar tudo; **não apagar** `dados_2026/oficial_t2_*` | `ls <copia-dir>/t2/oficial_t2_RJ/instantaneos/final` e `tar czf oficial_t2_25out.tgz dados_2026/oficial_t2_*` |
+| ao fim | análise das parciais da noite | `python analisar_coleta.py --dados dados_2026/oficial_t2_RJ --saida saidas/coleta_t2_RJ.xlsx --grafico saidas/coleta_t2_RJ.png` |
+| logo depois | **ligar as vigias dos microdados** (ver "Depois → Microdados do 2º turno") | `python preparar_2026.py --vigiar` e `python baixar_ufs.py --etapas microdados --ufs todas --vigiar` |
+
+- **Pastas:**
+  - os dados de cada UF vão para `dados_2026/oficial_t2_<UF>`, inclusive o RJ;
+  - a comparação usa `dados_2026/historico_2022_t2[_<UF>]`;
+  - a cópia de cada UF fica em `<copia-dir>/oficial_t2_<UF>`.
+- **Pastas que já existem:** 25 UFs já têm `oficial_t2_<UF>` com só o `status.json` e tabelas vazias, de um teste de
+  06/10. Não atrapalham: o coletor continua delas. Não apague: são as pastas da noite.
+- **Site antes da divulgação:** ele sobe mesmo sem nenhuma UF com dados (página "Aguardando"). Cada UF entra no
+  seletor quando ganha dados, sem reiniciar. Boletim, cópia e alertas são de **cada** UF.
+- **Só o RJ, num site de uma UF:** `python site_apuracao.py --ambiente oficial --turno 2 --coletar` (porta 8000).
+  Não rode os dois ao mesmo tempo para a mesma UF: são dois coletores no mesmo TSE.
+- **Projeção no 2º turno:** a leitura é "vitória projetada", nunca "no 1º turno"/"2º turno projetado". A margem é a
+  do 2º turno (`MARGEM_PP_2T`), que erra mais no meio da apuração.
+- **Transferência de votos 1º → 2º turno** (rodada 30): no site do 2º turno, a aba "1º → 2º turno" já abre no
+  **tempo real**, por município, com o 1º turno de `dados_2026/oficial_<UF>`.
+  - É leitura **frágil**, e a página avisa: em 2022 o destino dos eliminados por município diferiu até 22 p.p. do
+    estimado por seção.
+  - A estimativa boa (por seção ou local) vem com os microdados do 2º turno.
+
+## 1º turno — 4/10/2026 (feito; como referência)
 
 | Quando | O quê | Comando |
 |---|---|---|
 | até 2/10 | ensaio geral com a apuração de 2022 | `python ensaio_apuracao.py` (cerca de 15 min; deve terminar em "RESULTADO DO ENSAIO: OK") |
-| até 3/10 | malhas (inclusive a do Brasil por UF, rodada 35) e Censo 2022 do IBGE no cache (rodada 34; baixa algumas centenas de MB uma vez) | `python preparar_ibge.py` |
-| 3/10, fim do dia | prontidão, e o oficial publica a configuração | `python verificar_prontidao.py` |
-| 3/10, depois que o oficial publicar | um ciclo de teste no oficial, num diretório descartável | `python coletar_resultados.py --ambiente oficial --uma-vez --destino dados_2026/oficial_teste` e depois `rm -r dados_2026/oficial_teste` |
-| 4/10, 16h | prontidão completa, com os testes | `python verificar_prontidao.py --testes` |
-| 4/10, 16h30 | encerrar os sites de teste (portas 8000, 8022, 8023, 8040) | Ctrl+C nos terminais, ou `kill` nos PIDs de `ps -eo pid,args \| grep site_apuracao` |
-| 4/10, 16h45 | **subir coleta e site, sob o vigia** (rodada 33) | `python vigiar_site.py -- python site_apuracao.py --ambiente oficial --coletar --abrir --copia-dir <pasta em OUTRO disco>/oficial` (ex.: `/mnt/d/apuracao_copias/oficial`) |
-| 4/10, 17h em diante | acompanhar no navegador | http://localhost:8000 |
-| 4/10, junto com o site | portal com os links de todos os sites no ar (opcional; mostra também quedas e reinícios do vigia) | `python portal.py` → http://localhost:8100 |
-| 4/10, na TV da sala | painel em tela cheia, um cargo por vez | http://localhost:8000/#painel?tv=1 (ou botão "Modo TV" no painel; clique uma vez na página para a tela cheia) |
-| 4/10, a cada hora cheia e no fim | mandar o boletim para a equipe | `dados_2026/oficial/boletins/boletim_ultimo.html` e `.xlsx` (gravados sozinhos) |
-| ao fim | conferir a cópia final automática e fazer o `tar` de sempre | `ls <copia-dir>/instantaneos/final` e `tar czf oficial_4out.tgz dados_2026/oficial` |
+| até 3/10 | malhas e Censo 2022 do IBGE no cache | `python preparar_ibge.py` |
+| 3/10 | prontidão e um ciclo de teste no oficial, num diretório descartável | `python verificar_prontidao.py`; `python coletar_resultados.py --ambiente oficial --uma-vez --destino dados_2026/oficial_teste` |
+| 4/10, 16h | prontidão completa | `python verificar_prontidao.py --testes` |
+| 4/10, 16h45 | coleta e site sob o vigia | `python vigiar_site.py -- python site_apuracao.py --ambiente oficial --coletar --abrir --copia-dir <outro disco>/oficial` |
+| 4/10 | acompanhar, portal e TV | http://localhost:8000 · `python portal.py` (http://localhost:8100) · `#painel?tv=1` |
+| ao fim | cópia e `tar` | `tar czf oficial_4out.tgz dados_2026/oficial` |
 
-- **2º turno (25/10), com várias UFs** (rodada 43). Haverá 2º turno para Governador em AC, AM, DF, ES, RJ, RN e TO, e para Presidente.
-
-  | Quando | O quê | Comando |
-  |---|---|---|
-  | até 23/10 | ensaio do 2º turno (ES 2022: Governador + Presidente; deve terminar em "OK") | `python ensaio_apuracao.py --uf ES --turno 2` |
-  | até 24/10 | referência de 2022 do 2º turno de todas as UFs (aba Comparação) | `python baixar_ufs.py --etapas historico --turnos 2` (já feito em 06/10) |
-  | 24/10 e 25/10, 16h | prontidão do 2º turno, por UF | `python verificar_prontidao.py --turno 2 --ufs todas --testes` |
-  | 25/10, 16h30 | encerrar os sites de teste (8000, 8001…) | Ctrl+C ou `kill` |
-  | 25/10, 16h45 | **site de várias UFs com coleta, sob o vigia**: sobe mesmo antes de qualquer UF ter dados; cada UF aparece no seletor ao ganhar dados; boletim, cópia e alertas de CADA UF | `python vigiar_site.py -- python site_apuracao.py --ambiente oficial --turno 2 --ufs todas --coletar --porta 8001 --copia-dir <pasta em OUTRO disco>/t2` |
-  | 25/10, 17h em diante | acompanhar | http://localhost:8001 (seletor de UF no cabeçalho) |
-  | ao fim | **não apagar** `dados_2026/oficial_t2_*` (as parciais da noite de 4/10 do RJ se perderam assim — rodada 42); análise das parciais | `python analisar_coleta.py --dados dados_2026/oficial_t2_RJ --saida saidas/coleta_t2_RJ.xlsx --grafico saidas/coleta_t2_RJ.png` |
-
-  - Os dados de cada UF vão para `dados_2026/oficial_t2_<UF>`; a comparação usa `dados_2026/historico_2022_t2[_<UF>]`.
-  - A cópia de cada UF fica em `<copia-dir>/oficial_t2_<UF>`.
-  - Só o RJ, como no 1º turno: `site_apuracao.py --ambiente oficial --turno 2 --coletar` (porta 8000).
-  - **Transferência de votos 1º → 2º turno** (rodada 30): no site do 2º turno, a aba "1º → 2º turno" já abre no **tempo real** (municípios, com os dados do 1º turno em `dados_2026/oficial`). É leitura **frágil** (92 unidades; em 2022 o destino dos eliminados por município diferiu até 22 p.p. do estimado por seção) e a página avisa. A estimativa boa (seção ou local) vem com os microdados do 2º turno: com o ZIP no cache, `python transferencia_turnos.py --ano 2026 --cargo governador --nivel secao --saida saidas/transferencia_2026.xlsx` ou a mesma aba com fonte "Microdados".
+O que aprendemos com o 1º turno:
+- as parciais da noite do RJ se perderam por terem sido apagadas (rodada 42);
+- o TSE anunciava a totalização antes de regerar o resultado (rodada 36);
+- os microdados saíram 2 a 3 dias depois (veja "Depois").
 
 ## Antes da noite
 
@@ -134,15 +164,54 @@ Comandos na raiz do projeto, com `source venv/bin/activate`. O horário é o de 
   - Limite: o coletor pede cada arquivo uma vez por ciclo (60 s); se o TSE publicar duas versões dentro do mesmo minuto, só a última é guardada.
 
 - **Cópia de segurança:** `tar czf oficial_4out.tgz dados_2026/oficial`. Os JSON brutos em `raw/` são o histórico da apuração, que o TSE sobrescreve.
-- **Microdados de 2026:** saem dias depois. Deixe rodando `python preparar_2026.py --vigiar`, que verifica a cada hora com um HEAD por arquivo.
-  - Para só olhar, sem baixar nem importar: `python preparar_2026.py --so-verificar` (tabela com o que respondeu 200/404, tamanho e data no TSE, e se o resultado já está importado com totais provisórios ou oficiais).
-  - Quando os votos por seção chegam, ele converte. Importa o resultado para `dados_2026/historico_2026_t1` (no RJ; nas outras UFs, `historico_2026_t1_<UF>`):
-    - com os totais **provisórios**, reconstruídos das seções, assim que houver o detalhe por seção e o `votacao_candidato_munzona`;
-    - de novo, com os **oficiais**, quando o TSE publicar o `detalhe_votacao_munzona`. Grava também a conferência entre os dois em `saidas/`.
-  - Só encerra quando os totais oficiais e o `votacao_partido_munzona` chegarem (rodada 40).
-  - Para várias UFs: `python baixar_ufs.py --etapas microdados --ufs RJ SP … [--vigiar]`. É a mesma preparação, e a etapa só fica "ok" com os totais oficiais.
-  - Também grava `saidas/transferencia_2022_2026.csv`.
-  - Mapas por bairro e por local de votação, comparação e Perfil × voto passam a oferecer 2026 sozinhos.
-  - Se o TSE atualizar um arquivo, ele baixa de novo. Nesse caso reinicie o site para ele reler os dados.
+- **Microdados de 2026 — o que aconteceu no 1º turno:**
+  - **Datas:**
+    - votos por seção em 06/10, à 01h57 (a UF) e 16h22 (o `_BR`, regerado depois);
+    - detalhe por seção em 06/10;
+    - Boletim de Urna em 06/10, às 15h38;
+    - **`votacao_partido_munzona` e `detalhe_votacao_munzona` só em 07/10, às 10h10 e 10h21**, regerados ainda às
+      12h39.
+  - **Totais:** o RJ e as outras UFs foram importados com os totais **provisórios** (das seções) em 06/10 e
+    trocados pelos **oficiais** em 07/10, sozinhos. Conferência: votos iguais aos da noite e cadeiras iguais nas 27
+    UFs.
+  - **A CDN do TSE às vezes entrega a cópia velha** de um arquivo que o HEAD já anuncia como novo. O download
+    compara as datas e pede de novo (rodada 54). Se aparecer "a CDN ainda entrega a versão de …", espere a próxima
+    verificação.
+  - **Quando o TSE regera um arquivo depois de a vigia encerrar** (como o partido munzona às 12h39), rode de novo
+    `python preparar_2026.py` (RJ). Para as outras UFs, reimporte com `preparar_2026.importar(a, "munzona", 1)` por
+    UF: a vigia do lote não reimporta o que já está "ok".
+- **Microdados do 2º turno — depois de 25/10:**
+  - **Ligar as duas vigias logo depois da noite:**
+
+    ```bash
+    python preparar_2026.py --vigiar                                      # RJ
+    python baixar_ufs.py --etapas microdados --ufs todas --vigiar         # as outras UFs
+    ```
+
+  - **Nível dos totais, POR TURNO** (rodada 55): oficial (`detalhe_votacao_munzona`) > seções (`votacao_secao` +
+    `detalhe_votacao_secao`) > **Boletim de Urna** > nada. Um nível melhor substitui o pior, nunca o contrário. A
+    troca grava `saidas/<UF>/conferencia_<antigo>_x_<novo>_2t.csv`.
+  - **O Boletim de Urna costuma sair antes:** em 2022, o BU do 2º turno saiu em 01/11, e os microdados e o munzona
+    só em 05/11. As vigias procuram o BU no portal de dados do TSE (CKAN) quando o turno ainda não tem nada melhor,
+    conferem o SHA-512 e importam com os totais **provisórios (BU)**.
+  - **Presidente no Brasil pelo BU:** sem `--bweb-brasil`, a abrangência Brasil sai (com aviso no `status.json`),
+    porque o BU da UF não dá o total do país. Com ela, as vigias baixam os 28 BUs do turno (69 MB no 2º turno de
+    2022):
+
+    ```bash
+    python preparar_2026.py --vigiar --bweb-brasil
+    ```
+
+  - **Para só olhar:** `python preparar_2026.py --so-verificar`, que mostra, por turno, o que foi importado, o que
+    o cache permite e o BU listado no CKAN.
+  - **Para forçar um nível:** `--politica-totais bweb|secoes|oficial`. Ele falha se o nível estiver indisponível;
+    nunca cai para outro.
+  - **As vigias só encerram** com o detalhe e o partido munzona oficiais.
+- **Com os microdados do 2º turno no cache:**
+  - transferência 1º → 2º turno por seção (`transferencia_turnos.py --ano 2026 --cargo governador --nivel secao`)
+    e a camada "Destino dos eliminados" no mapa;
+  - `python comparar_ufs.py` (o 2º turno entra sozinho);
+  - abstenção × mudança de local do 2º turno: `python abstencao_mudanca_local.py --uf todas --turno 2`;
+  - recalibrar a margem do 2º turno com 2026 (`docs/RECALIBRAR_MARGENS.md`).
 - **Dados do IBGE** (rodada 34): `python preparar_ibge.py --so-verificar` mostra se o IBGE publicou uma versão nova das malhas ou dos agregados do Censo 2022 (ele põe a data no nome do arquivo). `python preparar_ibge.py` baixa, refaz os derivados e, se a versão nova não converter, volta à anterior. Depois, reinicie o site. `preparar_2026.py` já garante o IBGE no cache quando os votos por seção chegam.
 - **Recalibrar as margens** da projeção e das cadeiras com 2026, seguindo `docs/RECALIBRAR_MARGENS.md`. Primeiro valide 2026 com as margens de 2022 (o teste fora da amostra) e depois junte os dois anos.
