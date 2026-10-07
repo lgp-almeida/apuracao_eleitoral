@@ -131,7 +131,7 @@ Com isso, o TODO 26 está feito.
 - **Opcionais antes de 25/10:**
   - ensaio em RN ou TO;
   - conferência do RJ em `saidas/RJ/` (hoje em `saidas/`);
-  - download dos microdados que retoma de onde parou.
+  - ~~download dos microdados que retoma de onde parou~~ (feito na rodada 58).
 - **O aviso "o TSE ainda serve resultado anterior … depois de 15 ciclos":** ainda aparece nos ensaios (3 no ES, 7
   no AM), sem afetar o fim. É o limite `TENTATIVAS_ANTIGO` com o atraso do EA20 de 3 min. Vale observar na noite
   real em `arquivos_antigos` do `status.json`.

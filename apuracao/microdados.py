@@ -25,7 +25,7 @@ import hashlib
 import io
 import json
 import logging
-import tempfile
+import time
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -257,47 +257,116 @@ def verificar(cache: Path, ano: int, uf: str, sessao: Any = requests) -> list[Es
     return saida
 
 
-def _get(url: str, pedido: str, parcial: Path, sessao: Any) -> dict[str, Any]:
-    """Um GET de `pedido` gravado em `parcial`; devolve a proveniência (com a `url` sem parâmetros)."""
-    with sessao.get(pedido, headers=v.HTTP_HEADERS, stream=True, timeout=(30, 600)) as r:
+RETOMADAS = 5          # tentativas de continuar um download que caiu, dentro da mesma verificação
+PAUSA_RETOMADA_S = 5.0
+BLOCO = 4 * 1024 * 1024
+
+
+def _parcial(destino: Path) -> tuple[Path, Path]:
+    """O download em andamento (`<zip>.parcial`) e a versão a que ele pertence (`<zip>.parcial.json`)."""
+    return destino.with_name(destino.name + ".parcial"), destino.with_name(destino.name + ".parcial.json")
+
+
+def _descartar(destino: Path) -> None:
+    for f in _parcial(destino):
+        f.unlink(missing_ok=True)
+
+
+def _get(url: str, pedido: str, destino: Path, sessao: Any) -> dict[str, Any]:
+    """Um GET de `pedido` para `<destino>.parcial`, CONTINUANDO o que já está lá se for da mesma versão: pede só
+    o que falta (`Range`) com `If-Range` = a versão do parcial — se o TSE trocou o arquivo, o servidor manda o
+    arquivo inteiro (200) e o parcial recomeça. Devolve a proveniência (com a `url` sem parâmetros)."""
+    parcial, meta = _parcial(destino)
+    versao = None
+    if parcial.exists() and meta.exists():
+        try:
+            versao = json.loads(meta.read_text()).get("last_modified")
+        except (OSError, ValueError):
+            versao = None
+    inicio = parcial.stat().st_size if versao and parcial.exists() else 0
+    headers = dict(v.HTTP_HEADERS)
+    if inicio:
+        headers.update({"Range": f"bytes={inicio}-", "If-Range": versao})
+    with sessao.get(pedido, headers=headers, stream=True, timeout=(30, 600)) as r:
         if r.status_code == 404:
             raise v.TseDataError(f"404 em {pedido}")
+        if r.status_code == 416:  # o parcial já tem tudo (ou é maior que o arquivo): recomeça
+            _descartar(destino)
+            raise requests.ConnectionError("intervalo pedido fora do arquivo; recomeçando")
         r.raise_for_status()
-        sha, n = hashlib.sha512(), 0
-        with parcial.open("wb") as fh:
-            for bloco in r.iter_content(chunk_size=4 * 1024 * 1024):
+        continua = inicio and r.status_code == 206 and str(r.headers.get("Content-Range", "")).startswith(
+            f"bytes {inicio}-")
+        lm = versao if continua else r.headers.get("Last-Modified")
+        if not continua:
+            inicio = 0
+            meta.write_text(json.dumps({"url": url, "last_modified": lm}))
+        else:
+            logger.info("%s: continuando o download de %.0f MB", destino.name, inicio / 1e6)
+        with parcial.open("ab" if continua else "wb") as fh:
+            for bloco in r.iter_content(chunk_size=BLOCO):
                 fh.write(bloco)
-                sha.update(bloco)
-                n += len(bloco)
-        return {"url": url, "downloaded_at": datetime.now(timezone.utc).isoformat(),
-                "last_modified": r.headers.get("Last-Modified"), "bytes": n, "sha512": sha.hexdigest()}
+    sha, n = hashlib.sha512(), 0
+    with parcial.open("rb") as fh:  # o SHA do arquivo inteiro (o que veio antes e o que veio agora)
+        while bloco := fh.read(BLOCO):
+            sha.update(bloco)
+            n += len(bloco)
+    return {"url": url, "downloaded_at": datetime.now(timezone.utc).isoformat(), "last_modified": lm, "bytes": n,
+            "sha512": sha.hexdigest()}
+
+
+def _get_com_retomada(url: str, pedido: str, destino: Path, sessao: Any) -> dict[str, Any]:
+    """`_get`, continuando de onde parou quando a conexão cai (até `RETOMADAS` vezes). Se ainda falhar, o parcial
+    FICA no cache e a próxima verificação continua dele (06/10/2026: o votacao_secao do RJ, 290 MB, caiu duas vezes
+    no meio e era pedido inteiro de novo)."""
+    for tentativa in range(1, RETOMADAS + 1):
+        try:
+            return _get(url, pedido, destino, sessao)
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as exc:
+            if tentativa == RETOMADAS:
+                raise
+            feito = _parcial(destino)[0].stat().st_size if _parcial(destino)[0].exists() else 0
+            logger.warning("%s: conexão caiu com %.0f MB (%s); continuando (%d/%d)", destino.name, feito / 1e6,
+                           exc.__class__.__name__, tentativa, RETOMADAS - 1)
+            time.sleep(PAUSA_RETOMADA_S)
+    raise AssertionError("inalcançável")
 
 
 def baixar(url: str, destino: Path, sessao: Any = requests, esperado: str | None = None,
            sha512: str | None = None) -> Path:
-    """Baixa para um diretório temporário e troca o ZIP (e a proveniência) de forma atômica.
+    """Baixa para `<destino>.parcial` (continuando um download interrompido da mesma versão) e troca o ZIP (e a
+    proveniência) de forma atômica.
 
     `esperado` = Last-Modified que o HEAD anunciou. A CDN do TSE tem nós com cópias velhas: em 07/10/2026 o
     HEAD dizia 06/10 19:22 e o GET entregava a versão de 04:58 (e o vigia baixaria tudo de novo a cada hora,
     gravando a velha como nova). GET mais velho que o HEAD é repetido UMA vez com um parâmetro que fura o
     cache da CDN; se ainda vier velho, é recusado (`TseDataError`: o arquivo fica para a próxima verificação).
+    Um parcial de versão diferente da anunciada é descartado antes de começar.
     `sha512`: o publicado pelo TSE (BU, `.sha512` ao lado do ZIP); divergente → recusado sem tocar no cache."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     minimo = _data(esperado)
-    with tempfile.TemporaryDirectory(dir=destino.parent) as tmp:
-        parcial = Path(tmp) / destino.name
-        for pedido in (url, f"{url}?v={int(datetime.now(timezone.utc).timestamp())}"):
-            prov = _get(url, pedido, parcial, sessao)
-            recebido = _data(prov["last_modified"])
-            if minimo is None or (recebido is not None and recebido >= minimo):
-                break
-            logger.warning("%s: a CDN entregou a versão de %s, o HEAD anuncia %s", destino.name,
-                           prov["last_modified"], esperado)
-        else:
-            raise v.TseDataError(f"a CDN ainda entrega a versão de {prov['last_modified']} (o HEAD anuncia {esperado})")
-        if sha512 is not None and prov["sha512"] != sha512.strip().lower():
-            raise v.TseDataError(f"SHA-512 de {destino.name} não confere com o publicado pelo TSE")
-        parcial.replace(destino)
+    parcial, meta = _parcial(destino)
+    if parcial.exists() and esperado:  # parcial de outra versão: não serve
+        try:
+            antiga = json.loads(meta.read_text()).get("last_modified") if meta.exists() else None
+        except (OSError, ValueError):
+            antiga = None
+        if antiga != esperado:
+            _descartar(destino)
+    for pedido in (url, f"{url}?v={int(datetime.now(timezone.utc).timestamp())}"):
+        prov = _get_com_retomada(url, pedido, destino, sessao)
+        recebido = _data(prov["last_modified"])
+        if minimo is None or (recebido is not None and recebido >= minimo):
+            break
+        logger.warning("%s: a CDN entregou a versão de %s, o HEAD anuncia %s", destino.name,
+                       prov["last_modified"], esperado)
+        _descartar(destino)
+    else:
+        raise v.TseDataError(f"a CDN ainda entrega a versão de {prov['last_modified']} (o HEAD anuncia {esperado})")
+    if sha512 is not None and prov["sha512"] != sha512.strip().lower():
+        _descartar(destino)
+        raise v.TseDataError(f"SHA-512 de {destino.name} não confere com o publicado pelo TSE")
+    parcial.replace(destino)
+    meta.unlink(missing_ok=True)
     destino.with_suffix(".proveniencia.json").write_text(json.dumps(prov, indent=2))
     return destino
 

@@ -705,3 +705,11 @@ def endereco(pg) -> tuple[str, dict[str, str]]:
 
 def esperar_endereco(pg, condicao: str) -> None:
     pg.wait_for_function(f"() => {{ const h = decodeURIComponent(location.hash); return {condicao}; }}")
+
+
+@pytest.fixture(autouse=True)
+def _sem_pausa_entre_retomadas(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Download que cai é continuado depois de uma pausa (rodada 58); nos testes, sem esperar."""
+    from apuracao import microdados
+
+    monkeypatch.setattr(microdados, "PAUSA_RETOMADA_S", 0.0)

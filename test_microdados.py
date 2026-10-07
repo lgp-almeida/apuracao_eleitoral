@@ -276,3 +276,89 @@ def test_so_verificar_nao_baixa_nem_importa(cli_falso, capsys) -> None:
     assert "rode sem --so-verificar" in saida
     with pytest.raises(SystemExit):
         cli.main(["--so-verificar", "--vigiar", *args], sessao=cdn)
+
+
+# --------------------------------------------------------------------------
+# Download que continua de onde parou (rodada 58)
+# --------------------------------------------------------------------------
+class RespRange:
+    def __init__(self, status: int, corpo: bytes, headers: dict[str, str], cai_apos: int | None) -> None:
+        self.status_code, self.corpo, self.headers, self.cai_apos = status, corpo, headers, cai_apos
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+    def iter_content(self, chunk_size: int = 0):
+        import requests
+        if self.cai_apos is None:
+            yield self.corpo
+            return
+        yield self.corpo[:self.cai_apos]
+        raise requests.exceptions.ChunkedEncodingError("Connection broken: IncompleteRead")
+
+
+class CDNRange:
+    """Um arquivo servido com Range/If-Range (206) como a CDN do TSE; `quedas`: bytes entregues antes de a
+    conexão cair, um por pedido (None = não cai)."""
+
+    def __init__(self, corpo: bytes, lm: str = LM1, aceita_range: bool = True) -> None:
+        self.corpo, self.lm, self.aceita_range = corpo, lm, aceita_range
+        self.quedas: list[int | None] = []
+        self.pedidos: list[dict[str, str]] = []
+
+    def get(self, url, headers=None, **kw):
+        headers = headers or {}
+        self.pedidos.append(dict(headers))
+        cai = self.quedas.pop(0) if self.quedas else None
+        rng, if_range = headers.get("Range"), headers.get("If-Range")
+        if rng and self.aceita_range and if_range == self.lm:
+            ini = int(rng.removeprefix("bytes=").rstrip("-"))
+            return RespRange(206, self.corpo[ini:], {"Last-Modified": self.lm,
+                             "Content-Range": f"bytes {ini}-{len(self.corpo) - 1}/{len(self.corpo)}"}, cai)
+        return RespRange(200, self.corpo, {"Last-Modified": self.lm}, cai)
+
+
+def test_download_que_cai_continua_de_onde_parou(tmp_path: Path) -> None:
+    import hashlib
+    corpo = bytes(range(256)) * 400  # ~100 KB
+    cdn = CDNRange(corpo)
+    cdn.quedas = [30_000, 50_000]    # cai duas vezes; a 3ª vai até o fim
+    zp = md.baixar("u", tmp_path / "x.zip", cdn, esperado=LM1)
+    assert zp.read_bytes() == corpo
+    assert [p.get("Range") for p in cdn.pedidos] == [None, "bytes=30000-", "bytes=80000-"]
+    assert all(p.get("If-Range") == LM1 for p in cdn.pedidos[1:])
+    prov = json.loads((tmp_path / "x.proveniencia.json").read_text())
+    assert prov["sha512"] == hashlib.sha512(corpo).hexdigest() and prov["bytes"] == len(corpo)
+    assert not list(tmp_path.glob("*.parcial*"))
+
+
+def test_parcial_fica_para_a_proxima_verificacao(tmp_path: Path) -> None:
+    import requests
+    corpo = b"z" * 100_000
+    cdn = CDNRange(corpo)
+    cdn.quedas = [10_000] * md.RETOMADAS            # todas as tentativas desta verificação caem
+    with pytest.raises(requests.exceptions.ChunkedEncodingError):
+        md.baixar("u", tmp_path / "x.zip", cdn, esperado=LM1)
+    assert not (tmp_path / "x.zip").exists() and (tmp_path / "x.zip.parcial").stat().st_size == 50_000
+    cdn.pedidos.clear()
+    assert md.baixar("u", tmp_path / "x.zip", cdn, esperado=LM1).read_bytes() == corpo  # outra execução
+    assert cdn.pedidos[0]["Range"] == "bytes=50000-"
+
+
+def test_parcial_de_outra_versao_recomeca(tmp_path: Path) -> None:
+    corpo = b"novo" * 10_000
+    (tmp_path / "x.zip.parcial").write_bytes(b"velho" * 1000)
+    (tmp_path / "x.zip.parcial.json").write_text(json.dumps({"url": "u", "last_modified": LM1}))
+    cdn = CDNRange(corpo, lm=LM2)
+    assert md.baixar("u", tmp_path / "x.zip", cdn, esperado=LM2).read_bytes() == corpo
+    assert cdn.pedidos[0].get("Range") is None       # descartado antes de pedir
+    # servidor que ignora Range (200): recomeça do zero sem misturar os bytes
+    (tmp_path / "y.zip.parcial").write_bytes(b"n" * 7)
+    (tmp_path / "y.zip.parcial.json").write_text(json.dumps({"url": "u", "last_modified": LM2}))
+    sem_range = CDNRange(corpo, lm=LM2, aceita_range=False)
+    assert md.baixar("u", tmp_path / "y.zip", sem_range, esperado=LM2).read_bytes() == corpo
+    assert sem_range.pedidos[0]["Range"] == "bytes=7-"
