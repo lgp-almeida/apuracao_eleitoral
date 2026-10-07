@@ -8,12 +8,12 @@
 Ao chegar: baixa (e baixa de novo se o TSE atualizar o arquivo), converte para Parquet (mapas e
 comparação por bairro, Perfil × voto e planilhas passam a oferecer 2026 sozinhos), importa o resultado
 oficial para dados_2026/historico_2026_t<turno>/ (abrir com: python site_apuracao.py --dados ...)
-e grava a transferência 2022 → 2026 por bairro em saidas/transferencia_2022_2026.csv.
+e grava a transferência 2022 → 2026 por bairro em saidas/<UF>/transferencia_2022_2026.csv.
 Totais, POR TURNO, do melhor para o pior (rodada 55): os oficiais (detalhe_votacao_munzona), os
 reconstruídos das seções (rodada 40) ou os reconstruídos do Boletim de Urna (o BU sai dias antes dos
 microdados no 2º turno: procurado no CKAN só quando nada melhor existe para o turno). Os provisórios são
 marcados no status.json; um nível melhor substitui o pior (nunca o contrário) e grava a conferência entre os
-dois em saidas/conferencia_<antigo>_x_<novo>_<turno>t.csv.
+dois em saidas/<UF>/conferencia_<antigo>_x_<novo>_<turno>t.csv.
     --politica-totais {auto,oficial,secoes,bweb}  # fixa o nível (falha se indisponível; nunca cai para outro)
     --bweb-brasil                                 # Presidente no Brasil pelo BU: baixa os 28 BUs do turno
 Estado da última verificação: cache_tse/microdados_2026.json.
@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--uf", default="RJ", type=str.upper)
     p.add_argument("--cache-dir", type=Path, default=Path("cache_tse"))
     p.add_argument("--raiz", type=Path, default=Path("dados_2026"), help="destino do histórico importado")
-    p.add_argument("--saidas", type=Path, default=Path("saidas"))
+    p.add_argument("--saidas", type=Path, help="conferências e transferência (padrão: saidas/<UF>, como o lote)")
     modo = p.add_mutually_exclusive_group()
     modo.add_argument("--vigiar", action="store_true",
                       help="repetir a verificação até os totais oficiais (detalhe e partido munzona) chegarem")
@@ -204,7 +204,7 @@ def procurar_bu(a: argparse.Namespace, sessao=requests, lista: list | None = Non
 
 
 def conferir_com_a_noite(a: argparse.Namespace, turno: int, importado: Path) -> None:
-    """Tempo real (o que o coletor gravou na noite) × o recém-importado — `saidas/conferencia_<ano>_t<turno>.xlsx`
+    """Tempo real (o que o coletor gravou na noite) × o recém-importado — `saidas/<UF>/conferencia_<ano>_t<turno>.xlsx`
     (TODO 16, rodada 45). Sem a pasta da noite, nada a conferir."""
     from apuracao import conferencia as cf
     from apuracao.divulgacao.coletor import destino_padrao
@@ -330,6 +330,7 @@ def historico_descricao(totais_de: str | None) -> str:
 
 def main(argv: list[str] | None = None, sessao=requests) -> int:
     a = build_parser().parse_args(argv)
+    a.saidas = a.saidas or Path("saidas") / a.uf  # o RJ ia para saidas/ e o lote para saidas/<UF> (rodada 59, ajuste)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     if a.limpar_vazios:

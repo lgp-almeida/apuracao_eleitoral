@@ -74,3 +74,15 @@ Duas falhas obrigaram a reimportar à mão duas vezes.
 - `apuracao/lote_ufs.py` (`Config.acompanhar`, `ja_feita` e o detalhe "reimportado") e `baixar_ufs.py`.
 - Testes: `test_microdados.py`, `test_lote_ufs.py` e `test_bweb.py`.
 - Docs: `docs/ROTEIRO_NOITE_DA_ELEICAO.md` ("Depois"), `CLAUDE.md` e `docs/INDEX.md`.
+
+## Ajuste: as saídas do RJ em `saidas/RJ/`
+
+- **Problema:** `preparar_2026.py` gravava as conferências e a transferência em `saidas/`, enquanto o lote grava
+  em `saidas/<UF>/`. Por isso o `saidas/RJ/conferencia_2026_t1.xlsx` era uma versão antiga, da importação
+  provisória.
+- **Correção:** o padrão de `--saidas` passou a ser `saidas/<UF>`.
+- **Arquivos movidos:** os três do RJ que estavam soltos (`conferencia_2026_t1.xlsx`,
+  `conferencia_secoes_x_munzona_1t.csv` e `conferencia_atualizacao_20261007_1850_1t.csv`) foram para
+  `saidas/RJ/`, substituindo o antigo.
+- **Teste:** `test_saidas_por_uf_como_no_lote`.
+- A vigia do RJ foi reiniciada com o padrão novo.

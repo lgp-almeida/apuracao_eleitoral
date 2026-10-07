@@ -434,3 +434,16 @@ def test_acompanhar_nao_para_nos_totais_oficiais(cli_falso, monkeypatch) -> None
     assert cli.main(["--acompanhar", "--ate", ontem, *args], sessao=cdn) == 0
     with pytest.raises(SystemExit):
         cli.main(["--acompanhar", "--vigiar", *args], sessao=cdn)
+
+
+def test_saidas_por_uf_como_no_lote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rodada 59 (ajuste): o RJ gravava as conferências em saidas/ e o lote em saidas/<UF>."""
+    import preparar_2026 as cli
+    vistos = []
+    monkeypatch.setattr(cli.md, "limpar_cache_vazio", lambda *a: [])
+    monkeypatch.setattr(cli.md, "verificar", lambda *a: vistos.append(a) or [])
+    monkeypatch.setattr(cli, "resumo", lambda a, e, b=None: vistos.append(a.saidas) or [])
+    monkeypatch.setattr("apuracao.bweb.recursos", lambda *a, **k: [])
+    assert cli.main(["--so-verificar", "--uf", "sp"]) == 0
+    assert vistos[-1] == Path("saidas") / "SP"
+    assert cli.main(["--so-verificar", "--saidas", "x"]) == 0 and vistos[-1] == Path("x")
