@@ -41,7 +41,7 @@ def test_destaque_nas_listas_de_eleitos(pagina, site) -> None:
     assert href.startswith("api/cadeiras/planilha?cargo=7") and pagina.evaluate(
         "h => new URLSearchParams(h.split('?')[1]).get('destacar')", href) == alvo
     # o redesenho de 60 s mantém o destaque e a lista aberta
-    pagina.evaluate("() => atualizarPainel()")
+    pagina.evaluate("() => __apuracao.atualizarPainel()")
     cartao.locator(".cad-eleitos tr.destaque").first.wait_for()
     assert cartao.locator(".cad-eleitos tr.destaque").count() == n
     # desmarcar pela caixa: some o destaque, o endereço e o link de salvar acompanham
@@ -62,5 +62,5 @@ def test_escolha_fica_no_navegador(nova_pagina, site) -> None:
     pg.goto(site["url"] + "#painel")
     pg.reload()
     pg.wait_for_selector("#destaque:not([hidden])")
-    assert pg.evaluate("[...estado.destacar]") == [alvo]
+    assert pg.evaluate("[...__apuracao.estado.destacar]") == [alvo]
     assert pg.locator(f"#destaque-opcoes input[value='{alvo}']").first.is_checked()

@@ -1,6 +1,6 @@
-/* Apuração 2026 — página do site local.
+/* Apuração 2026 — página do site local (código anterior à refatoração, migrado aos poucos para módulos).
  * Todo texto vindo dos dados entra por textContent (o TSE testa nomes com aspas e símbolos). */
-"use strict";
+import * as L from "leaflet";
 
 const REFRESH_MS = 60_000;
 const fmtInt = new Intl.NumberFormat("pt-BR");
@@ -2986,7 +2986,7 @@ async function atualizarAlertas() {
     if (!painelAberto) alertas.naoVistos += r.alertas.length;
     r.alertas.forEach(mostrarAviso);
     const ordem = ["critico", "aviso", "noticia", "ok"];
-    tocar(r.alertas.map((a) => a.nivel).sort((x, y) => ordem.indexOf(x) - ordem.indexOf(y))[0]);
+    window.__apuracao.tocar(r.alertas.map((a) => a.nivel).sort((x, y) => ordem.indexOf(x) - ordem.indexOf(y))[0]);
   }
   desenharAlertas();
 }
@@ -3044,10 +3044,14 @@ document.getElementById("destaque-limpar").addEventListener("click", () => defin
 document.getElementById("destaque-link").addEventListener("click", () =>
   copiarLink(enderecoPainel(), document.getElementById("destaque-link-msg")));
 
+// Ponto de acesso dos testes e2e: no script clássico estes nomes eram globais; no módulo, não.
+window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
+  consultarCandidato, partidosVar };
+
 (function iniciarAlertas() {
   const som = document.getElementById("alertas-som");
   som.checked = lerPreferencia("alertas-som", true);
-  som.addEventListener("change", () => { gravarPreferencia("alertas-som", som.checked); if (som.checked) tocar("ok"); });
+  som.addEventListener("change", () => { gravarPreferencia("alertas-som", som.checked); if (som.checked) window.__apuracao.tocar("ok"); });
   document.getElementById("botao-alertas").addEventListener("click", () =>
     abrirPainelAlertas(document.getElementById("painel-alertas").hidden));
   document.getElementById("fechar-alertas").addEventListener("click", () => abrirPainelAlertas(false));

@@ -11,13 +11,13 @@ BASE = "#mapas?cargo=13&metrica=pct_candidato&detalhe=locais&ano_bairros=2024"
 
 
 def _pronto(pg) -> None:
-    pg.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'locais'")
+    pg.wait_for_function("() => __apuracao.estado.mapa && __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.camada === 'locais'")
 
 
 def test_pontos_de_voto_com_a_rampa_de_mapas(pagina, site) -> None:
     abrir(pagina, site, f"{BASE}&camada=voto&numero={CAND}")
     _pronto(pagina)
-    cores = pagina.evaluate("Object.values(estado.mapa._export.cores)")
+    cores = pagina.evaluate("Object.values(__apuracao.estado.mapa._export.cores)")
     rampa = pagina.evaluate("['--mapa-1','--mapa-2','--mapa-3','--mapa-4','--mapa-5']"
                             ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())")
     assert len(cores) == 4 and set(cores) <= set(rampa)          # amarelo (menos) -> vermelho (mais)
@@ -46,7 +46,7 @@ def test_voltar_para_municipios(pagina, site) -> None:
     abrir(pagina, site, f"{BASE}&camada=voto&numero={CAND}")
     _pronto(pagina)
     pagina.select_option("#mapa-detalhe", "municipios")
-    pagina.wait_for_function("() => estado.detalhe === 'municipios' && !location.hash.includes('camada=')")
+    pagina.wait_for_function("() => __apuracao.estado.detalhe === 'municipios' && !location.hash.includes('camada=')")
     assert pagina.locator("#mapa-l-camada").is_hidden() and pagina.locator("#mapa-l-locais").is_visible()
 
 
@@ -73,7 +73,7 @@ def test_camada_de_variacao(pagina, site) -> None:
     assert "presentes em 2020 e 2024" in pagina.inner_text("#locais-nota")
     h = pagina.evaluate("location.hash")
     assert "camada=variacao" in h and "numero=55" in h and "indicador=" not in h
-    cores = set(pagina.evaluate("Object.values(estado.mapa._export.cores)"))
+    cores = set(pagina.evaluate("Object.values(__apuracao.estado.mapa._export.cores)"))
     div = set(pagina.evaluate("['--div-n3','--div-n2','--div-n1','--div-0','--div-p1','--div-p2','--div-p3']"
                               ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())"))
     assert len(cores) == 3 and cores <= div
@@ -123,12 +123,12 @@ def test_troca_rapida_vale_o_ultimo_pedido(pagina, site) -> None:
     try:
         pagina.select_option("#mapa-camada", "perfil")
         pagina.select_option("#mapa-indicador", "renda_media")
-        pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('Renda média')")
+        pagina.wait_for_function("() => __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.titulo.includes('Renda média')")
         assert retidos, "o 1º pedido deveria ter ficado preso"
         for r in retidos:
             r.continue_()
         pagina.wait_for_timeout(800)  # a resposta atrasada chega e tem de ser descartada
-        assert "Renda média" in pagina.evaluate("estado.mapa._export.titulo")
+        assert "Renda média" in pagina.evaluate("__apuracao.estado.mapa._export.titulo")
         assert "indicador=renda_media" in pagina.evaluate("location.hash")
     finally:
         pagina.unroute("**/api/mapa/locais*")
@@ -139,13 +139,13 @@ AREAS = "#mapas?cargo=13&metrica=pct_candidato&detalhe=areas&ano_bairros=2024"
 
 
 def _areas_prontas(pg) -> None:
-    pg.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas'")
+    pg.wait_for_function("() => __apuracao.estado.mapa && __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.camada === 'areas'")
 
 
 def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
     abrir(pagina, site, f"{AREAS}&camada=voto&numero={CAND}")
     _areas_prontas(pagina)
-    cores = pagina.evaluate("estado.mapa._export.cores")
+    cores = pagina.evaluate("__apuracao.estado.mapa._export.cores")
     rampa = pagina.evaluate("['--mapa-1','--mapa-2','--mapa-3','--mapa-4','--mapa-5','--sem-dado']"
                             ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())")
     assert len(cores) == 3 and set(cores.values()) <= set(rampa)  # 3 áreas sintéticas, rampa de mapas
@@ -156,14 +156,14 @@ def test_mapa_por_area_de_ponderacao(pagina, site) -> None:
     # perfil: a religião (amostra do Censo) está entre os indicadores da área
     pagina.select_option("#mapa-camada", "perfil")
     pagina.select_option("#mapa-indicador", "pct_evangelicos")
-    pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('evangélicos')")
+    pagina.wait_for_function("() => __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.titulo.includes('evangélicos')")
     assert "amostra" in pagina.inner_text("#areas-nota")
     h = pagina.evaluate("location.hash")
     assert "detalhe=areas" in h and "camada=perfil" in h and "indicador=pct_evangelicos" in h
     # de volta pelo endereço (só o hash muda: a página não recarrega, então espera o município aplicado)
     abrir(pagina, site, h + "&municipio=3303302")
     pagina.wait_for_function("() => document.getElementById('mapa-municipio').value === '3303302' && "
-                             "location.hash.includes('municipio=3303302') && estado.mapa._export")
+                             "location.hash.includes('municipio=3303302') && __apuracao.estado.mapa._export")
     assert pagina.input_value("#mapa-detalhe") == "areas" and pagina.input_value("#mapa-indicador") == "pct_evangelicos"
 
 
@@ -180,9 +180,9 @@ def test_area_em_escala_divergente(pagina, site) -> None:
                  lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(resposta)))
     try:
         abrir(pagina, site, AREAS.replace("metrica=pct_candidato", "metrica=abstencao_pct") + "&camada=variacao")
-        pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
-                                 "estado.mapa._export.titulo.startsWith('Variação')")
-        cores = set(pagina.evaluate("Object.values(estado.mapa._export.cores)"))
+        pagina.wait_for_function("() => __apuracao.estado.mapa && __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.camada === 'areas' && "
+                                 "__apuracao.estado.mapa._export.titulo.startsWith('Variação')")
+        cores = set(pagina.evaluate("Object.values(__apuracao.estado.mapa._export.cores)"))
         div = set(pagina.evaluate("['--div-n3','--div-n2','--div-n1','--div-0','--div-p1','--div-p2','--div-p3']"
                                   ".map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim())"))
         assert len(cores) == 3 and cores <= div  # cai, estável e sobe: três cores divergentes
@@ -206,8 +206,8 @@ def test_area_destino_dos_eliminados(pagina, site) -> None:
                  lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(resposta)))
     try:
         abrir(pagina, site, f"{AREAS}&camada=transferencia&transf=elim_para_a")
-        pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
-                                 "estado.mapa._export.titulo.startsWith('Destino')")
+        pagina.wait_for_function("() => __apuracao.estado.mapa && __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.camada === 'areas' && "
+                                 "__apuracao.estado.mapa._export.titulo.startsWith('Destino')")
         assert pagina.locator("#mapa-l-transf").is_visible() and pagina.locator("#mapa-l-indicador").is_hidden()
         nota = pagina.inner_text("#areas-nota")
         assert "Inferência ecológica" in nota and "por município" in nota
@@ -221,16 +221,16 @@ def test_area_com_erro_amostral_alto_fica_marcada(pagina, site) -> None:
     """Rodada 53: indicador da amostra por área — a área com CV > 30% (50 evangélicos estimados) fica mais clara e
     tracejada; a legenda explica e a dica dá o CV."""
     abrir(pagina, site, f"{AREAS}&camada=perfil&indicador=pct_evangelicos")
-    pagina.wait_for_function("() => estado.mapa && estado.mapa._export && estado.mapa._export.camada === 'areas' && "
-                             "estado.mapa._export.titulo.includes('evangélicos')")
-    tracejadas = pagina.evaluate("estado.mapa._camada.getLayers().filter(l => l.options.dashArray)"
+    pagina.wait_for_function("() => __apuracao.estado.mapa && __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.camada === 'areas' && "
+                             "__apuracao.estado.mapa._export.titulo.includes('evangélicos')")
+    tracejadas = pagina.evaluate("__apuracao.estado.mapa._camada.getLayers().filter(l => l.options.dashArray)"
                                  ".map(l => l.feature.properties.CD_AP)")
     assert tracejadas == ["3304557001"]
     assert "pouco confiável" in pagina.inner_text("#mapa-legenda") and "1 áreas" in pagina.inner_text("#mapa-legenda")
     assert "pouco confiáveis" in pagina.inner_text("#areas-nota")
-    assert pagina.evaluate("estado.mapa._export.extras.length") == 1  # o aviso vai junto na exportação
+    assert pagina.evaluate("__apuracao.estado.mapa._export.extras.length") == 1  # o aviso vai junto na exportação
     # indicador do TSE (sem amostra): nenhuma marcação
     pagina.select_option("#mapa-indicador", "pct_superior")
-    pagina.wait_for_function("() => estado.mapa._export && estado.mapa._export.titulo.includes('superior')")
-    assert pagina.evaluate("estado.mapa._camada.getLayers().filter(l => l.options.dashArray).length") == 0
+    pagina.wait_for_function("() => __apuracao.estado.mapa._export && __apuracao.estado.mapa._export.titulo.includes('superior')")
+    assert pagina.evaluate("__apuracao.estado.mapa._camada.getLayers().filter(l => l.options.dashArray).length") == 0
     assert "pouco confiável" not in pagina.inner_text("#mapa-legenda")

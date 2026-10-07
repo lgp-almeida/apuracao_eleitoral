@@ -26,9 +26,9 @@ def cores(pg: Page, *variaveis: str) -> set[str]:
 
 
 def preenchimentos(pg: Page, mapa: str) -> list[str]:
-    """Cor de preenchimento de cada município desenhado no mapa Leaflet (`estado.mapa`, `estado.compMapa`)."""
-    pg.wait_for_function(f"() => estado.{mapa} && estado.{mapa}._camada")
-    return pg.evaluate(f"estado.{mapa}._camada.getLayers().map(l => l.options.fillColor)")
+    """Cor de preenchimento de cada município desenhado no mapa Leaflet (`__apuracao.estado.mapa`, `__apuracao.estado.compMapa`)."""
+    pg.wait_for_function(f"() => __apuracao.estado.{mapa} && __apuracao.estado.{mapa}._camada")
+    return pg.evaluate(f"__apuracao.estado.{mapa}._camada.getLayers().map(l => l.options.fillColor)")
 
 
 # --------------------------------------------------------------------------- painel
@@ -58,13 +58,13 @@ def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
     br = cartao(pagina, "Presidente — BRASIL")
     br.locator("#brasil-tabela tbody tr").first.wait_for()
     assert br.locator("#brasil-tabela tbody tr td:first-child").all_inner_texts() == ["RJ ✓", "SP ✓"]
-    pagina.wait_for_function("() => estado.brasilMapa && estado.brasilMapa._camada")
-    cores_lider = set(pagina.evaluate("estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)"))
+    pagina.wait_for_function("() => __apuracao.estado.brasilMapa && __apuracao.estado.brasilMapa._camada")
+    cores_lider = set(pagina.evaluate("__apuracao.estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)"))
     assert len(cores_lider) >= 1 and cores_lider <= cores(pagina, "--serie-1", "--serie-2", "--serie-3", "--outros")
-    pagina.wait_for_function("() => !estado.brasilMapa._animatingZoom")
+    pagina.wait_for_function("() => !__apuracao.estado.brasilMapa._animatingZoom")
     br.locator("#brasil-mapa").scroll_into_view_if_needed()
     ponto = pagina.evaluate("""() => {  // centro de SP na tela: mouse de verdade (posição da dica incluída)
-      const m = estado.brasilMapa, l = m._camada.getLayers().find(l => l.feature.properties.codarea === '35');
+      const m = __apuracao.estado.brasilMapa, l = m._camada.getLayers().find(l => l.feature.properties.codarea === '35');
       const anel = l.getLatLngs()[0], c = L.latLng(anel.reduce((a, q) => a + q.lat, 0) / anel.length,
         anel.reduce((a, q) => a + q.lng, 0) / anel.length);  // centroide dos vértices: dentro do triângulo
       const p = m.latLngToContainerPoint(c), r = m.getContainer().getBoundingClientRect();
@@ -75,16 +75,16 @@ def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
     texto = dica.inner_text()
     for trecho in ("Brancos", "Nulos", "Abstenção", "% válidos"):
         assert trecho in texto, trecho
-    assert pagina.evaluate("estado.brasil.ufs.find(u => u.uf === 'SP').candidatos[0].nome") in texto
+    assert pagina.evaluate("__apuracao.estado.brasil.ufs.find(u => u.uf === 'SP').candidatos[0].nome") in texto
     caixa = pagina.locator(".dica-flutuante").bounding_box()
     assert caixa["y"] >= 0 and caixa["y"] + caixa["height"] <= pagina.viewport_size["height"]  # inteira na janela
     pagina.mouse.move(1, 1)
     pagina.locator(".dica-flutuante").wait_for(state="hidden")
-    numero = pagina.evaluate("estado.brasil.candidatos[0].NUMERO")
+    numero = pagina.evaluate("__apuracao.estado.brasil.candidatos[0].NUMERO")
     br.locator("#brasil-metrica").select_option(str(numero))
     seq = cores(pagina, "--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5")
-    assert set(pagina.evaluate("estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)")) <= seq
-    pagina.evaluate("desenharPainel()")  # redesenho do painel: o mesmo bloco (e o mesmo mapa) volta ao cartão
+    assert set(pagina.evaluate("__apuracao.estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)")) <= seq
+    pagina.evaluate("__apuracao.desenharPainel()")  # redesenho do painel: o mesmo bloco (e o mesmo mapa) volta ao cartão
     assert cartao(pagina, "Presidente — BRASIL").locator("#brasil-mapa .leaflet-map-pane").count() == 1
     assert cartao(pagina, "Presidente — RJ").locator(".brasil-ufs").count() == 0
 
@@ -152,14 +152,14 @@ def test_mapa_sequencial_e_dica(pagina: Page, site: dict) -> None:
     assert faixas[0] == "rgb(254, 217, 118)" and faixas[0] != faixas[-2]
     # passar o mouse sobre um município mostra a dica com o nome
     ponto = pagina.evaluate("""() => {
-        const l = estado.mapa._camada.getLayers()[0];
+        const l = __apuracao.estado.mapa._camada.getLayers()[0];
         const v = l.getLatLngs()[0];  // centroide do polígono (o centro do retângulo envolvente pode cair na borda)
         const c = L.latLng(v.reduce((a, x) => a + x.lat, 0) / v.length, v.reduce((a, x) => a + x.lng, 0) / v.length);
-        const p = estado.mapa.latLngToContainerPoint(c);
+        const p = __apuracao.estado.mapa.latLngToContainerPoint(c);
         const r = document.getElementById('mapa').getBoundingClientRect();
         return {x: r.left + p.x, y: r.top + p.y}; }""")
     # o Leaflet ignora o mouse enquanto anima o zoom do enquadramento inicial: espera o mapa parar
-    pagina.wait_for_function("() => !estado.mapa._animatingZoom")
+    pagina.wait_for_function("() => !__apuracao.estado.mapa._animatingZoom")
     for tentativa in range(20):
         pagina.mouse.move(ponto["x"] - 3, ponto["y"] - 3)
         pagina.mouse.move(ponto["x"], ponto["y"], steps=3)

@@ -349,6 +349,9 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
 
 ## 27. Refatoração do front-end (Vite + TypeScript + design system)
 
+- **Andamento:** fase 0 (andaime) feita no ramo `frontend-refatoracao`, na
+  [RODADA_60](RODADA_60_2026-10-07_frontend_fase0_andaime.md). Próxima: fase 1 (núcleo).
+
 - **Proposta completa:** [PROPOSTA_REFATORACAO_FRONTEND.md](PROPOSTA_REFATORACAO_FRONTEND.md). Traz o diagnóstico com
   números, a arquitetura por módulos, o design system, a robustez, as fases e os riscos.
 - **O quê:** tirar o `app.js` de 3.117 linhas do arquivo único. O código vai para `apuracao/web/frontend/src/` (TypeScript

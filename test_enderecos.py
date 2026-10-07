@@ -152,7 +152,7 @@ def test_variacao_partidos_no_endereco(pagina: Page, site: dict) -> None:
     """Bloco "Gráfico da variação por partido": escolha (na ordem do link) e no máximo 3 partidos."""
     abrir(pagina, site, "#comparacao?cargo=3&metrica=abstencao&var=1&var_partidos=PSB,PL&var_ponderar=1")
     pagina.wait_for_function("() => document.querySelectorAll('#var-partidos input').length >= 4")
-    assert pagina.evaluate("() => partidosVar()") == ["PSB", "PL"]
+    assert pagina.evaluate("() => __apuracao.partidosVar()") == ["PSB", "PL"]
     assert pagina.is_checked("#var-ponderar")
     # 2022 sintético × TSE falso: os partidos não se correspondem (ou têm < 3 municípios) — a API explica o motivo
     pagina.wait_for_function("() => /sem correspondente|menos de 3/.test("

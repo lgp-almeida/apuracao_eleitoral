@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -145,9 +146,16 @@ def test_site_na_rede_so_atende_consultas_pesadas_da_propria_maquina(tse_cache: 
 
 
 def test_pagina_sem_cache(site: TestClient) -> None:
-    """A página, o JS e o CSS são revalidados a cada carga (senão o navegador mostra a versão antiga do site)."""
-    for caminho in ("/", "/app.js", "/style.css"):
-        assert site.get(caminho).headers["cache-control"] == "no-cache"
+    """A página é revalidada a cada carga (senão o navegador mostra a versão antiga do site); JS e CSS do build
+    têm o hash do conteúdo no nome e ficam guardados no navegador."""
+    pagina = site.get("/")
+    assert pagina.headers["cache-control"] == "no-cache"
+    assets = re.findall(r'(?:src|href)="\./(assets/[^"]+)"', pagina.text)
+    assert {a.rsplit(".", 1)[-1] for a in assets} == {"js", "css"}
+    for caminho in assets:
+        resp = site.get("/" + caminho)
+        assert resp.status_code == 200 and "immutable" in resp.headers["cache-control"], caminho
+    assert site.get("/assets/nao-existe.js").headers.get("cache-control") != "public, max-age=31536000, immutable"
 
 
 # --------------------------------------------------------------------------

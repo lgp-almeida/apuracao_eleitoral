@@ -24,7 +24,7 @@ def test_modo_tv(pagina, site) -> None:
     assert "(2 de" in pagina.inner_text("#tv-barra")
     pagina.keyboard.press(" ")
     assert "pausado" in pagina.inner_text("#tv-barra")
-    pagina.evaluate("() => atualizarPainel()")                       # o redesenho de 60 s mantém o cargo
+    pagina.evaluate("() => __apuracao.atualizarPainel()")                       # o redesenho de 60 s mantém o cargo
     pagina.wait_for_function("() => document.querySelectorAll('#cartoes .cartao.tv-atual').length === 1")
     pagina.keyboard.press("Escape")
     pagina.wait_for_function("() => !document.body.classList.contains('modo-tv')")

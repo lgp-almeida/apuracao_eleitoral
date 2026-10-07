@@ -1,7 +1,7 @@
 """API e página do site local de apuração.
 
 Lê o "último estado" gravado pelo coletor (dados_2026/<ambiente>/ultimo/*.parquet),
-recarregando cada tabela quando o arquivo muda, e serve a página em static/.
+recarregando cada tabela quando o arquivo muda, e serve a página em static/ (build do Vite; a fonte está em frontend/).
 
 Rotas:
   GET /                        página (abas Painel, Candidato, Mapas)
@@ -1244,10 +1244,14 @@ def create_app(dados_dir: Path, uf: str = "RJ", cache_dir: Path = Path("cache_ts
 
     @app.middleware("http")
     async def sem_cache_da_pagina(request: Request, call_next: Any) -> Response:
-        # sem Cache-Control o navegador reaproveita index.html/app.js antigos depois de uma atualização do site;
-        # "no-cache" = sempre confere (ETag/304), então o custo é só a revalidação
+        # sem Cache-Control o navegador reaproveita o index.html antigo depois de uma atualização do site;
+        # "no-cache" = sempre confere (ETag/304), então o custo é só a revalidação. Os arquivos de assets/ têm o
+        # hash do conteúdo no nome (build do Vite): um nome nunca muda de conteúdo e pode ficar no navegador.
         resp = await call_next(request)
-        if not caminho_no_app(request).startswith(("/api/", "/geo/", "/vendor/")):
+        caminho = caminho_no_app(request)
+        if caminho.startswith("/assets/") and resp.status_code == 200:
+            resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        elif not caminho.startswith(("/api/", "/geo/")):
             resp.headers.setdefault("Cache-Control", "no-cache")
         return resp
 

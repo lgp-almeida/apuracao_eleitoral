@@ -14,6 +14,7 @@
 
 # dados, caches e artefatos (mesmo que apareçam dentro das pastas permitidas)
 __pycache__/
+node_modules/
 *.pyc
 .pytest_cache/
 *.tmp
