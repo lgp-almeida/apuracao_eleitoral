@@ -176,6 +176,22 @@ def test_malha_de_bairros_404_mantem_a_mensagem(tmp_path: Path, monkeypatch: pyt
         br.malha("RJ", tmp_path)
 
 
+def test_preparar_uf_sem_malha_de_bairros_nao_e_falha(tmp_path: Path, fontes,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """DF e TO: o IBGE não publica malha de bairros (404). O lote marcava "erro" toda vez (07/10/2026);
+    não é falha, e o derivado da malha não é tentado. O resto da UF segue normal."""
+    download_sem_rede(monkeypatch)
+    _no_cache(tmp_path, MUN, MUN.nome("RJ"))
+    _no_cache(tmp_path, BASICO, BASICO.nome("RJ"))
+    assert ibge.preparar(tmp_path, "RJ", IBGE()) == []
+    assert fontes[MALHA_B.derivados[0]] == [] and fontes[BASICO.derivados[0]] == [BASICO.nome("RJ")]
+
+    def sem_conexao(*a, **k):  # outra falha da malha continua sendo falha
+        raise requests.ConnectionError("fora do ar")
+    monkeypatch.setattr(v, "download", sem_conexao)
+    assert [f.split(":")[0] for f in ibge.preparar(tmp_path, "RJ", IBGE())] == ["malha_bairros", DERIV_MALHA]
+
+
 def test_caminho_da_api_grava_com_proveniencia(tmp_path: Path) -> None:
     srv = IBGE()
     corpo = b'{"type": "FeatureCollection", "features": []}'

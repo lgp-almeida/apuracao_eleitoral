@@ -14,6 +14,7 @@ from apuracao import microdados as md
 URL = md.ARQUIVOS[0].url(2026, "RJ")  # votacao_secao_2026_RJ.zip
 URL_MZ = next(a for a in md.ARQUIVOS if a.chave == "detalhe_munzona").url(2026, "RJ")
 LM1, LM2 = "Mon, 12 Oct 2026 10:00:00 GMT", "Tue, 13 Oct 2026 09:00:00 GMT"
+LM3 = "Wed, 14 Oct 2026 08:00:00 GMT"
 
 
 def _zip(membro: str, linhas: list[str]) -> bytes:
@@ -92,6 +93,37 @@ def test_atualizacao_apaga_os_parquet_derivados(tmp_path: Path) -> None:
     md.preparar(tmp_path, 2026, "RJ", cdn, ao_chegar=chegaram.append)
     assert not derivado.exists() and chegaram == [{"votos_uf"}]
     assert zipfile.ZipFile(tmp_path / "votacao_secao_2026_RJ.zip").read("votacao_secao_2026_RJ.csv").endswith(b'"3"')
+
+
+def test_cdn_com_copia_velha_no_get(tmp_path: Path) -> None:
+    """07/10/2026: o HEAD anunciava a versão nova e o GET entregava a velha. Pede de novo furando o cache;
+    se ainda vier velha, recusa (sem trocar o ZIP nem apagar derivados) e tenta na próxima verificação."""
+    cdn = CDN()
+    cdn.arquivos[URL] = (_zip("votacao_secao_2026_RJ.csv", ['"1";"2"']), LM1)
+    md.preparar(tmp_path, 2026, "RJ", cdn)
+    derivado = tmp_path / "votacao_secao_2026_RJ__RJ.parquet"
+    derivado.write_bytes(b"da 1a versao")
+    velho, novo = cdn.arquivos[URL], (_zip("votacao_secao_2026_RJ.csv", ['"1";"3"']), LM2)
+    pedidos: list[str] = []
+
+    def nos_desencontrados(url, **kw):  # o nó do GET ainda tem a cópia velha; com parâmetro, a origem
+        pedidos.append(url)
+        return Resp(200, *(novo if "?" in url else velho))
+    cdn.head = lambda url, **kw: Resp(200, *novo) if url == URL else Resp(404)
+    cdn.get = nos_desencontrados
+    e = {x.chave: x for x in md.preparar(tmp_path, 2026, "RJ", cdn)}
+    assert e["votos_uf"].acao == "baixado" and pedidos[0] == URL and pedidos[1].startswith(URL + "?")
+    prov = json.loads((tmp_path / "votacao_secao_2026_RJ.proveniencia.json").read_text())
+    assert prov["last_modified"] == LM2 and prov["url"] == URL and not derivado.exists()
+
+    derivado.write_bytes(b"da 2a versao")
+    novo = (_zip("votacao_secao_2026_RJ.csv", ['"1";"4"']), LM3)
+    velho = cdn.arquivos[URL] = (velho[0], LM2)
+    cdn.get = lambda url, **kw: Resp(200, *velho)  # todo nó ainda velho
+    e = {x.chave: x for x in md.preparar(tmp_path, 2026, "RJ", cdn)}
+    assert e["votos_uf"].acao == "tentar de novo" and "versão de" in e["votos_uf"].situacao
+    assert derivado.exists()
+    assert json.loads((tmp_path / "votacao_secao_2026_RJ.proveniencia.json").read_text())["last_modified"] == LM2
 
 
 def test_limpar_zip_so_com_cabecalho(tmp_path: Path) -> None:

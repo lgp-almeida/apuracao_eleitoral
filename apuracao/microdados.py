@@ -169,23 +169,42 @@ def verificar(cache: Path, ano: int, uf: str, sessao: Any = requests) -> list[Es
     return saida
 
 
-def baixar(url: str, destino: Path, sessao: Any = requests) -> Path:
-    """Baixa para um diretório temporário e troca o ZIP (e a proveniência) de forma atômica."""
+def _get(url: str, pedido: str, parcial: Path, sessao: Any) -> dict[str, Any]:
+    """Um GET de `pedido` gravado em `parcial`; devolve a proveniência (com a `url` sem parâmetros)."""
+    with sessao.get(pedido, headers=v.HTTP_HEADERS, stream=True, timeout=(30, 600)) as r:
+        if r.status_code == 404:
+            raise v.TseDataError(f"404 em {pedido}")
+        r.raise_for_status()
+        sha, n = hashlib.sha512(), 0
+        with parcial.open("wb") as fh:
+            for bloco in r.iter_content(chunk_size=4 * 1024 * 1024):
+                fh.write(bloco)
+                sha.update(bloco)
+                n += len(bloco)
+        return {"url": url, "downloaded_at": datetime.now(timezone.utc).isoformat(),
+                "last_modified": r.headers.get("Last-Modified"), "bytes": n, "sha512": sha.hexdigest()}
+
+
+def baixar(url: str, destino: Path, sessao: Any = requests, esperado: str | None = None) -> Path:
+    """Baixa para um diretório temporário e troca o ZIP (e a proveniência) de forma atômica.
+
+    `esperado` = Last-Modified que o HEAD anunciou. A CDN do TSE tem nós com cópias velhas: em 07/10/2026 o
+    HEAD dizia 06/10 19:22 e o GET entregava a versão de 04:58 (e o vigia baixaria tudo de novo a cada hora,
+    gravando a velha como nova). GET mais velho que o HEAD é repetido UMA vez com um parâmetro que fura o
+    cache da CDN; se ainda vier velho, é recusado (`TseDataError`: o arquivo fica para a próxima verificação)."""
     destino.parent.mkdir(parents=True, exist_ok=True)
+    minimo = _data(esperado)
     with tempfile.TemporaryDirectory(dir=destino.parent) as tmp:
         parcial = Path(tmp) / destino.name
-        with sessao.get(url, headers=v.HTTP_HEADERS, stream=True, timeout=(30, 600)) as r:
-            if r.status_code == 404:
-                raise v.TseDataError(f"404 em {url}")
-            r.raise_for_status()
-            sha, n = hashlib.sha512(), 0
-            with parcial.open("wb") as fh:
-                for bloco in r.iter_content(chunk_size=4 * 1024 * 1024):
-                    fh.write(bloco)
-                    sha.update(bloco)
-                    n += len(bloco)
-            prov = {"url": url, "downloaded_at": datetime.now(timezone.utc).isoformat(),
-                    "last_modified": r.headers.get("Last-Modified"), "bytes": n, "sha512": sha.hexdigest()}
+        for pedido in (url, f"{url}?v={int(datetime.now(timezone.utc).timestamp())}"):
+            prov = _get(url, pedido, parcial, sessao)
+            recebido = _data(prov["last_modified"])
+            if minimo is None or (recebido is not None and recebido >= minimo):
+                break
+            logger.warning("%s: a CDN entregou a versão de %s, o HEAD anuncia %s", destino.name,
+                           prov["last_modified"], esperado)
+        else:
+            raise v.TseDataError(f"a CDN ainda entrega a versão de {prov['last_modified']} (o HEAD anuncia {esperado})")
         parcial.replace(destino)
     destino.with_suffix(".proveniencia.json").write_text(json.dumps(prov, indent=2))
     return destino
@@ -210,7 +229,7 @@ def preparar(cache: Path, ano: int, uf: str, sessao: Any = requests,
             continue
         a = por_chave[e.chave]
         try:
-            zp = baixar(e.url, cache / e.zip, sessao)
+            zp = baixar(e.url, cache / e.zip, sessao, esperado=e.remoto_modificado)
         except (requests.RequestException, v.TseDataError) as exc:
             e.situacao, e.acao = f"falha no download ({exc.__class__.__name__}: {exc})"[:200], "tentar de novo"
             logger.error("%s: %s", e.zip, e.situacao)

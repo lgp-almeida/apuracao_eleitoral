@@ -452,12 +452,19 @@ def _refazer_derivados(cache: Path, uf: str, estados: list[Estado], novos: dict[
 def preparar(cache: Path, uf: str, sessao: Any = requests) -> list[str]:
     """Garante no cache todas as fontes e os derivados (baixa só o que falta). Devolve as falhas."""
     falhas = []
+    pular: set[str] = set()
     for fonte in FONTES:
         try:
             caminho(fonte.chave, cache, uf, sessao)
         except (requests.RequestException, v.TseDataError, OSError, ValueError) as exc:
+            if fonte.chave == "malha_bairros" and "404" in str(exc):  # DF e TO: o IBGE não publica (rodada 48)
+                logger.info("IBGE: %s sem malha de bairros (404); mapas por bairro não se aplicam", uf.upper())
+                pular.update(fonte.derivados)
+                continue
             falhas.append(f"{fonte.chave}: {exc}")
     for modelo, gerar in _geradores().items():
+        if modelo in pular:
+            continue
         try:
             gerar(uf.upper(), cache)
         except Exception as exc:  # noqa: BLE001 — relatório: uma falha não impede os outros derivados
