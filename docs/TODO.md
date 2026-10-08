@@ -52,6 +52,7 @@ dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](
 | 26 | Prontidão do 2º turno: `verificar_prontidao.py --turno 2 --ufs todas --testes`, ensaio do 2º turno numa UF com 2º turno, códigos oficiais do `ele-c.json` e revisão do roteiro para várias UFs | antes de 25/10 (prontidão até ~20/10; códigos quando o TSE publicar) | **prontidão feita em 07/10**: 0 falhas; 2º turno de Governador em AC, AM, DF, ES, RJ, RN e TO; códigos oficiais 6260 (Gov.) e 6258 (Pres.) já no `ele-c.json`; acompanhamento ainda 404 (normal antes de 25/10). Checagem do relógio passou a usar o oficial (o simulado saiu do ar). Ensaio do 2º turno (ES) OK em 07/10, depois de corrigir o TSE simulado do ensaio (o EA20 era carimbado com a hora exata e mostrava o minuto cheio: o coletor aceitava a versão anterior como final e 11 abrangências ficavam em 99,99%). Roteiro do 2º turno atualizado em 07/10 (`docs/ROTEIRO_NOITE_DA_ELEICAO.md`). **Feito** |
 | 27 | Fallback dos totais pelo Boletim de Urna (3º nível, por turno) e votacao_partido_munzona reconstruído para as cadeiras | 2º turno (BU sai dias antes dos microdados) | **feito**: [RODADA_55](RODADA_55_2026-10-07_fallback_bweb_e_partidos.md) (golden RJ 2022 com 0 diferença; pedido em [PROMPT_fallback_bweb_munzona.md](PROMPT_fallback_bweb_munzona.md)) |
 | 28 | Abstenção × mudança de local de votação 2022 → 2026 (planilha; impacto em Presidente e Governador) | urgente (07/10) | **feito** (27 UFs + consolidado): [RODADA_56](RODADA_56_2026-10-07_abstencao_mudanca_local.md); falta o 2º turno |
+| 29 | Testar o front-end novo com os dados reais, à mão: régua, tema, teclado, cada aba, 360 px, modo TV, várias UFs | antes do merge do ramo (depois de 25/10) | **com o usuário**: roteiro em [ROTEIRO_TESTE_FRONTEND.md](ROTEIRO_TESTE_FRONTEND.md) |
 
 ---
 
@@ -387,3 +388,22 @@ o `main` e para o 2º turno (25/10).**
 - **Proposta:** com o `final` feito, continuar o espelho de `raw/` no intervalo de sempre. O instantâneo `final` deve
   ser refeito (ou completado) quando chegarem parciais novas depois dele. Teste: parcial nova depois do `final` →
   aparece na cópia.
+
+## 29. Testar o front-end novo com os dados reais — com o usuário
+
+Registrado em 08/10/2026. **Quem faz: o usuário**, quando puder, antes do merge do ramo `frontend-refatoracao` em
+`main` (item 27, depois de 25/10).
+
+- **Roteiro:** [ROTEIRO_TESTE_FRONTEND.md](ROTEIRO_TESTE_FRONTEND.md). Não precisa de Node: a página compilada está
+  no ramo.
+- **O que fazer:**
+  1. `git checkout frontend-refatoracao`.
+  2. Subir o site em porta livre com os dados reais do 1º turno:
+     `python site_apuracao.py --dados dados_2026/oficial --porta 8077`.
+  3. Rodar o ensaio com a apuração andando: `python ensaio_apuracao.py --velocidade 60 --manter`.
+  4. Abrir o site de várias UFs: `python site_apuracao.py --ufs todas --dados dados_2026/historico_2022_t1 --porta 8078`.
+  5. Conferir a lista do roteiro (§3): régua, tema, teclado, cada aba, o mapa "Por estado" aberto a partir de
+     `#mapas`, 360 px, modo TV, alertas e o seletor de UF.
+  6. Anotar cada problema com o endereço, o tema, a largura e o erro do console (§5).
+- **Fecha quando:** a lista estiver toda conferida e os problemas anotados estiverem corrigidos no ramo, cada um com
+  um teste.
