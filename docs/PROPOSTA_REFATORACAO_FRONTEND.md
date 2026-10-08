@@ -1,6 +1,6 @@
 # Proposta: refatoração do front-end do site (Vite + TypeScript + design system)
 
-Data: 2026-10-07. Situação: **em execução no ramo `frontend-refatoracao`** — fase 0 feita ([RODADA_60](RODADA_60_2026-10-07_frontend_fase0_andaime.md)). Pedido do usuário: planejar, com a skill
+Data: 2026-10-07. Situação: **em execução no ramo `frontend-refatoracao`** — fases 0 e 1 feitas ([RODADA_60](RODADA_60_2026-10-07_frontend_fase0_andaime.md), [RODADA_61](RODADA_61_2026-10-07_frontend_fase1_nucleo.md)). Pedido do usuário: planejar, com a skill
 `frontend-design`, uma refatoração que deixe o front-end robusto, manutenível e mais limpo. Decisões do usuário:
 
 - **Visual:** reorganizar o código e criar um design system com polimento contido. A paleta dos mapas (YlOrRd,

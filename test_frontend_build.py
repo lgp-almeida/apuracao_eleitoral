@@ -45,3 +45,13 @@ def test_pagina_do_build_usa_caminhos_relativos() -> None:
     assert referencias and all(r.startswith("./assets/") for r in referencias), referencias
     for r in referencias:
         assert (STATIC / r).is_file(), r
+
+
+def test_rotas_pesadas_iguais_as_do_site() -> None:
+    """core/api.ts dá tempo-limite longo às mesmas rotas que o site trata como pesadas (ROTAS_PESADAS)."""
+    from apuracao.web.app import ROTAS_PESADAS
+
+    texto = (FONTE / "src" / "core" / "api.ts").read_text(encoding="utf-8")
+    bloco = re.search(r"export const ROTAS_PESADAS = \[(.*?)\] as const;", texto, re.S)
+    assert bloco
+    assert re.findall(r'"([^"]+)"', bloco.group(1)) == list(ROTAS_PESADAS)

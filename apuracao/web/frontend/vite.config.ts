@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin } from "vite";
+import { defineConfig } from "vitest/config";
 import { impressaoDaFonte } from "./construcao.ts";
 
 const RAIZ = import.meta.dirname;
@@ -26,4 +27,5 @@ export default defineConfig({
   build: { outDir: SAIDA, emptyOutDir: true, assetsDir: "assets", sourcemap: false },
   server: { proxy: { "/api": SITE, "/geo": SITE, "/ufs.json": SITE } },
   plugins: [impressaoDigital()],
+  test: { environment: "happy-dom", include: ["tests/**/*.test.ts"] },
 });

@@ -12,10 +12,12 @@
     "types": [
       "node"
     ],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "allowJs": true
   },
   "include": [
     "vite.config.ts",
-    "construcao.ts"
+    "construcao.ts",
+    "eslint.config.js"
   ]
 }

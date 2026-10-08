@@ -1,47 +1,15 @@
 /* Apuração 2026 — página do site local (código anterior à refatoração, migrado aos poucos para módulos).
  * Todo texto vindo dos dados entra por textContent (o TSE testa nomes com aspas e símbolos). */
 import * as L from "leaflet";
+import { repetir } from "./core/agendador.ts";
+import { api, baixar, enviar } from "./core/api.ts";
+import { cor, el, svg, SVG } from "./core/dom.ts";
+import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, fmtPP, fmtR, hora, int, mil, p1, pct } from "./core/formatos.ts";
+import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
 
 const REFRESH_MS = 60_000;
-const fmtInt = new Intl.NumberFormat("pt-BR");
-const fmtPct = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const estado = { aba: "painel", uf: "", ano: 2026, candidatosCache: {}, geo: null, mapa: null, mini: null,
   destacar: new Set(), destacarDefinido: false, cadAbertos: new Set(), painel: null };
-
-// ---------------------------------------------------------------- utilitários
-function el(tag, attrs = {}, ...filhos) {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === null || v === undefined || v === false) continue;
-    if (k === "class") n.className = v;
-    else if (k === "style") {  // "--x": propriedade personalizada (Object.assign não as aplica)
-      for (const [prop, val] of Object.entries(v)) {
-        if (prop.startsWith("--")) n.style.setProperty(prop, val); else n.style[prop] = val;
-      }
-    }
-    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v === true ? "" : v);
-  }
-  for (const f of filhos.flat()) {
-    if (f === null || f === undefined || f === false) continue;
-    n.append(f instanceof Node ? f : document.createTextNode(String(f)));
-  }
-  return n;
-}
-const cor = (nome) => getComputedStyle(document.documentElement).getPropertyValue(nome).trim();
-const int = (v) => (v === null || v === undefined ? "—" : fmtInt.format(v));
-const pct = (v) => (v === null || v === undefined ? "—" : fmtPct.format(v) + "%");
-const hora = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "medium" }) : "—");
-
-async function api(caminho) {
-  const r = await fetch(caminho, { cache: "no-store" });
-  if (!r.ok) {
-    let msg = `${r.status}`;
-    try { msg = (await r.json()).detail || msg; } catch (_) { /* resposta sem JSON */ }
-    throw new Error(msg);
-  }
-  return r.json();
-}
 
 // ---------------------------------------------------------------- abas
 document.querySelectorAll(".abas button").forEach((b) =>
@@ -219,7 +187,7 @@ function definirDestaque(lista, gravar = true) {
   estado.destacar = new Set(lista.filter(Boolean));
   estado.destacarDefinido = true;
   if (gravar) {  // escolha do usuário: fica no navegador e no endereço
-    try { localStorage.setItem("destacar", JSON.stringify([...estado.destacar])); } catch (_) { /* navegação privada */ }
+    gravarJson("destacar", [...estado.destacar]);
     if (estado.aba === "painel") history.replaceState(null, "", enderecoPainel());
   }
   desenharPainel();
@@ -237,8 +205,7 @@ function destaqueInicial(padrao) {  // endereço > navegador > --destacar do sit
   const [aba, params] = decodeURIComponent(location.hash.replace(/^#/, "")).split("?");
   const doEndereco = aba === "painel" && params ? new URLSearchParams(params).get("destacar") : null;
   if (doEndereco !== null) { definirDestaque(doEndereco.split(","), false); return; }
-  let salvo = null;
-  try { salvo = JSON.parse(localStorage.getItem("destacar") || "null"); } catch (_) { /* sem armazenamento */ }
+  const salvo = lerJson("destacar");
   definirDestaque(Array.isArray(salvo) ? salvo : (padrao || []), false);
 }
 
@@ -335,7 +302,6 @@ function blocoProjecao(p) {
 
 const STATUS_CAD = { "consolidado": "Consolidado", "em disputa (dentro)": "Em disputa — hoje dentro",
   "em disputa (fora)": "Em disputa — hoje fora" };
-const fmtFreq = (f) => `${Math.round(100 * f)}%`;
 
 // cadeiras sobre os votos PROJETADOS (a partir de 30% apurado): faixa de cadeiras e eleitos consolidados × em disputa
 // agremiações com algum escolhido: a própria (partido ou federação) ou um partido da federação
@@ -629,14 +595,6 @@ function desenharBrasil() {
 const destinacao = (x) => (x.DESTINACAO && x.DESTINACAO !== "Válido" ? ` · ${x.DESTINACAO}` : "");
 
 // ---------------------------------------------------------------- série temporal da apuração
-const SVG = "http://www.w3.org/2000/svg";
-function svg(tag, attrs = {}, ...filhos) {
-  const n = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  for (const f of filhos) n.append(f instanceof Node ? f : document.createTextNode(String(f)));
-  return n;
-}
-
 function blocoSerie(serie, proporcional) {
   const titulo = el("h3", {}, `Evolução na apuração — % dos válidos dos 3 ${proporcional ? "partidos" : "candidatos"} ` +
     "mais votados × % das seções totalizadas");
@@ -792,11 +750,9 @@ async function baixarMapa(qual, formato, msg) {
   };
   msg.textContent = " gerando…";
   try {
-    const r = await fetch("api/exportar/mapa", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(corpo) });
-    if (!r.ok) { msg.textContent = ` erro: ${(await r.json()).detail}`; return; }
-    const nome = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || `mapa.${formato}`;
-    salvarBlob(await r.blob(), nome);
+    const { blob, nome } = await baixar("api/exportar/mapa", `mapa.${formato}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+    salvarBlob(blob, nome);
     msg.textContent = " arquivo gerado.";
   } catch (e) { msg.textContent = ` erro: ${e.message}`; }
   setTimeout(() => { msg.textContent = ""; }, 5000);
@@ -1087,9 +1043,7 @@ document.getElementById("form-planilha").addEventListener("submit", async (e) =>
   const msg = document.getElementById("pl-msg");
   msg.textContent = "Gerando planilha…";
   try {
-    const r = await fetch(`api/planilha?${q}`);
-    if (!r.ok) { msg.textContent = `Erro: ${(await r.json()).detail}`; return; }
-    const blob = await r.blob();
+    const { blob } = await baixar(`api/planilha?${q}`, "planilha.xlsx");
     const a = el("a", { href: URL.createObjectURL(blob), download: `planilha_${q.get("numero")}_${q.get("ano")}.xlsx` });
     document.body.append(a); a.click(); a.remove();
     msg.textContent = "Planilha gerada.";
@@ -1631,7 +1585,6 @@ function escalaDivergente(vals, sentido) {
     [cores[0], `${variacao ? "caiu" : "voto menor que o esperado:"} mais de ${m(lim[2])} p.p.`]];
   return { corValor, itensLegenda };
 }
-const fmtPP = (x) => `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(1).replace(".", ",")} p.p.`;
 
 async function desenharPontos(mapa, d, legendaEl) {
   for (const k of ["_camada", "_contornos"]) if (mapa[k]) { mapa.removeLayer(mapa[k]); mapa[k] = null; }
@@ -2099,7 +2052,6 @@ const MAX_VAR = 3;
 const CORES_VAR = ["--serie-1", "--serie-2", "--serie-3"];  // ordem fixa da escolha (dataviz)
 const PADRAO_VAR = { 1: ["PT", "PL"] };
 const varCaixa = document.getElementById("comp-variacao");
-const fmtNum = (v, casas = 2) => (v === null || v === undefined ? "—" : v.toFixed(casas).replace(".", ","));
 
 // na ordem em que foram escolhidos (o 1º e o 2º definem o sentido do swing de Butler), não na da lista
 function partidosVar() {
@@ -2575,12 +2527,10 @@ const INDICADOR_FMT = {
   densidade: (v) => `${fmtInt.format(Math.round(v))}/km²`, moradores_domicilio: (v) => v.toFixed(2).replace(".", ","),
 };
 const fmtX = (k, v) => (v === null || v === undefined ? "—" : (INDICADOR_FMT[k] || pct)(v));
-const fmtR = (r) => (r === null || r === undefined ? "—" : (r >= 0 ? "+" : "−") + Math.abs(r).toFixed(2).replace(".", ","));
 function forca(r) {
   const a = Math.abs(r ?? 0);
   return a < 0.1 ? "desprezível" : a < 0.3 ? "fraca" : a < 0.5 ? "moderada" : a < 0.7 ? "forte" : "muito forte";
 }
-const fmtP = (p) => (p === null || p === undefined ? "—" : p < 0.001 ? "< 0,001" : p.toFixed(3).replace(".", ","));
 
 async function analisarPerfil() {
   const msg = pf("msg");
@@ -2747,8 +2697,6 @@ const tfq = (id) => document.getElementById(`tf-${id}`);
 const CORES_2T = ["--serie-1", "--serie-2", "--outros", "--texto-2"];  // finalista A, B, branco/nulo, abstenção
 const TINTA_2T = ["#fff", "#fff", "var(--texto)", "var(--superficie)"];
 const NOME_NIVEL = { secao: "seção", local: "local de votação", municipio: "município" };
-const mil = (n) => (n >= 10_000 ? `${fmtInt.format(Math.round(n / 1000))} mil` : fmtInt.format(Math.round(n)));
-const p1 = (v) => (v === null || v === undefined ? "—" : `${v.toFixed(1).replace(".", ",")}%`);
 
 function iniciarTransferencia() {
   tf.pronto = tf.pronto || (async () => {
@@ -2902,13 +2850,6 @@ const NIVEL = {
 };
 const alertas = { ultimo: null, historico: [], ativos: [], naoVistos: 0, audio: null, interesse: [] };
 
-function lerPreferencia(chave, padrao) {
-  try { const v = localStorage.getItem(chave); return v === null ? padrao : v === "1"; } catch (_) { return padrao; }
-}
-function gravarPreferencia(chave, valor) {
-  try { localStorage.setItem(chave, valor ? "1" : "0"); } catch (_) { /* navegação privada */ }
-}
-
 function cartaoAlerta(a, fechar = null) {
   const n = NIVEL[a.nivel] || NIVEL.noticia;
   const quando = (a.momento || a.desde || "").slice(11, 16);
@@ -3002,15 +2943,8 @@ function abrirPainelAlertas(abrir) {
 }
 
 async function acompanhar(cargo, numero, sim) {
-  const r = await fetch("api/alertas/interesse", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cargo: Number(cargo), numero: Number(numero), acompanhar: sim }) });
-  if (!r.ok) {
-    let msg = `${r.status}`;
-    try { msg = (await r.json()).detail || msg; } catch (_) { /* sem JSON */ }
-    throw new Error(msg);
-  }
-  alertas.interesse = (await r.json()).interesse;
+  const r = await enviar("api/alertas/interesse", { cargo: Number(cargo), numero: Number(numero), acompanhar: sim });
+  alertas.interesse = r.interesse;
   desenharAlertas();
   return alertas.interesse;
 }
@@ -3060,8 +2994,7 @@ window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizar
   document.addEventListener("click", () => {
     try { alertas.audio = alertas.audio || new AudioContext(); if (alertas.audio.state === "suspended") alertas.audio.resume(); } catch (_) { /* */ }
   }, { once: true });
-  atualizarAlertas();
-  setInterval(atualizarAlertas, ALERTAS_MS);
+  repetir(atualizarAlertas, ALERTAS_MS).agora();  // continua com a aba escondida: é quando o som importa
 })();
 
 function abrirPorHash() {
@@ -3102,11 +3035,7 @@ window.addEventListener("hashchange", abrirPorHash);
 // esse arquivo não existe e o seletor fica escondido. Trocar de UF mantém a aba e o endereço (#…).
 async function iniciarSeletorUf() {
   let d;
-  try {
-    const r = await fetch("../ufs.json", { cache: "no-store" });
-    if (!r.ok) return;
-    d = await r.json();
-  } catch (_) { return; }
+  try { d = await api("../ufs.json"); } catch (_) { return; }  // site de uma UF: não há ufs.json
   const atual = location.pathname.split("/").filter(Boolean).at(-1)?.toUpperCase();
   const sel = document.getElementById("seletor-uf");
   sel.replaceChildren(...d.ufs.map((u) => el("option", { value: u.uf, disabled: !u.disponivel, selected: u.uf === atual },
@@ -3116,6 +3045,7 @@ async function iniciarSeletorUf() {
 }
 iniciarSeletorUf();
 
-iniciarComparacao().then(tick).then(abrirPorHash);
+// o ciclo de 60 s nunca roda duas vezes ao mesmo tempo; com a aba escondida espera a volta
+const ciclo = repetir(tick, REFRESH_MS, { pausarOculto: true });
+iniciarComparacao().then(() => ciclo.agora()).then(abrirPorHash);
 preencherLista(document.getElementById("cand-cargo").value, "cand-lista");
-setInterval(tick, REFRESH_MS);
