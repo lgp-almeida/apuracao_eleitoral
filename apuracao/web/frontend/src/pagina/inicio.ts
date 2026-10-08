@@ -14,11 +14,13 @@ import { repetir } from "../core/agendador";
 import { api } from "../core/api";
 import { ref } from "../core/dom";
 import { Roteador } from "../core/roteador";
-import { type Aba, ehAba } from "../core/rotas";
+import type { Aba } from "../core/rotas";
 import { criarCandidatos } from "../dados/candidatos";
 import { criarMalhas } from "../dados/malhas";
+import { ligarAbas, marcarAba } from "./abas";
 import { iniciarSeletorUf } from "./seletor-uf";
 import { criarSituacao, limitarCargos } from "./situacao";
+import { ligarSeletorTema } from "./tema";
 
 const REFRESH_MS = 60_000;
 
@@ -30,12 +32,13 @@ const estado: { aba: Aba; uf: string; ano: number; turno: number; ultimaColeta: 
 };
 
 const modulos = new Map<Aba, ModuloAba>();
+const navAbas = ref(".abas");
 const roteador = new Roteador(mostrarAba, () => estado.aba);
 
 function mostrarAba(aba: Aba): void {
   estado.aba = aba;
   roteador.aoMostrar(aba);
-  document.querySelectorAll<HTMLElement>(".abas button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.aba === aba)));
+  marcarAba(navAbas, aba);
   document.querySelectorAll<HTMLElement>(".aba").forEach((s) => { s.hidden = s.id !== `aba-${aba}`; });
   modulos.get(aba)?.aoMostrar?.();
 }
@@ -82,10 +85,10 @@ async function tick(): Promise<void> {
   await modulos.get(estado.aba)?.atualizar?.();
 }
 
-// botões das abas e "Baixar mapa" (Mapas e Comparação)
-document.querySelectorAll<HTMLElement>(".abas button").forEach((b) => b.addEventListener("click", () => {
-  if (ehAba(b.dataset.aba)) mostrarAba(b.dataset.aba);
-}));
+// botões das abas, tema e "Baixar mapa" (Mapas e Comparação)
+ligarAbas(navAbas, mostrarAba);
+marcarAba(navAbas, estado.aba);
+ligarSeletorTema(ref<HTMLSelectElement>("#tema"));
 document.querySelectorAll<HTMLElement>(".baixar-mapa").forEach((b) => b.addEventListener("click", () => {
   const qual = b.dataset.mapa ?? "mapa";
   const cargo = ref<HTMLSelectElement>(qual === "mapa" ? "#mapa-cargo" : "#comp-cargo");

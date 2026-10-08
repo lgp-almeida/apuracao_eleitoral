@@ -1,0 +1,21 @@
+/* Modo TV (#painel?tv=1, rodada 33): um cartão por vez, letra grande, sem controles. A régua de apuração fica. */
+body.modo-tv { font-size: var(--fs-4); }
+body.modo-tv .abas, body.modo-tv .alertas-controle, body.modo-tv .painel-acoes, body.modo-tv #destaque,
+body.modo-tv .selo, body.modo-tv .seletor-uf { display: none !important; }
+body.modo-tv .topo { padding: 6px var(--esp-5) var(--esp-3); }
+body.modo-tv .regua-pct { font-size: var(--fs-5); }
+body.modo-tv .regua-uf, body.modo-tv .regua-hora, body.modo-tv .regua-final, body.modo-tv .situacao { font-size: var(--fs-3); }
+body.modo-tv .regua-trilho { height: 6px; }
+body.modo-tv main { max-width: none; padding: var(--esp-3) var(--esp-5) 70px; }
+body.modo-tv #cartoes { display: block; }
+body.modo-tv #cartoes .cartao { display: none; }
+/* os cartões usam tamanhos fixos em px: zoom amplia tudo junto (texto, barras, gráficos) */
+body.modo-tv #cartoes .cartao.tv-atual { display: block; max-width: 1050px; margin: 0 auto; zoom: 1.4; }
+@media (max-width: 1100px) { body.modo-tv #cartoes .cartao.tv-atual { zoom: 1; } }
+body.modo-tv .mudancas-caixa { max-width: 1400px; margin: 0 auto var(--esp-3); }
+.tv-barra {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200; padding: var(--esp-2) var(--esp-5);
+  background: var(--superficie); border-top: 1px solid var(--borda); color: var(--texto-2); font-size: var(--fs-4);
+  display: flex; flex-wrap: wrap; gap: var(--esp-1) var(--esp-4); justify-content: space-between;
+}
+.tv-barra strong { color: var(--texto); }

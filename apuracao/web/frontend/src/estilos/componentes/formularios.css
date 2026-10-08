@@ -1,0 +1,34 @@
+/* Formulários de consulta (.filtros), botões e o botão com cara de link. */
+.filtros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--esp-3) var(--esp-4); margin-bottom: var(--esp-4); }
+.filtros label { display: flex; flex-direction: column; gap: var(--esp-1); font-size: var(--fs-1); color: var(--texto-2); max-width: 100%; }
+.filtros label.check { flex-direction: row; align-items: center; gap: 6px; font-size: var(--fs-2); }
+.filtros input, .filtros select, .filtros button {
+  padding: 6px var(--esp-2); border-radius: var(--raio-controle); border: 1px solid var(--eixo);
+  background: var(--superficie); color: var(--texto); min-width: 120px; max-width: 100%;
+}
+.filtros input[type="checkbox"] { min-width: 0; }
+.filtros button {
+  cursor: pointer; background: var(--texto); color: var(--superficie); border-color: var(--texto);
+  font-weight: var(--peso-forte);
+}
+.filtros button:hover { opacity: 0.88; }
+.filtros fieldset.grupo {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--esp-2) var(--esp-3); margin: 0;
+  padding: 6px var(--esp-3) var(--esp-3);
+  border: 1px solid var(--borda); border-radius: var(--raio-caixa); max-width: 100%;
+}
+.filtros fieldset.grupo legend { font-size: var(--fs-1); color: var(--texto-2); padding: 0 var(--esp-1); }
+
+button.link {
+  font-size: var(--fs-1); background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--serie-1); text-decoration: underline; text-underline-offset: 2px;
+}
+a.botao-salvar { display: inline-block; margin-top: var(--esp-2); font-size: var(--fs-2); }
+a { color: var(--serie-1); }
+
+/* botão secundário (fora dos formulários de consulta): contorno, sem fundo */
+.botao {
+  padding: 6px var(--esp-3); border-radius: var(--raio-controle); cursor: pointer;
+  border: 1px solid var(--eixo); background: var(--superficie); color: var(--texto);
+}
+.botao:hover { border-color: var(--texto-2); }

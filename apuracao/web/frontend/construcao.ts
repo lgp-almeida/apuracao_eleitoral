@@ -7,7 +7,7 @@ import { join, relative, sep } from "node:path";
 
 export const ARQUIVOS_RAIZ = [
   "index.html", "package.json", "package-lock.json", "tsconfig.json", "tsconfig.node.json", "vite.config.ts",
-  "construcao.ts",
+  "construcao.ts", "catalogo.html",
 ];
 export const PASTAS = ["src", "public"];
 

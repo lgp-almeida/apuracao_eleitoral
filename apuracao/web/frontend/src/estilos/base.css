@@ -1,0 +1,35 @@
+/* Elementos, sem classe: o mínimo comum da página. */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plano);
+  color: var(--texto);
+  font: var(--peso) var(--fs-2) / var(--altura-linha) var(--fonte);
+  /* números tabulares em toda a página: os valores não "dançam" a cada atualização */
+  font-variant-numeric: tabular-nums;
+  -webkit-text-size-adjust: 100%;
+}
+h1, h2, h3, h4 { font-weight: var(--peso-forte); line-height: 1.25; }
+b, strong, th { font-weight: var(--peso-forte); }
+code { font-size: var(--fs-1); }
+main { padding: var(--esp-4); max-width: var(--largura-max); margin: 0 auto; }
+button, input, select, textarea { font: inherit; }
+/* o fieldset nasce com min-width: min-content e empurrava a página no celular (aba Perfil a 360 px) */
+fieldset { min-width: 0; }
+select { max-width: 100%; }
+summary { cursor: pointer; }
+
+table { border-collapse: collapse; width: 100%; font-size: var(--fs-2); background: var(--superficie); }
+th, td { padding: var(--esp-1) var(--esp-2); border-bottom: 1px solid var(--grade); text-align: left; }
+th { cursor: pointer; color: var(--texto-2); position: sticky; top: 0; background: var(--superficie); }
+
+/* foco visível só pelo teclado */
+:focus-visible { outline: 2px solid var(--serie-1); outline-offset: 2px; }
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,103 @@
+/* Tokens do design system (PROPOSTA_REFATORACAO_FRONTEND.md §5). Toda regra usa estes nomes; valor solto só em
+ * geometria de marca de gráfico (altura de barra, vão de 2 px entre segmentos).
+ *
+ * Tema: segue o sistema (prefers-color-scheme) ou é forçado por data-tema="claro|escuro" no <html> (TV, botão
+ * de tema). data-tema vale também num elemento qualquer (o catálogo mostra os dois temas lado a lado). As cores
+ * escuras aparecem duas vezes (sistema e forçado): CSS não tem como nomear o bloco; mantenha-as iguais. */
+
+/* ---------- cor (paleta de referência da skill dataviz; modo escuro com passos próprios) ---------- */
+:root, [data-tema="claro"] {
+  color-scheme: light;
+  --plano: #f9f9f7;
+  --superficie: #fcfcfb;
+  --texto: #0b0b0b;
+  --texto-2: #52514e;
+  --mudo: #898781;
+  --grade: #e1e0d9;
+  --eixo: #c3c2b7;
+  --borda: rgba(11, 11, 11, 0.10);
+  --serie-1: #2a78d6;
+  --serie-2: #eb6834;
+  --serie-3: #1baf7a;
+  --serie-4: #eda100;
+  --outros: #c3c2b7;
+  --sem-dado: #f0efec;
+  --critico: #d03b3b;
+  /* status (paleta de referência, fixa nos dois temas): sempre com ícone + rótulo, nunca só a cor */
+  --st-critico: #d03b3b; --st-aviso: #fab219; --st-noticia: #2a78d6; --st-ok: #0ca30c;
+  --bom: #006300;
+  --seq-1: #b7d3f6; --seq-2: #86b6ef; --seq-3: #5598e7; --seq-4: #256abf; --seq-5: #104281;
+  /* mapas de intensidade: amarelo (menos) -> vermelho (mais), ColorBrewer YlOrRd sem o passo mais claro (não se
+     confunde com --sem-dado). MESMA ordem no tema escuro, sem inverter: pedido do usuário (rodada 31) — escuro para
+     "menos" não era intuitivo. L (OKLab) 0,90 -> 0,50, menor passo ΔE 8,4. */
+  --mapa-1: #fed976; --mapa-2: #feb24c; --mapa-3: #fd8d3c; --mapa-4: #f03b20; --mapa-5: #bd0026;
+  /* divergente: vermelho (redução) ↔ cinza ↔ azul (aumento) */
+  --div-n3: #b23434; --div-n2: #e36a69; --div-n1: #f6c4c3; --div-0: #f0efec;
+  --div-p1: #b7d3f6; --div-p2: #5598e7; --div-p3: #1c5cab;
+  /* sombra: só no que flutua (dica, painel de alertas, aviso) */
+  --sombra-dica: 0 2px 8px rgba(0, 0, 0, 0.12);
+  --sombra-aviso: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema="claro"]) {
+    color-scheme: dark;
+    --plano: #0d0d0d;
+    --superficie: #1a1a19;
+    --texto: #ffffff;
+    --texto-2: #c3c2b7;
+    --grade: #2c2c2a;
+    --eixo: #383835;
+    --borda: rgba(255, 255, 255, 0.10);
+    --serie-1: #3987e5;
+    --serie-2: #d95926;
+    --serie-3: #199e70;
+    --serie-4: #c98500;
+    --outros: #52514e;
+    --sem-dado: #383835;
+    --bom: #0ca30c;
+    --seq-1: #184f95; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #5598e7; --seq-5: #9ec5f4;
+    --div-n3: #f08b8a; --div-n2: #c24d4c; --div-n1: #6b3534; --div-0: #383835;
+    --div-p1: #1f4270; --div-p2: #2a78d6; --div-p3: #86b6ef;
+    --sombra-dica: 0 2px 8px rgba(0, 0, 0, 0.5);
+    --sombra-aviso: 0 4px 16px rgba(0, 0, 0, 0.6);
+  }
+}
+[data-tema="escuro"] {
+  color-scheme: dark;
+  --plano: #0d0d0d;
+  --superficie: #1a1a19;
+  --texto: #ffffff;
+  --texto-2: #c3c2b7;
+  --grade: #2c2c2a;
+  --eixo: #383835;
+  --borda: rgba(255, 255, 255, 0.10);
+  --serie-1: #3987e5;
+  --serie-2: #d95926;
+  --serie-3: #199e70;
+  --serie-4: #c98500;
+  --outros: #52514e;
+  --sem-dado: #383835;
+  --bom: #0ca30c;
+  --seq-1: #184f95; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #5598e7; --seq-5: #9ec5f4;
+  --div-n3: #f08b8a; --div-n2: #c24d4c; --div-n1: #6b3534; --div-0: #383835;
+  --div-p1: #1f4270; --div-p2: #2a78d6; --div-p3: #86b6ef;
+  --sombra-dica: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --sombra-aviso: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- tipo, espaço e forma (iguais nos dois temas) ---------- */
+:root {
+  /* uma família só, servida pelo próprio site (a página não depende de rede externa) */
+  --fonte: "Public Sans Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* escala de tipo: 12 / 14 (base) / 16 / 20 / 26; pesos 400 e 600 só */
+  --fs-1: 12px; --fs-2: 14px; --fs-3: 16px; --fs-4: 20px; --fs-5: 26px;
+  --fs-eixo: 10px;  /* texto dentro dos gráficos SVG (eixos, rótulos): marca de dataviz, fora da escala */
+  --peso: 400; --peso-forte: 600;
+  --altura-linha: 1.45;
+  /* espaço: 4 / 8 / 12 / 16 / 24 / 32 */
+  --esp-1: 4px; --esp-2: 8px; --esp-3: 12px; --esp-4: 16px; --esp-5: 24px; --esp-6: 32px;
+  /* raio por hierarquia: controles, caixas e cartões, selos */
+  --raio-controle: 3px; --raio-caixa: 6px; --raio-selo: 999px;
+  --raio-marca: 4px;  /* pontas das barras dos gráficos */
+  --largura-max: 1600px;
+}

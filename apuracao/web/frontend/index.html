@@ -13,21 +13,28 @@
       <label id="seletor-uf-rotulo" class="seletor-uf" hidden>Estado
         <select id="seletor-uf" aria-label="Estado"></select></label>
     </div>
+    <div id="regua" class="regua" role="progressbar" aria-label="Seções totalizadas na UF"
+         aria-valuemin="0" aria-valuemax="100" hidden></div>
     <div id="situacao" class="situacao" aria-live="polite"></div>
     <div class="alertas-controle">
       <button type="button" id="botao-alertas" aria-haspopup="dialog" aria-expanded="false"
               aria-controls="painel-alertas">Alertas <span id="alertas-contagem" class="contagem" hidden></span></button>
       <label class="som" title="Tocar um som a cada alerta novo"><input type="checkbox" id="alertas-som"> som</label>
+      <label class="seletor-tema">Tema
+        <select id="tema" aria-label="Tema da página">
+          <option value="">do sistema</option><option value="claro">claro</option><option value="escuro">escuro</option>
+        </select></label>
     </div>
     <nav class="abas" role="tablist">
-      <button role="tab" data-aba="painel" aria-selected="true">Painel</button>
-      <button role="tab" data-aba="candidato" aria-selected="false">Candidato</button>
-      <button role="tab" data-aba="mapas" aria-selected="false">Mapas</button>
-      <button role="tab" data-aba="comparacao" aria-selected="false" hidden id="botao-comparacao">Comparação</button>
-      <button role="tab" data-aba="perfil" aria-selected="false">Perfil × voto</button>
-      <button role="tab" data-aba="transferencia" aria-selected="false">1º → 2º turno</button>
+      <button type="button" role="tab" id="botao-painel" aria-controls="aba-painel" data-aba="painel" aria-selected="true">Painel</button>
+      <button type="button" role="tab" id="botao-candidato" aria-controls="aba-candidato" data-aba="candidato" aria-selected="false">Candidato</button>
+      <button type="button" role="tab" id="botao-mapas" aria-controls="aba-mapas" data-aba="mapas" aria-selected="false">Mapas</button>
+      <button type="button" role="tab" id="botao-comparacao" aria-controls="aba-comparacao" data-aba="comparacao" aria-selected="false" hidden>Comparação</button>
+      <button type="button" role="tab" id="botao-perfil" aria-controls="aba-perfil" data-aba="perfil" aria-selected="false">Perfil × voto</button>
+      <button type="button" role="tab" id="botao-transferencia" aria-controls="aba-transferencia" data-aba="transferencia" aria-selected="false">1º → 2º turno</button>
     </nav>
     <div id="faixa-alertas" class="faixa-alertas" role="alert" hidden></div>
+    <div id="regua-trilho" class="regua-trilho" aria-hidden="true" hidden><div class="regua-feito"></div></div>
   </header>
 
   <aside id="painel-alertas" class="painel-alertas" role="dialog" aria-label="Alertas" hidden>
@@ -46,7 +53,7 @@
   <div id="tv-barra" class="tv-barra" hidden aria-live="polite"></div>
 
   <main>
-    <section id="aba-painel" class="aba" role="tabpanel">
+    <section id="aba-painel" class="aba" role="tabpanel" aria-labelledby="botao-painel">
       <div id="painel-vazio" class="aviso" hidden>
         Ainda não há resultados coletados. Inicie o coletor
         (<code>python site_apuracao.py --coletar</code> ou <code>python coletar_resultados.py</code>).
@@ -67,7 +74,7 @@
       <div id="cartoes" class="grade"></div>
     </section>
 
-    <section id="aba-candidato" class="aba" role="tabpanel" hidden>
+    <section id="aba-candidato" class="aba" role="tabpanel" aria-labelledby="botao-candidato" hidden>
       <form id="form-candidato" class="filtros">
         <label>Cargo
           <select id="cand-cargo">
@@ -132,7 +139,7 @@
       </details>
     </section>
 
-    <section id="aba-mapas" class="aba" role="tabpanel" hidden>
+    <section id="aba-mapas" class="aba" role="tabpanel" aria-labelledby="botao-mapas" hidden>
       <form id="form-mapa" class="filtros">
         <label>Cargo
           <select id="mapa-cargo">
@@ -216,7 +223,7 @@
       <p class="nota">Resultados em tempo real chegam ao nível de município. Mapas por local de votação dependem
         dos microdados publicados pelo TSE após o pleito. Malha: IBGE. Fundo: © OpenStreetMap.</p>
     </section>
-    <section id="aba-comparacao" class="aba" role="tabpanel" hidden>
+    <section id="aba-comparacao" class="aba" role="tabpanel" aria-labelledby="botao-comparacao" hidden>
       <form id="form-comp" class="filtros">
         <label>Detalhe
           <select id="comp-detalhe">
@@ -297,7 +304,7 @@
           mesmo com candidato diferente.</p>
       </details>
     </section>
-    <section id="aba-perfil" class="aba" role="tabpanel" hidden>
+    <section id="aba-perfil" class="aba" role="tabpanel" aria-labelledby="botao-perfil" hidden>
       <form id="form-perfil" class="filtros">
         <fieldset class="grupo">
           <legend>Voto (eixo Y)</legend>
@@ -373,7 +380,7 @@
         <div id="pf-reg-ind" class="pf-reg-ind"></div>
         <p class="nota"><button type="button" id="pf-reg-btn" class="link">Recalcular com os indicadores marcados</button></p>
         <div id="pf-reg-fichas" class="fichas"></div>
-        <div id="pf-reg"></div>
+        <div id="pf-reg" class="rolagem-x"></div>
       </div>
       <p class="nota">Correlação <strong>ecológica</strong>: compara bairros ou locais, não pessoas; associação não é
         causa e não diz como cada eleitor votou (inclusive na transferência entre eleições).
@@ -384,7 +391,7 @@
         Em prefeito/vereador, bairros de municípios onde o alvo não concorreu ficam de fora.</p>
     </section>
 
-    <section id="aba-transferencia" class="aba" role="tabpanel" hidden>
+    <section id="aba-transferencia" class="aba" role="tabpanel" aria-labelledby="botao-transferencia" hidden>
       <form id="form-tf" class="filtros">
         <label>Fonte
           <select id="tf-fonte">

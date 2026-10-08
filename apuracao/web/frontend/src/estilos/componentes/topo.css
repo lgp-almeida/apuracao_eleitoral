@@ -1,0 +1,49 @@
+/* Cabeçalho fixo: marca, régua de apuração, situação do coletor, alertas, tema e abas. */
+.topo {
+  position: sticky; top: 0; z-index: 1000;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2) var(--esp-5);
+  padding: var(--esp-2) var(--esp-4) var(--esp-3);
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borda);
+}
+.marca { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2) var(--esp-3); }
+.marca h1 { font-size: var(--fs-4); margin: 0; letter-spacing: -0.01em; }
+.selo {
+  font-size: var(--fs-1); padding: 2px var(--esp-2); border-radius: var(--raio-selo);
+  border: 1px solid var(--eixo); color: var(--texto-2);
+}
+.selo.oficial { border-color: var(--bom); color: var(--bom); }
+/* base larga: sem espaço, as abas descem de linha (o texto espremido crescia em altura e empurrava a página) */
+.situacao { color: var(--texto-2); font-size: var(--fs-1); flex: 1 1 420px; min-width: 200px; }
+.situacao .erro { color: var(--critico); }
+
+/* ---------- régua de apuração: a assinatura da página ----------
+ * % das seções totalizadas na UF e hora da última totalização, em todas as abas e no modo TV. O número vai em
+ * destaque; o trilho corre na borda de baixo do cabeçalho, com uma marca a cada 10%. */
+.regua { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--esp-2); min-width: 0; }
+.regua > * { white-space: nowrap; }
+.regua-pct { font-size: var(--fs-4); font-weight: var(--peso-forte); letter-spacing: -0.01em; }
+.regua-uf, .regua-hora { font-size: var(--fs-1); color: var(--texto-2); }
+.regua-final { font-size: var(--fs-1); color: var(--bom); font-weight: var(--peso-forte); }
+.regua-trilho {
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 4px; overflow: hidden;
+  background-color: var(--grade);
+  background-image: repeating-linear-gradient(to right, transparent 0 calc(10% - 1px), var(--eixo) calc(10% - 1px) 10%);
+}
+.regua-feito { height: 100%; background: var(--serie-1); transition: width 0.6s ease-out; }
+
+.abas { display: flex; flex-wrap: wrap; gap: var(--esp-1); }  /* 6 abas: no celular quebram linha */
+.abas button {
+  padding: 6px var(--esp-3); border-radius: var(--raio-caixa); cursor: pointer;
+  border: 1px solid var(--borda); background: transparent; color: var(--texto-2);
+}
+.abas button:hover { color: var(--texto); border-color: var(--eixo); }
+.abas button[aria-selected="true"] { background: var(--texto); color: var(--superficie); border-color: var(--texto); }
+
+.seletor-uf, .seletor-tema {
+  font-size: var(--fs-1); color: var(--texto-2); display: inline-flex; align-items: center; gap: 6px;
+}
+.seletor-uf select, .seletor-tema select {
+  font-size: var(--fs-1); padding: 2px var(--esp-1); border-radius: var(--raio-controle);
+  border: 1px solid var(--eixo); background: var(--superficie); color: var(--texto);
+}

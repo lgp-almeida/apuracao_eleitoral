@@ -1,0 +1,6 @@
+/* Perfil × voto: dispersão + correlações, regressão múltipla. */
+.perfil-duplo { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--esp-4); margin-bottom: var(--esp-4); }
+@media (max-width: 1100px) { .perfil-duplo { grid-template-columns: minmax(0, 1fr); } }
+#pf-correlacoes { max-height: 460px; }
+#pf-correlacoes td.num, #pf-correlacoes th.num { white-space: nowrap; }
+.pf-reg-ind { display: flex; flex-wrap: wrap; gap: var(--esp-1) var(--esp-4); font-size: var(--fs-2); color: var(--texto-2); }

@@ -1,0 +1,69 @@
+/* Painel: lista de candidatos do cartão, projeção, cadeiras, destaque, "o que mudou", bloco Brasil. */
+.painel-acoes { margin: 0 0 var(--esp-2); }
+.lista { display: flex; flex-direction: column; gap: 3px; }
+.item {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) 56px 72px 88px; gap: var(--esp-2); align-items: center;
+  font-size: var(--fs-2); padding: 2px 0;
+}
+.item .pos { color: var(--mudo); text-align: right; }
+.item .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .nome small { color: var(--texto-2); font-size: 11px; }
+.item .barra { height: 8px; background: var(--grade); border-radius: 0 var(--raio-marca) var(--raio-marca) 0; }
+.item .barra > div { height: 100%; background: var(--serie-1); border-radius: 0 var(--raio-marca) var(--raio-marca) 0; }
+.item .num { text-align: right; }
+.item .sit { font-size: 11px; color: var(--texto-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item.destaque .nome { font-weight: var(--peso-forte); }
+.item[title] { cursor: default; }
+
+/* cadeiras projetadas */
+.cad-lista { display: flex; flex-direction: column; gap: 3px; }
+.cad-item { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) auto; gap: var(--esp-2); align-items: center; font-size: var(--fs-2); }
+.cad-item .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-item .num { text-align: right; font-weight: var(--peso-forte); }
+.cad-item .cad-faixa { font-weight: var(--peso); white-space: nowrap; }
+.cad-barra { display: flex; gap: 2px; height: 10px; }
+.cad-barra > span { height: 100%; }
+.cad-barra > span:first-child { border-radius: var(--raio-marca) 0 0 var(--raio-marca); }
+.cad-barra > span:last-child { border-radius: 0 var(--raio-marca) var(--raio-marca) 0; }
+.cad-barra > span:only-child { border-radius: var(--raio-marca); }
+.cartao details summary { font-size: var(--fs-2); color: var(--serie-1); }
+.cad-eleitos { max-height: 360px; overflow: auto; margin-top: 6px; }
+.cad-eleitos table { font-size: var(--fs-1); }
+.cad-eleitos th, .cad-eleitos td { padding: var(--esp-1) 6px; }
+.cad-eleitos tr.cad-disputa td { color: var(--texto-2); }
+
+/* projeção do resultado final */
+.proj-situacao { margin: 2px 0; font-weight: var(--peso-forte); font-size: var(--fs-2); }
+.proj-lista { display: flex; flex-direction: column; gap: 5px; }
+.proj-item { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) 56px; gap: var(--esp-2); align-items: center; font-size: var(--fs-2); }
+.proj-item .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-item .num { text-align: right; }
+.proj-trilho { position: relative; height: 14px; background: var(--sem-dado); border-radius: var(--raio-marca); }
+.proj-trilho > span { position: absolute; top: 0; height: 100%; }
+.proj-faixa { border-radius: var(--raio-marca); }
+.proj-parcial { width: 2px; }
+.proj-ponto { width: 10px; height: 10px !important; top: 2px !important; margin-left: -5px; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--superficie); }
+.proj-50 { width: 0; border-left: 1px dashed var(--texto-2); }
+
+/* destaque de partidos/federações (rodada 31) */
+.destaque-caixa { margin-bottom: var(--esp-3); }
+.destaque-opcoes { display: flex; flex-wrap: wrap; gap: 6px var(--esp-3); margin: var(--esp-3) 0 var(--esp-1); }
+.destaque-opcoes fieldset { border: 1px solid var(--borda); border-radius: var(--raio-caixa); padding: 2px var(--esp-2) var(--esp-1); margin: 0;
+  display: flex; flex-wrap: wrap; gap: 2px var(--esp-3); }
+.destaque-opcoes legend { font-size: var(--fs-1); color: var(--texto-2); padding: 0 var(--esp-1); }
+.destaque-opcoes label { font-size: var(--fs-2); display: inline-flex; align-items: center; gap: var(--esp-1); cursor: pointer; }
+.cad-eleitos tr.destaque td { background: color-mix(in srgb, var(--serie-1) 16%, transparent); color: var(--texto); font-weight: var(--peso-forte); }
+.cad-eleitos tr.destaque td:first-child { box-shadow: inset 4px 0 0 var(--serie-1); }
+.cad-item.destaque .nome { font-weight: var(--peso-forte); }
+.cad-item.destaque .nome::before { content: "★ "; }
+
+/* o que mudou (rodada 33) */
+.mudancas-caixa { margin-bottom: var(--esp-3); }
+.mudancas-lista { margin: var(--esp-2) 0 2px; padding-left: 1.2rem; }
+.mudancas-lista li { margin: 3px 0; }
+
+/* presidente por UF (cartão Brasil, rodada 35) */
+.mapa.brasil { height: 360px; }
+.tabela-rolagem.brasil { max-height: 320px; font-size: var(--fs-1); }
+.tabela-rolagem.brasil table { font-size: var(--fs-1); }

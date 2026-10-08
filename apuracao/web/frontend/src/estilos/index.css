@@ -1,0 +1,25 @@
+/* Folha da página, em camadas: a camada posterior vence a anterior, qualquer que seja a especificidade.
+ * vendor (Leaflet) < tokens < base (elementos) < componentes (classes reutilizáveis) < abas (o que é de uma aba)
+ * < utilitarios. CSS fora de camada venceria todas: por isso o Leaflet também entra numa.
+ * O build descarta a linha de ordem abaixo e vale a ordem em que cada camada aparece, que é a dos @import:
+ * mantenha as duas iguais (test_frontend_build.py confere a do CSS gerado). */
+@layer vendor, tokens, base, componentes, abas, utilitarios;
+
+@import "leaflet/dist/leaflet.css" layer(vendor);
+@import "./tokens.css" layer(tokens);
+@import "./base.css" layer(base);
+@import "./componentes/topo.css" layer(componentes);
+@import "./componentes/caixas.css" layer(componentes);
+@import "./componentes/formularios.css" layer(componentes);
+@import "./componentes/tabelas.css" layer(componentes);
+@import "./componentes/graficos.css" layer(componentes);
+@import "./componentes/mapa.css" layer(componentes);
+@import "./componentes/alertas.css" layer(componentes);
+@import "./abas/painel.css" layer(abas);
+@import "./abas/tv.css" layer(abas);
+@import "./abas/candidato.css" layer(abas);
+@import "./abas/mapas.css" layer(abas);
+@import "./abas/comparacao.css" layer(abas);
+@import "./abas/perfil.css" layer(abas);
+@import "./abas/transferencia.css" layer(abas);
+@import "./utilitarios.css" layer(utilitarios);

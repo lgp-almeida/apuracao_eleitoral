@@ -1,0 +1,8 @@
+/* Tabelas: rolagem com cabeçalho fixo, linha clicável e selecionada, coluna numérica. */
+td.num, th.num { text-align: right; }
+.tabela-rolagem { max-height: 520px; overflow: auto; border: 1px solid var(--borda); border-radius: var(--raio-caixa); }
+tr.clicavel { cursor: pointer; }
+tr.clicavel:hover td { background: var(--grade); }
+tr.selecionado td { background: var(--grade); font-weight: var(--peso-forte); }
+/* tabela larga sem altura máxima: rola só na horizontal, dentro da caixa (celular) */
+.rolagem-x { overflow-x: auto; max-width: 100%; }

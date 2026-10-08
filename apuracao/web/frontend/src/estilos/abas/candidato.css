@@ -1,0 +1,4 @@
+/* Candidato: ficha + tabela e gráfico lado a lado. */
+.cand-duplo { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--esp-4); }
+@media (max-width: 1000px) { .cand-duplo { grid-template-columns: minmax(0, 1fr); } }
+#evol-grafico { max-width: 560px; }

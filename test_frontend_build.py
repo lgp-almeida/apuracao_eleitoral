@@ -55,3 +55,17 @@ def test_rotas_pesadas_iguais_as_do_site() -> None:
     bloco = re.search(r"export const ROTAS_PESADAS = \[(.*?)\] as const;", texto, re.S)
     assert bloco
     assert re.findall(r'"([^"]+)"', bloco.group(1)) == list(ROTAS_PESADAS)
+
+
+def test_camadas_do_css_na_ordem_do_design_system() -> None:
+    """A ordem das camadas decide quem vence (estilos/index.css); o build mantém só a ordem de 1ª aparição."""
+    fonte = (FONTE / "src" / "estilos" / "index.css").read_text(encoding="utf-8")
+    declarada = re.search(r"^@layer ([\w, ]+);", fonte, re.M)
+    assert declarada
+    esperada = [c.strip() for c in declarada.group(1).split(",")]
+    (css,) = (STATIC / "assets").glob("index-*.css")
+    vistas: list[str] = []
+    for nome in re.findall(r"@layer ([\w-]+)\s*\{", css.read_text(encoding="utf-8")):
+        if nome not in vistas:
+            vistas.append(nome)
+    assert vistas == esperada

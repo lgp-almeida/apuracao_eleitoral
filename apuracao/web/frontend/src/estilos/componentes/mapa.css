@@ -1,0 +1,22 @@
+/* Mapas Leaflet, legenda e a dica flutuante (fora do mapa: o tooltip do Leaflet é cortado por ele, rodada 35). */
+.mapa { height: 640px; border-radius: var(--raio-caixa); border: 1px solid var(--borda); background: var(--superficie); }
+.mapa.mini { height: 420px; }
+.leaflet-container { font: var(--fs-1) / 1.4 var(--fonte); }
+.leaflet-tooltip { font: var(--fs-1) / 1.4 var(--fonte); }
+.legenda {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-caixa); padding: var(--esp-3);
+  font-size: var(--fs-1); color: var(--texto-2);
+}
+.legenda h4 { margin: 0 0 var(--esp-2); color: var(--texto); font-size: var(--fs-2); }
+.legenda div { margin: var(--esp-1) 0; }
+.dica-flutuante {
+  position: fixed; z-index: 2000; pointer-events: none; background: var(--superficie); color: var(--texto);
+  border: 1px solid var(--borda); border-radius: var(--raio-caixa); padding: 6px var(--esp-2); box-shadow: var(--sombra-dica);
+  font: var(--fs-1) / 1.4 var(--fonte); font-variant-numeric: tabular-nums; max-width: min(360px, calc(100vw - 8px));
+}
+.tabela-dica { border-collapse: collapse; font-size: 11px; margin-top: var(--esp-1); max-width: 320px; }
+.tabela-dica th, .tabela-dica td { padding: 1px 6px; text-align: left; white-space: nowrap; }
+.tabela-dica .num { text-align: right; }
+.tabela-dica td.nome { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.tabela-dica tr.lider td { font-weight: var(--peso-forte); }
+.tabela-dica tbody.nao-validos tr:first-child td { border-top: 1px solid var(--borda); }

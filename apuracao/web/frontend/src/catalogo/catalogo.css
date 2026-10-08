@@ -1,0 +1,16 @@
+/* Só o catálogo (catalogo.html, fora do build). */
+@layer abas {
+  .cat-lados { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0; padding: 0; max-width: none; }
+  .cat-lados iframe { width: 100%; height: 100vh; border: 0; border-right: 1px solid var(--borda); }
+  .cat-secao { margin: 0 0 var(--esp-6); }
+  .cat-secao > h2 { font-size: var(--fs-4); margin: 0 0 var(--esp-3); padding-bottom: var(--esp-1); border-bottom: 1px solid var(--borda); }
+  .cat-secao > h3 { font-size: var(--fs-2); color: var(--texto-2); margin: var(--esp-4) 0 var(--esp-2); }
+  .cat-linha { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--esp-3); }
+  .cat-cor { width: 112px; font-size: var(--fs-1); color: var(--texto-2); }
+  .cat-cor > div { height: 40px; border-radius: var(--raio-caixa); border: 1px solid var(--borda); margin-bottom: var(--esp-1); }
+  .cat-esp { background: var(--serie-1); height: 12px; border-radius: 2px; }
+  .cat-raio { width: 72px; height: 48px; border: 2px solid var(--eixo); background: var(--sem-dado); }
+  .cat-topo { position: relative; padding: var(--esp-3) var(--esp-4) var(--esp-4); background: var(--superficie);
+    border: 1px solid var(--borda); border-radius: var(--raio-caixa); display: flex; flex-wrap: wrap; gap: var(--esp-3) var(--esp-5); align-items: center; }
+  .cat-largura { max-width: 460px; }
+}

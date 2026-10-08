@@ -1,4 +1,5 @@
-/* Entrada da página: estilos (Leaflet antes dos nossos) e o arranque. */
-import "leaflet/dist/leaflet.css";
-import "./estilos/style.css";
+/* Entrada da página: tema (antes de desenhar), fonte, estilos (o Leaflet entra na camada vendor) e o arranque. */
+import "./pagina/tema";
+import "@fontsource-variable/public-sans/wght.css";
+import "./estilos/index.css";
 import "./pagina/inicio";

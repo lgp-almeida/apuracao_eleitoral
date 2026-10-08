@@ -118,7 +118,7 @@ export function criarAlertas(ano: () => number) {
     botaoAcompanhar(cargo: number | string, numero: number): HTMLElement | null {
       if (![6, 7, 8].includes(Number(cargo)) || ano() !== 2026) return null;
       const msg = el("span", { class: "nota", "aria-live": "polite" });
-      const b = el("button", { type: "button", id: "botao-acompanhar", "data-cargo": cargo, "data-numero": numero });
+      const b = el("button", { type: "button", class: "botao", id: "botao-acompanhar", "data-cargo": cargo, "data-numero": numero });
       b.addEventListener("click", async () => {
         try {
           await acompanhar(cargo, numero, !seguindo(cargo, numero));

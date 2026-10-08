@@ -1,0 +1,44 @@
+/* Gráficos e marcas: barras de progresso e composição, legendas, série temporal, dispersão, dica.
+ * Geometria das marcas (alturas, vão de 2 px) fica em px: é desenho de dado, não espaço de layout. */
+.progresso { height: 8px; background: var(--grade); border-radius: var(--raio-marca); overflow: hidden; }
+.progresso > div { height: 100%; background: var(--serie-1); border-radius: var(--raio-marca); }
+.composicao { display: flex; height: 14px; gap: 2px; }
+.composicao > div { height: 100%; }
+.composicao > div:first-child { border-radius: var(--raio-marca) 0 0 var(--raio-marca); }
+.composicao > div:last-child { border-radius: 0 var(--raio-marca) var(--raio-marca) 0; }
+.legenda-linha { display: flex; flex-wrap: wrap; gap: var(--esp-1) var(--esp-3); font-size: var(--fs-1); color: var(--texto-2); }
+.amostra {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px;
+}
+.amostra.redonda { border-radius: 50%; }  /* legenda do mapa por local: pontos */
+
+/* série temporal */
+.serie-caixa { position: relative; }
+svg.serie { width: 100%; height: auto; display: block; overflow: visible; }
+svg.serie .grade { stroke: var(--grade); stroke-width: 1; }
+svg.serie .eixo { fill: var(--mudo); font-size: var(--fs-eixo); }
+svg.serie .rotulo { fill: var(--texto-2); font-size: var(--fs-eixo); }
+svg.serie .guia { stroke: var(--eixo); stroke-width: 1; }
+
+/* dispersão (Perfil × voto) e variação por partido (Comparação) */
+svg.dispersao { width: 100%; height: auto; display: block; }
+svg.dispersao .grade { stroke: var(--grade); stroke-width: 1; }
+svg.dispersao .eixo { fill: var(--mudo); font-size: var(--fs-eixo); }
+svg.dispersao .titulo-eixo { fill: var(--texto-2); font-size: 11px; }
+svg.dispersao .tendencia { stroke: var(--texto-2); stroke-width: 2; stroke-dasharray: 6 4; }
+svg.dispersao circle.ponto { stroke: var(--superficie); stroke-width: 1; opacity: 0.85; }
+svg.dispersao circle.ponto.ativo { stroke: var(--texto); stroke-width: 2; opacity: 1; }
+svg.dispersao .diagonal { stroke: var(--texto-2); stroke-width: 1.5; stroke-dasharray: 4 4; }
+svg.dispersao .reta { stroke-width: 2; }
+svg.dispersao .zero { stroke: var(--eixo); stroke-width: 1; }
+svg.dispersao .media { stroke: var(--texto); stroke-width: 2; }
+svg.dispersao .ic { stroke-width: 8; stroke-linecap: round; opacity: 0.3; }
+svg.dispersao .rotulo { fill: var(--texto); font-size: 11px; font-weight: var(--peso-forte); }
+svg.dispersao .rotulo-mun { fill: var(--texto-2); font-size: var(--fs-eixo); }
+
+/* dica de gráfico (dentro da caixa do gráfico) */
+.dica {
+  position: absolute; top: var(--esp-1); z-index: 5; min-width: 180px; padding: 6px var(--esp-2); font-size: var(--fs-1);
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-caixa);
+  box-shadow: var(--sombra-dica); pointer-events: none;
+}

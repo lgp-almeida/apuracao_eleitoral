@@ -12,7 +12,12 @@ export interface OpcoesMapa {
 
 export function criarMapa(div: HTMLElement, opcoes: OpcoesMapa = {}): MapaApuracao {
   const { centro = [-22.25, -42.6], zoom = 8, ladrilhos = true, zoomSnap } = opcoes;
-  const m = L.map(div, { preferCanvas: true, ...(zoomSnap ? { zoomSnap } : {}) }).setView(centro, zoom) as MapaApuracao;
+  // quem pediu menos movimento ao sistema (prefers-reduced-motion) não vê zoom nem esmaecimento animados
+  const animar = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const m = L.map(div, {
+    preferCanvas: true, zoomAnimation: animar, fadeAnimation: animar, markerZoomAnimation: animar,
+    ...(zoomSnap ? { zoomSnap } : {}),
+  }).setView(centro, zoom) as MapaApuracao;
   if (ladrilhos) {
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 18, attribution: "© OpenStreetMap", opacity: 0.35,

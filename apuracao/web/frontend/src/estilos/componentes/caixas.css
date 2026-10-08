@@ -1,0 +1,27 @@
+/* Superfícies: aviso, caixa recolhível, cartão do painel, bloco das outras abas, ficha; textos de apoio. */
+.aviso, .caixa {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-caixa);
+  padding: var(--esp-3) var(--esp-4);
+}
+.caixa { margin-top: var(--esp-4); }
+.caixa summary { font-weight: var(--peso-forte); }
+.nota { color: var(--texto-2); font-size: var(--fs-1); }
+.sub { color: var(--texto-2); font-size: var(--fs-1); }
+
+.grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: var(--esp-4); }  /* celular: 1 coluna */
+/* .cartao é do painel (os testes do painel contam os .cartao); fora dele, o mesmo visual é .bloco */
+.cartao, .bloco {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-caixa);
+  padding: var(--esp-3) var(--esp-4);
+  display: flex; flex-direction: column; gap: var(--esp-3); min-width: 0;
+}
+.cartao h2, .bloco h2 { font-size: var(--fs-3); margin: 0; }
+.cartao h3 { font-size: var(--fs-1); margin: 6px 0 2px; color: var(--texto-2); }
+
+.fichas { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--esp-3); margin-bottom: var(--esp-3); }
+.ficha {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-caixa);
+  padding: var(--esp-2) var(--esp-3);
+}
+.ficha .rot { font-size: var(--fs-1); color: var(--texto-2); }
+.ficha .val { font-size: var(--fs-4); font-weight: var(--peso-forte); overflow-wrap: anywhere; }
