@@ -3,8 +3,17 @@
 import * as L from "leaflet";
 import { repetir } from "./core/agendador.ts";
 import { api, baixar, enviar } from "./core/api.ts";
-import { cor, el, svg, SVG } from "./core/dom.ts";
-import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, fmtPP, fmtR, hora, int, mil, p1, pct } from "./core/formatos.ts";
+import { dicaFlutuante } from "./componentes/dica.ts";
+import { quebrasQuantis } from "./componentes/escalas.ts";
+import { salvarBlob } from "./componentes/exportar.ts";
+import { graficoDispersao } from "./componentes/grafico/dispersao.ts";
+import { graficoLinhas } from "./componentes/grafico/linhas.ts";
+import { graficoSwing, graficoVariacao } from "./componentes/grafico/variacao.ts";
+import { criarCamadas } from "./componentes/mapa/camadas.ts";
+import { criarMapa } from "./componentes/mapa/criar.ts";
+import { ficha, tabelaOrdenavel } from "./componentes/tabela.ts";
+import { cor, el } from "./core/dom.ts";
+import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, fmtR, hora, int, mil, p1, pct } from "./core/formatos.ts";
 import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
 import { Roteador } from "./core/roteador.ts";
 import { lerEndereco } from "./core/rotas.ts";
@@ -25,13 +34,11 @@ function mostrarAba(aba) {
   document.querySelectorAll(".abas button").forEach((b) => b.setAttribute("aria-selected", b.dataset.aba === aba));
   document.querySelectorAll(".aba").forEach((s) => (s.hidden = s.id !== `aba-${aba}`));
   if (aba === "mapas") {
-    garantirMapa(); setTimeout(() => estado.mapa.invalidateSize(), 50);
+    garantirMapa();
     carregarMomentos().then(atualizarMapa);
   }
-  if (aba === "candidato" && estado.mini) setTimeout(() => estado.mini.invalidateSize(), 50);
   if (aba === "comparacao") {
-    if (!estado.compMapa) estado.compMapa = novoMapa(document.getElementById("comp-mapa"));
-    setTimeout(() => estado.compMapa.invalidateSize(), 50);
+    if (!estado.compMapa) estado.compMapa = criarMapa(document.getElementById("comp-mapa"));
     if (!estado.compFeito) { estado.compFeito = true; atualizarComparacao(); }
   }
   if (aba === "transferencia" && !tf.feito) {
@@ -474,27 +481,9 @@ function blocoBrasil() {
       el("div", { id: "brasil-tabela", class: "tabela-rolagem brasil" }),
       el("p", { class: "nota" }, "Resultado do TSE em cada UF (o exterior só na tabela). Sem projeção nacional."));
   }
-  if (estado.brasilMapa) setTimeout(() => estado.brasilMapa.invalidateSize(), 50);
   return estado.brasilBloco;
 }
 
-// dica flutuante (position: fixed, presa à janela): para conteúdo maior que o mapa
-function mostrarDica(conteudo, ev) {
-  if (!estado.dica) { estado.dica = el("div", { class: "dica-flutuante", role: "tooltip" }); document.body.append(estado.dica); }
-  estado.dica.replaceChildren(conteudo);
-  estado.dica.hidden = false;
-  if (ev) posicionarDica(ev);
-}
-function posicionarDica(ev) {
-  const d = estado.dica;
-  if (!d || d.hidden || !ev) return;
-  const m = 14, w = d.offsetWidth, h = d.offsetHeight;
-  let x = ev.clientX + m, y = ev.clientY + m;
-  if (x + w > window.innerWidth - 4) x = Math.max(4, ev.clientX - m - w);
-  if (y + h > window.innerHeight - 4) y = Math.max(4, window.innerHeight - h - 4);
-  d.style.left = `${x}px`; d.style.top = `${y}px`;
-}
-function esconderDica() { if (estado.dica) estado.dica.hidden = true; }
 
 // hint de uma UF: apuração, todos os candidatos (% dos válidos) e brancos, nulos e abstenção
 function dicaUf(u, codigo, valor) {
@@ -565,8 +554,8 @@ function desenharBrasil() {
   const porIbge = new Map(d.ufs.filter((u) => u.cd_ibge).map((u) => [String(u.cd_ibge), u]));
   if (estado.brasilGeo) {
     if (!estado.brasilMapa) {
-      estado.brasilMapa = L.map(bloco.querySelector("#brasil-mapa"), { preferCanvas: true, zoomSnap: 0.25 });
-      estado.brasilMapa.setView([-15, -54], 3);
+      estado.brasilMapa = criarMapa(bloco.querySelector("#brasil-mapa"),
+        { centro: [-15, -54], zoom: 3, ladrilhos: false, zoomSnap: 0.25 });
     }
     const mapa = estado.brasilMapa;
     if (mapa._camada) mapa.removeLayer(mapa._camada);
@@ -576,10 +565,10 @@ function desenharBrasil() {
       onEachFeature: (ft, layer) => {
         const u = porIbge.get(ft.properties.codarea);
         // hint fora do mapa (a tabela é mais alta que o mapa, que corta o tooltip do Leaflet)
-        layer.on("mouseover", (e) => { mostrarDica(dicaUf(u, ft.properties.codarea, valor), e.originalEvent);
+        layer.on("mouseover", (e) => { dicaFlutuante.mostrar(dicaUf(u, ft.properties.codarea, valor), e.originalEvent);
           layer.setStyle({ weight: 3, color: cor("--texto") }); });
-        layer.on("mousemove", (e) => posicionarDica(e.originalEvent));
-        layer.on("mouseout", () => { esconderDica(); layer.setStyle({ weight: 1, color: cor("--superficie") }); });
+        layer.on("mousemove", (e) => dicaFlutuante.posicionar(e.originalEvent));
+        layer.on("mouseout", () => { dicaFlutuante.esconder(); layer.setStyle({ weight: 1, color: cor("--superficie") }); });
       },
     }).addTo(mapa);
     if (!mapa._enquadrado) { mapa.fitBounds(mapa._camada.getBounds(), { padding: [4, 4] }); mapa._enquadrado = true; }
@@ -620,123 +609,7 @@ function graficoSerie(serie) {  // painel: x = % de seções totalizadas
   });
 }
 
-// linhas com eixo x numérico; cada série pode ter seus próprios x (ex.: município × estado no tempo)
-function graficoLinhas({ xs, xMin, xMax, xTicks, xFmt, series, dica: textoDica, dicaSerie }) {
-  const W = 420, H = 170, m = { l: 40, r: 52, t: 10, b: 22 };
-  const cores = ["--serie-1", "--serie-2", "--serie-3"].map(cor);
-  const xsDe = (s) => s.xs || xs;
-  const todos = series.flatMap((s) => s.valores).filter((v) => v !== null);
-  let yMin = Math.min(...todos), yMax = Math.max(...todos);
-  const pad = Math.max((yMax - yMin) * 0.12, 0.5);
-  yMin = Math.max(0, yMin - pad); yMax = Math.min(100, yMax + pad);
-  const X = (v) => m.l + ((W - m.l - m.r) * (v - xMin)) / (xMax - xMin || 1);
-  const Y = (v) => m.t + (H - m.t - m.b) * (1 - (v - yMin) / (yMax - yMin || 1));
-  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "serie", role: "img",
-    "aria-label": `Evolução do % dos válidos: ${series.map((s) => s.nome).join(", ")}` });
-  // grade e eixos (recessivos)
-  const ticksY = [0, 1, 2, 3].map((i) => yMin + ((yMax - yMin) * i) / 3);
-  for (const t of ticksY) {
-    g.append(svg("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), class: "grade" }),
-      svg("text", { x: m.l - 4, y: Y(t) + 3, class: "eixo", "text-anchor": "end" }, `${fmtPct.format(t)}%`));
-  }
-  for (const t of xTicks) {
-    g.append(svg("text", { x: X(t), y: H - 8, class: "eixo", "text-anchor": "middle" }, xFmt(t)));
-  }
-  // linhas + ponto final
-  const fim = [];
-  series.forEach((s, i) => {
-    const sx = xsDe(s);
-    const pts = s.valores.map((v, k) => (v === null ? null : [X(sx[k]), Y(v)])).filter(Boolean);
-    g.append(svg("polyline", { points: pts.map((p) => p.join(",")).join(" "), fill: "none", stroke: cores[i],
-      "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-    const ult = pts[pts.length - 1];
-    if (ult) {
-      g.append(svg("circle", { cx: ult[0], cy: ult[1], r: 4, fill: cores[i], stroke: cor("--superficie"), "stroke-width": 2 }));
-      fim.push({ y: ult[1], x: ult[0], i, texto: `${fmtPct.format(s.valores.at(-1))}%` });  // nome fica na legenda
-    }
-  });
-  // rótulos diretos na ponta, afastados para não colidir (texto na cor de texto, não da série)
-  fim.sort((a, b) => a.y - b.y);
-  for (let k = 1; k < fim.length; k++) fim[k].y = Math.max(fim[k].y, fim[k - 1].y + 12);
-  for (const f of fim) g.append(svg("text", { x: W - m.r + 8, y: f.y + 4, class: "rotulo" }, f.texto));
-  // camada de interação: linha vertical + dica com todos os valores do ponto mais próximo
-  const guia = svg("line", { y1: m.t, y2: H - m.b, class: "guia", visibility: "hidden" });
-  const alvo = svg("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" });
-  g.append(guia, alvo);
-  const dica = el("div", { class: "dica", hidden: true });
-  const caixa = el("div", { class: "serie-caixa" }, g, dica);
-  const perto = (arr, xv) => arr.reduce((k, x, j) => (Math.abs(x - xv) < Math.abs(arr[k] - xv) ? j : k), 0);
-  alvo.addEventListener("mousemove", (ev) => {
-    const r = g.getBoundingClientRect();
-    const xv = xMin + (((ev.clientX - r.left) * (W / r.width) - m.l) / (W - m.l - m.r)) * (xMax - xMin);
-    const base = xsDe(series[0]);
-    const k = perto(base, xv);
-    guia.setAttribute("x1", X(base[k])); guia.setAttribute("x2", X(base[k])); guia.setAttribute("visibility", "visible");
-    dica.replaceChildren(el("strong", {}, textoDica(k, xv)),
-      ...series.map((s, i) => {
-        const j = s.xs ? perto(s.xs, xv) : k;
-        return el("div", {}, el("span", { class: "amostra", style: { background: cores[i] } }),
-          dicaSerie ? dicaSerie(s, j) : `${s.rotulo}: ${pct(s.valores[j])}`);
-      }));
-    dica.hidden = false;
-    dica.style.left = `${Math.min((ev.clientX - r.left) + 12, r.width - 220)}px`;
-  });
-  alvo.addEventListener("mouseleave", () => { guia.setAttribute("visibility", "hidden"); dica.hidden = true; });
-  const legenda = el("div", { class: "legenda-linha" }, series.map((s, i) => el("span", {},
-    el("span", { class: "amostra", style: { background: cores[i] } }), s.rotulo)));
-  const itensLeg = series.map((s, i) => [cores[i], s.rotulo]);
-  const baixar = el("div", { class: "nota baixar-serie" }, "Baixar gráfico: ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "svg") }, "SVG"), " ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "png") }, "PNG"));
-  return el("div", {}, caixa, legenda, baixar);
-}
-
-// ---------------------------------------------------------------- exportar gráficos e mapas
-function salvarBlob(blob, nome) {
-  const a = el("a", { href: URL.createObjectURL(blob), download: nome });
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-}
-
-// SVG autônomo: estilos calculados embutidos (as classes usam variáveis CSS), sem a camada de
-// interação, com fundo e legenda desenhados dentro do próprio SVG
-function svgAutonomo(g, itensLeg) {
-  const clone = g.cloneNode(true);
-  const orig = g.querySelectorAll("*"), cop = clone.querySelectorAll("*");
-  orig.forEach((o, i) => {
-    const cs = getComputedStyle(o);
-    for (const p of ["fill", "stroke", "stroke-width", "font-size", "font-family", "opacity"]) {
-      const val = cs.getPropertyValue(p);
-      if (val) cop[i].style.setProperty(p, val);
-    }
-  });
-  clone.querySelectorAll("line.guia, rect").forEach((e) => e.remove());
-  const [x0, y0, w, h] = g.getAttribute("viewBox").split(" ").map(Number);
-  const altura = h + 8 + 16 * itensLeg.length;
-  clone.setAttribute("viewBox", `${x0} ${y0} ${w} ${altura}`);
-  clone.setAttribute("xmlns", SVG);
-  clone.setAttribute("width", String(w * 2)); clone.setAttribute("height", String(altura * 2));
-  clone.insertBefore(svg("rect", { x: x0, y: y0, width: w, height: altura, fill: cor("--superficie") }), clone.firstChild);
-  itensLeg.forEach(([c, t], i) => {
-    const y = h + 8 + 16 * i;
-    clone.append(svg("rect", { x: 40, y, width: 10, height: 10, rx: 2, fill: c }),
-      svg("text", { x: 56, y: y + 9, "font-size": 11, fill: cor("--texto-2"), "font-family": "system-ui, sans-serif" }, t));
-  });
-  return new XMLSerializer().serializeToString(clone);
-}
-
-async function baixarGrafico(g, itensLeg, formato) {
-  const texto = svgAutonomo(g, itensLeg);
-  const nome = `grafico_apuracao_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`;
-  if (formato === "svg") { salvarBlob(new Blob([texto], { type: "image/svg+xml" }), `${nome}.svg`); return; }
-  const img = new Image();
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(texto)}`;
-  await img.decode();
-  const canvas = el("canvas", { width: img.naturalWidth * 1.5, height: img.naturalHeight * 1.5 });
-  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-  canvas.toBlob((b) => salvarBlob(b, `${nome}.png`), "image/png");
-}
-
+// ---------------------------------------------------------------- exportar mapas (desenhados no servidor)
 async function baixarMapa(qual, formato, msg) {
   const m = estado[qual];
   if (!m || !m._export) { msg.textContent = " desenhe o mapa primeiro."; return; }
@@ -879,7 +752,7 @@ async function consultarCandidato(cargo, numero, municipio = null, ordem = null)
     el("div", { class: "tabela-rolagem" }, tabela), el("div", {}, miniDiv, legenda))].filter(Boolean));
   if (d.municipios.length) mostrarEvolucao(cargo, numero, municipio ?? d.municipios[0].CD_MUNICIPIO);
   if (estado.mini) { estado.mini.remove(); estado.mini = null; }
-  estado.mini = novoMapa(miniDiv);
+  estado.mini = criarMapa(miniDiv);
   const itens = {};
   d.municipios.forEach((m) => { itens[m.CD_MUNICIPIO_IBGE] = { valor: m.PCT_VALIDOS, municipio: m.NM_MUNICIPIO }; });
   await desenharMapa(estado.mini, { tipo: "sequencial", rotulo: `% dos válidos — ${c.NOME_URNA}`, itens }, legenda, "%");
@@ -917,33 +790,6 @@ async function mostrarEvolucao(cargo, numero, municipio) {
   }));
 }
 
-function ficha(rot, val) { return el("div", { class: "ficha" }, el("div", { class: "rot" }, rot), el("div", { class: "val" }, val)); }
-
-// `opcoes.ordem`: "COLUNA-desc" | "COLUNA-asc" inicial; `opcoes.aoOrdenar(texto)` avisa cada troca de ordem
-function tabelaOrdenavel(colunas, linhas, formatar, aoClicar = null, opcoes = {}) {
-  const [k0, dir0] = (opcoes.ordem || "").split("-");
-  let ordem = colunas.some(([, k]) => k === k0) ? { k: k0, desc: dir0 !== "asc" } : { k: colunas[1][1], desc: true };
-  const corpo = el("tbody");
-  const render = () => {
-    const ls = [...linhas].sort((a, b) => {
-      const x = a[ordem.k], y = b[ordem.k];
-      const r = typeof x === "number" && typeof y === "number" ? x - y : String(x ?? "").localeCompare(String(y ?? ""), "pt-BR");
-      return ordem.desc ? -r : r;
-    });
-    corpo.replaceChildren(...ls.map((r) => el("tr", { class: aoClicar ? "clicavel" : null, onclick: aoClicar ? () => aoClicar(r) : null },
-      colunas.map(([, k, n]) => el("td", { class: n ? "num" : null }, formatar(r, k))))));
-  };
-  const cab = el("tr", {}, colunas.map(([rot, k, n]) => el("th", {
-    class: n ? "num" : null, scope: "col",
-    onclick: () => {
-      ordem = { k, desc: ordem.k === k ? !ordem.desc : true };
-      render();
-      if (opcoes.aoOrdenar) opcoes.aoOrdenar(`${ordem.k}-${ordem.desc ? "desc" : "asc"}`);
-    },
-  }, rot)));
-  render();
-  return el("table", {}, el("thead", {}, cab), corpo);
-}
 
 // ---------------------------------------------------------------- resultado por município × eleição anterior
 const CAMPOS_HISTORICO = [["hist_cargo", "hist-cargo"], ["hist_numero", "hist-numero"]];
@@ -1056,16 +902,8 @@ document.getElementById("form-planilha").addEventListener("submit", async (e) =>
 });
 
 // ---------------------------------------------------------------- mapas
-function novoMapa(div) {
-  const m = L.map(div, { preferCanvas: true }).setView([-22.25, -42.6], 8);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18, attribution: "© OpenStreetMap", opacity: 0.35,
-  }).addTo(m);
-  return m;
-}
-
 function garantirMapa() {
-  if (!estado.mapa) estado.mapa = novoMapa(document.getElementById("mapa"));
+  if (!estado.mapa) estado.mapa = criarMapa(document.getElementById("mapa"));
 }
 
 async function malha() {
@@ -1073,114 +911,9 @@ async function malha() {
   return estado.geo;
 }
 
-function quebrasQuantis(valores, n = 5) {
-  const v = [...valores].filter((x) => x !== null && x !== undefined).sort((a, b) => a - b);
-  if (!v.length) return [];
-  const q = [];
-  for (let i = 1; i < n; i++) q.push(v[Math.min(v.length - 1, Math.floor((i * v.length) / n))]);
-  return [...new Set(q)];
-}
-
-// `escala` (opcional) fixa as faixas de cor entre quadros da linha do tempo; a função devolve a escala usada
-async function desenharMapa(mapa, dados, legendaEl, sufixo = "", escala = null, camada = "municipios") {
-  const poligonos = camada === "bairros" || camada === "areas";  // malhas finas: borda fina e contorno municipal
-  const geo = camada === "bairros" ? await malhaBairros() : camada === "areas" ? await malhaAreas() : await malha();
-  const idDe = (ft) => (camada === "bairros" ? ft.properties.CD_BAIRRO : camada === "areas" ? ft.properties.CD_AP
-    : ft.properties.codarea);
-  if (mapa._camada) mapa.removeLayer(mapa._camada);
-  if (mapa._contornos) { mapa.removeLayer(mapa._contornos); mapa._contornos = null; }
-  const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);  // amarelo (menos) -> vermelho (mais)
-  const semDado = cor("--sem-dado");
-  const ehPct = sufixo === "%" || (dados.metrica && dados.metrica !== "votos_candidato");
-  // percentuais pequenos (ex.: deputado com 0,05%) precisam de mais casas para as faixas não se repetirem
-  const vals = Object.values(dados.itens).map((i) => i.valor).filter((x) => x !== null && x !== undefined);
-  const casas = ehPct && vals.length && Math.max(...vals) < 1 ? 3 : 2;
-  const fmtPctN = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
-  const fmt = (x) => (x === null || x === undefined ? "—" : ehPct ? fmtPctN.format(x) + "%" : int(x));
-  let corDe, itensLegenda;
-  if (dados.tipo === "categorico") {
-    // no mapa todos os pares de cor se tocam: só 3 cores categóricas; o resto vira "Outros"
-    const top = (dados.categorias || []).slice(0, 3);
-    const cores = ["--serie-1", "--serie-2", "--serie-3"].map(cor);
-    const idx = new Map(top.map((c, i) => [c.NUMERO, i]));
-    corDe = (it) => (it ? (idx.has(it.valor) ? cores[idx.get(it.valor)] : cor("--outros")) : semDado);
-    itensLegenda = [...top.map((c, i) => [cores[i], `${c.NUMERO} ${c.NOME_URNA} (${c.PARTIDO})`]), [cor("--outros"), "Outros"]];
-  } else if (dados.tipo === "divergente") {  // resíduo e variação (p.p.) por área de ponderação
-    const esc = escalaDivergente(vals, dados.sentido);
-    corDe = (it) => (!it || it.valor === null || it.valor === undefined ? semDado : esc.corValor(it.valor));
-    itensLegenda = [...esc.itensLegenda];
-  } else {
-    const valores = Object.values(dados.itens).map((i) => i.valor);
-    if (!escala) {
-      const vv = valores.filter((x) => x !== null && x !== undefined);
-      escala = dados.metrica === "secoes_totalizadas_pct" ? { qb: [20, 40, 60, 80], minimo: 0, maximo: 100 }
-        : { qb: quebrasQuantis(vv), minimo: Math.min(...vv), maximo: Math.max(...vv) };
-    }
-    const qb = escala.qb;
-    corDe = (it) => {
-      if (!it || it.valor === null || it.valor === undefined) return semDado;
-      let k = 0;
-      while (k < qb.length && it.valor > qb[k]) k++;
-      return seq[Math.min(k, seq.length - 1)];
-    };
-    const lim = [escala.minimo, ...qb, escala.maximo];
-    itensLegenda = lim.slice(0, -1).map((a, i) => [seq[i], `${fmt(a)} – ${fmt(lim[i + 1])}`]);
-  }
-  itensLegenda.push([semDado, "sem dado"]);
-  const f = (it) => (!it ? "sem dado" : dados.tipo === "categorico" ? it.rotulo
-    : dados.tipo === "divergente" ? fmtPP(it.valor) : fmt(it.valor));
-  const pct2 = (x) => `${x.toFixed(2).replace(".", ",")}%`;
-  const detalhe = (it) => (!it ? null  // dica das camadas divergentes: os dois lados da conta
-    : dados.lados && it.antes != null ? [el("br"), `${dados.lados[0]}: ${pct2(it.antes)} → ${dados.lados[1]}: ${pct2(it.depois)}`]
-    : dados.tipo === "divergente" && it.voto != null ? [el("br"), `voto ${pct2(it.voto)} · indicador ${int(Math.round(it.indicador * 100) / 100)}`]
-    : null);
-  const coresExport = {};
-  // erro amostral (indicadores da amostra do Censo por área): CV acima do limite = estimativa pouco confiável,
-  // mais clara e com borda tracejada; a dica dá o CV e a faixa do IBGE
-  const [cvCautela, cvFragil] = dados.cv_limites || [Infinity, Infinity];
-  const fragil = (it) => it && it.cv != null && it.cv > cvFragil;
-  const faixaCv = (x) => (x > cvFragil ? "pouco confiável" : x > cvCautela ? "use com cautela" : "boa precisão");
-  const estilo = (ft) => {
-    const it = dados.itens[idDe(ft)];
-    return fragil(it) ? { fillOpacity: 0.35, color: cor("--texto"), weight: 1, dashArray: "4 3" }
-      : { fillOpacity: 0.85, color: cor("--superficie"), weight: poligonos ? 0.5 : 1, dashArray: null };
-  };
-  mapa._camada = L.geoJSON(geo, {
-    style: (ft) => {
-      const c = corDe(dados.itens[idDe(ft)]);
-      coresExport[idDe(ft)] = c;
-      return { fillColor: c, ...estilo(ft) };
-    },
-    onEachFeature: (ft, layer) => {
-      const it = dados.itens[idDe(ft)];
-      const nome = it ? it.municipio
-        : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}`
-        : camada === "areas" ? `${ft.properties.NM_AP} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
-      const cv = it && it.cv != null ? [el("br"), `CV ${it.cv.toFixed(1).replace(".", ",")}% — ${faixaCv(it.cv)}`] : null;
-      layer.bindTooltip(() => el("div", {}, el("strong", {}, nome), el("br"), f(it), detalhe(it), cv), { sticky: true });
-      layer.on("mouseover", () => layer.setStyle({ weight: 3, color: cor("--texto") }));
-      layer.on("mouseout", () => layer.setStyle(estilo(ft)));
-    },
-  }).addTo(mapa);
-  if (poligonos) {  // contorno dos municípios por cima: situa bairros/áreas e os municípios sem malha de bairros
-    mapa._contornos = L.geoJSON(await malha(), {
-      interactive: false, style: { fill: false, color: cor("--texto"), weight: 0.8, opacity: 0.45 },
-    }).addTo(mapa);
-  }
-  if (!mapa._enquadrado) {  // só na 1ª vez: a atualização automática não pode desfazer o zoom do usuário
-    mapa.fitBounds(mapa._camada.getBounds(), { padding: [10, 10] });
-    mapa._enquadrado = true;
-  }
-  const titulo = dados.momento ? `${dados.rotulo} — às ${hora(dados.momento)}` : dados.rotulo;
-  const nFrageis = Object.values(dados.itens).filter(fragil).length;
-  const avisoCv = dados.cv_limites ? `Borda tracejada e cor mais clara: estimativa pouco confiável (CV acima de ` +
-    `${cvFragil}%; ${int(nFrageis)} áreas). Entre ${cvCautela}% e ${cvFragil}%: use com cautela (o CV está na dica).` : null;
-  mapa._export = { camada, cores: coresExport, legenda: itensLegenda, titulo, extras: avisoCv ? [avisoCv] : [] };
-  legendaEl.replaceChildren(el("h4", {}, titulo),
-    ...itensLegenda.map(([c, t]) => el("div", {}, el("span", { class: "amostra", style: { background: c } }), t)),
-    avisoCv ? el("p", { class: "nota cv-aviso" }, avisoCv) : null);
-  return escala;
-}
+// polígonos, pontos e comparação: componentes/mapa/camadas.ts (malhas com o cache desta página)
+const { desenharMapa, desenharPontos, desenharDivergente } = criarCamadas({
+  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas }, fmtDif: fmtComp });
 
 const metricaSel = document.getElementById("mapa-metrica");
 const numeroMapa = document.getElementById("mapa-numero");
@@ -1565,88 +1298,6 @@ async function atualizarMapaAreas(cargo, legenda) {
   roteador.gravar("mapas");
 }
 
-function formatoLocais(d) {
-  if (d.unidade === "p.p.") return (x) => `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(1).replace(".", ",")} p.p.`;
-  if (d.unidade === "%") {
-    const vals = d.itens.map((i) => i.valor);
-    const casas = vals.length && Math.max(...vals) < 1 ? 3 : 1;
-    return (x) => `${x.toFixed(casas).replace(".", ",")}%`;
-  }
-  return (x) => int(Math.round(x));
-}
-
-// escala DIVERGENTE em p.p. (resíduo do Perfil × voto, variação desde a eleição anterior), comum aos pontos (locais)
-// e aos polígonos (áreas): faixas pelos quantis de |valor| (com milhares de unidades, o máximo seria um extremo),
-// azul acima de zero, vermelho abaixo, tokens --div-*. `sentido` = "variacao" (subiu/caiu) ou "residuo".
-function escalaDivergente(vals, sentido) {
-  const abs = vals.map(Math.abs).sort((a, b) => a - b);
-  const q = (f) => abs[Math.min(abs.length - 1, Math.floor(f * abs.length))] || 1e-9;
-  const lim = [q(0.33), q(0.66), q(0.9)];
-  const cores = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"].map(cor);
-  const corValor = (v) => {
-    const a = Math.abs(v); const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3;
-    return cores[v < 0 ? 3 - k : 3 + k];
-  };
-  const m = (x) => Math.abs(x).toFixed(1).replace(".", ",");
-  const variacao = sentido === "variacao";
-  const itensLegenda = [[cores[6], `${variacao ? "subiu" : "voto maior que o esperado:"} mais de ${m(lim[2])} p.p.`],
-    [cores[5], `+${m(lim[1])} a +${m(lim[2])} p.p.`],
-    [cores[4], `+${m(lim[0])} a +${m(lim[1])} p.p.`], [cores[3], `${variacao ? "estável" : "como esperado"} (±${m(lim[0])} p.p.)`],
-    [cores[2], `−${m(lim[0])} a −${m(lim[1])} p.p.`], [cores[1], `−${m(lim[1])} a −${m(lim[2])} p.p.`],
-    [cores[0], `${variacao ? "caiu" : "voto menor que o esperado:"} mais de ${m(lim[2])} p.p.`]];
-  return { corValor, itensLegenda };
-}
-
-async function desenharPontos(mapa, d, legendaEl) {
-  for (const k of ["_camada", "_contornos"]) if (mapa[k]) { mapa.removeLayer(mapa[k]); mapa[k] = null; }
-  const fmt = formatoLocais(d);
-  let corDe, itensLegenda;
-  const vals = d.itens.map((i) => i.valor);
-  if (d.tipo === "categorico") {
-    const top = (d.categorias || []).slice(0, 3);
-    const cores = ["--serie-1", "--serie-2", "--serie-3"].map(cor);
-    const idx = new Map(top.map((c, i) => [c.NUMERO, i]));
-    corDe = (v) => (idx.has(v) ? cores[idx.get(v)] : cor("--outros"));
-    itensLegenda = [...top.map((c, i) => [cores[i], `${c.NUMERO} ${c.NOME_URNA}`]), [cor("--outros"), "Outros"]];
-  } else if (d.tipo === "divergente") {
-    ({ corValor: corDe, itensLegenda } = escalaDivergente(vals, d.sentido));
-  } else {
-    const seq = ["--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5"].map(cor);  // amarelo (menos) -> vermelho (mais)
-    const qb = quebrasQuantis(vals);
-    corDe = (v) => { let k = 0; while (k < qb.length && v > qb[k]) k++; return seq[Math.min(k, seq.length - 1)]; };
-    const lim = [Math.min(...vals), ...qb, Math.max(...vals)];
-    itensLegenda = lim.slice(0, -1).map((a, i) => [seq[i], `${fmt(a)} – ${fmt(lim[i + 1])}`]);
-  }
-  mapa._contornos = L.geoJSON(await malha(), {  // municípios por baixo: situa os pontos
-    interactive: false, style: { fill: false, color: cor("--texto"), weight: 0.6, opacity: 0.35 },
-  }).addTo(mapa);
-  const renderer = L.canvas({ padding: 0.5 });
-  const coresExport = {};
-  const raio = (e) => Math.max(2.5, Math.min(12, Math.sqrt(e || 0) / 9));
-  // os maiores primeiro: os pequenos ficam por cima e continuam clicáveis
-  const pontos = [...d.itens].sort((a, b) => (b.eleitores || 0) - (a.eleitores || 0));
-  mapa._camada = L.layerGroup(pontos.map((it) => {
-    const c = corDe(it.valor);
-    coresExport[it.u] = c;
-    const mk = L.circleMarker([it.lat, it.lon], { renderer, radius: raio(it.eleitores), color: cor("--superficie"),
-      weight: 0.8, fillColor: c, fillOpacity: 0.92 });
-    mk.bindTooltip(() => el("div", {}, el("strong", {}, it.nome), el("br"), `${it.mun} · zona ${it.zona}, local ${it.local}`, el("br"),
-      d.tipo === "categorico" ? (it.rotulo || String(it.valor)) : fmt(it.valor),
-      d.lados && it.antes != null ? [el("br"), `${d.lados[0]}: ${it.antes.toFixed(2).replace(".", ",")}% → ${d.lados[1]}: ${it.depois.toFixed(2).replace(".", ",")}%`]
-        : d.tipo === "divergente" ? [el("br"), `voto ${it.voto.toFixed(2).replace(".", ",")}% · indicador ${int(Math.round(it.indicador * 100) / 100)}`] : null,
-      el("br"), `${int(it.eleitores)} eleitores`), { sticky: true });
-    return mk;
-  })).addTo(mapa);
-  if (!mapa._enquadrado && pontos.length) {
-    mapa.fitBounds(L.latLngBounds(pontos.map((it) => [it.lat, it.lon])), { padding: [10, 10] });
-    mapa._enquadrado = true;
-  }
-  mapa._export = { camada: "locais", ano: d.ano, cores: coresExport, legenda: itensLegenda, titulo: d.rotulo };
-  legendaEl.replaceChildren(el("h4", {}, d.rotulo),
-    ...itensLegenda.map(([c, t]) => el("div", {}, el("span", { class: "amostra redonda", style: { background: c } }), t)),
-    el("p", { class: "nota" }, "Área do ponto ∝ eleitorado do local."));
-}
-
 // ---------------------------------------------------------------- endereço do mapa
 // #mapas?cargo=3&metrica=pct_candidato&numero=68&momento=2026-09-29T18:30:00&locais=1
 // (sem `momento` = acompanha o mais recente). replaceState: não enche o histórico nem dispara hashchange.
@@ -1890,7 +1541,7 @@ function fmtComp(v, unidade) {
 
 async function atualizarComparacao() {
   if (!estado.comp) return;
-  if (!estado.compMapa) estado.compMapa = novoMapa(document.getElementById("comp-mapa"));
+  if (!estado.compMapa) estado.compMapa = criarMapa(document.getElementById("comp-mapa"));
   const m = compMetrica.value;
   const bairros = estado.compDetalhe === "bairros";
   const q = new URLSearchParams(bairros
@@ -2130,139 +1781,9 @@ async function desenharVar() {
   const tabela = tabelaOrdenavel(cab, Object.values(linhas), (r, k) =>
     k === "NM_MUNICIPIO" ? r[k] : k.endsWith("_DIF") || k === "BUTLER" ? fmtComp(r[k], "pp") : pct(r[k]));
   out.replaceChildren(fichas, ...leituras,
-    el("h3", { class: "sub" }, `% dos válidos em ${d.ano_a} × ${d.ano_b} por município`), graficoVariacao(d, series),
-    el("h3", { class: "sub" }, `Variação por município (p.p.) — média e intervalo de 95%`), graficoSwing(d, series),
+    el("h3", { class: "sub" }, `% dos válidos em ${d.ano_a} × ${d.ano_b} por município`), graficoVariacao(d, series, (v) => fmtComp(v, "pp")),
+    el("h3", { class: "sub" }, `Variação por município (p.p.) — média e intervalo de 95%`), graficoSwing(d, series, (v) => fmtComp(v, "pp")),
     el("h3", { class: "sub" }, "Tabela"), el("div", { class: "tabela-rolagem" }, tabela));
-}
-
-function botoesBaixar(g, itensLeg) {
-  return el("div", { class: "nota baixar-serie" }, "Baixar gráfico: ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "svg") }, "SVG"), " ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "png") }, "PNG"));
-}
-
-function legendaLinha(itensLeg) {
-  return el("div", { class: "legenda-linha" }, itensLeg.map(([c, t]) => el("span", {},
-    el("span", { class: "amostra", style: { background: c } }), t)));
-}
-
-// dica do ponto mais próximo do mouse (alvo maior que o ponto); `alvos`: [{x, y, el, texto: () => [nós]}]
-function comDica(g, W, H, alvos) {
-  const dica = el("div", { class: "dica", hidden: true });
-  let ativo = null;
-  g.addEventListener("mousemove", (ev) => {
-    const r = g.getBoundingClientRect();
-    const mx = (ev.clientX - r.left) * (W / r.width), my = (ev.clientY - r.top) * (H / r.height);
-    let k = -1, melhor = 14 ** 2;
-    alvos.forEach((a, i) => { const dd = (a.x - mx) ** 2 + (a.y - my) ** 2; if (dd < melhor) { melhor = dd; k = i; } });
-    if (ativo) ativo.classList.remove("ativo");
-    if (k < 0) { dica.hidden = true; ativo = null; return; }
-    ativo = alvos[k].el; ativo.classList.add("ativo");
-    dica.replaceChildren(...alvos[k].texto());
-    dica.hidden = false;
-    dica.style.left = `${Math.min(ev.clientX - r.left + 12, r.width - 230)}px`;
-    dica.style.top = `${Math.max(4, ev.clientY - r.top - 80)}px`;
-  });
-  g.addEventListener("mouseleave", () => { dica.hidden = true; if (ativo) ativo.classList.remove("ativo"); ativo = null; });
-  return el("div", { class: "serie-caixa" }, g, dica);
-}
-
-function graficoVariacao(d, series) {
-  const W = 640, H = 480, m = { l: 52, r: 40, t: 12, b: 46 };
-  const todos = series.flatMap((p) => p.pontos.flatMap((r) => [r.A, r.B]));
-  const passo = 5;
-  const lo = Math.max(0, Math.floor(Math.min(...todos) / passo) * passo);
-  const hi = Math.min(100, Math.ceil(Math.max(...todos) / passo) * passo);
-  const X = (v) => m.l + ((W - m.l - m.r) * (v - lo)) / (hi - lo);
-  const Y = (v) => m.t + (H - m.t - m.b) * (1 - (v - lo) / (hi - lo));
-  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "dispersao", role: "img",
-    "aria-label": `% dos válidos em ${d.ano_a} × ${d.ano_b} por município: ${series.map((p) => p.partido).join(", ")}` });
-  for (const t of passos(lo, hi, 8)) {
-    g.append(svg("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), class: "grade" }),
-      svg("text", { x: m.l - 6, y: Y(t) + 3, class: "eixo", "text-anchor": "end" }, `${fmtInt.format(t)}%`),
-      svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, class: "grade" }),
-      svg("text", { x: X(t), y: H - m.b + 14, class: "eixo", "text-anchor": "middle" }, `${fmtInt.format(t)}%`));
-  }
-  g.append(svg("line", { x1: X(lo), y1: Y(lo), x2: X(hi), y2: Y(hi), class: "diagonal" }),
-    svg("text", { x: (m.l + W - m.r) / 2, y: H - 8, class: "titulo-eixo", "text-anchor": "middle" }, `% dos válidos em ${d.ano_a}`),
-    svg("text", { x: 12, y: (m.t + H - m.b) / 2, class: "titulo-eixo", "text-anchor": "middle",
-      transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }, `% dos válidos em ${d.ano_b}`));
-  const vmax = Math.max(...series.flatMap((p) => p.pontos.map((r) => r.VALIDOS)));
-  const raio = (v) => 4 + 14 * Math.sqrt(v / vmax);  // área ∝ válidos; mínimo de 8 px de diâmetro
-  const pontos = series.flatMap((p) => p.pontos.map((r) => ({ p, r })))
-    .sort((a, b) => b.r.VALIDOS - a.r.VALIDOS);  // grandes atrás, pequenos na frente
-  const alvos = pontos.map(({ p, r }) => {
-    const c = svg("circle", { cx: X(r.A), cy: Y(r.B), r: raio(r.VALIDOS), class: "ponto", fill: p.cor });
-    g.append(c);
-    return { x: X(r.A), y: Y(r.B), el: c, texto: () => [el("strong", {}, r.NM_MUNICIPIO),
-      el("div", {}, el("span", { class: "amostra", style: { background: p.cor } }), p.partido),
-      el("div", {}, `${d.ano_a}: ${pct(r.A)} · ${d.ano_b}: ${pct(r.B)}`),
-      el("div", {}, `Variação: ${fmtComp(r.DIF, "pp")} · ${int(r.VALIDOS)} válidos em ${d.ano_b}`)] };
-  });
-  series.forEach((p) => {  // reta de cada partido no intervalo dos seus pontos + rótulo direto na ponta
-    const e = p.reta;
-    if (e.b === null) return;
-    const xs = p.pontos.map((r) => r.A);
-    const x1 = Math.min(...xs), x2 = Math.max(...xs);
-    g.append(svg("line", { x1: X(x1), y1: Y(e.a + e.b * x1), x2: X(x2), y2: Y(e.a + e.b * x2), class: "reta", stroke: p.cor }),
-      svg("text", { x: Math.min(X(x2) + 4, W - m.r + 2), y: Y(e.a + e.b * x2) + 4, class: "rotulo" }, p.partido));
-  });
-  const itensLeg = [...series.map((p) => [p.cor, `${p.partido} (reta: tendência${d.ponderado ? " ponderada" : ""})`]),
-    [cor("--texto-2"), "Diagonal: sem mudança (acima = ganhou, abaixo = perdeu)"]];
-  return el("div", {}, comDica(g, W, H, alvos), legendaLinha(itensLeg),
-    el("p", { class: "nota" }, `Área do ponto ∝ votos válidos em ${d.ano_b}.`), botoesBaixar(g, itensLeg));
-}
-
-function graficoSwing(d, series) {
-  const linhas = series.map((p) => ({ nome: p.partido, cor: p.cor, media: p.media, ic: p.ic_media,
-    pontos: p.pontos.map((r) => ({ v: r.DIF, nome: r.NM_MUNICIPIO, destaque: r.DESTAQUE, A: r.A, B: r.B })) }));
-  if (d.butler) {
-    linhas.push({ nome: `Butler ${d.butler.de}→${d.butler.para}`, cor: cor("--texto-2"), media: d.butler.media,
-      ic: d.butler.ic_media, pontos: d.butler.pontos.map((r) => ({ v: r.VALOR, nome: r.NM_MUNICIPIO })) });
-  }
-  const faixa = 70, W = 640, m = { l: 110, r: 16, t: 8, b: 40 };
-  const H = m.t + m.b + faixa * linhas.length;
-  const vs = linhas.flatMap((l) => l.pontos.map((p) => p.v));
-  const lim = Math.max(1, ...vs.map(Math.abs)) * 1.05;
-  const X = (v) => m.l + ((W - m.l - m.r) * (v + lim)) / (2 * lim);
-  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "dispersao", role: "img",
-    "aria-label": `Variação por município em pontos percentuais: ${linhas.map((l) => l.nome).join(", ")}` });
-  for (const t of passos(-lim, lim, 8)) {
-    g.append(svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, class: t === 0 ? "zero" : "grade" }),
-      svg("text", { x: X(t), y: H - m.b + 14, class: "eixo", "text-anchor": "middle" },
-        `${t > 0 ? "+" : t < 0 ? "−" : ""}${fmtInt.format(Math.abs(t))}`));
-  }
-  g.append(svg("text", { x: (m.l + W - m.r) / 2, y: H - 8, class: "titulo-eixo", "text-anchor": "middle" },
-    `Variação de ${d.ano_a} para ${d.ano_b} (p.p.)`));
-  const alvos = [];
-  linhas.forEach((l, i) => {
-    const y0 = m.t + faixa * i + faixa / 2;
-    g.append(svg("text", { x: m.l - 8, y: y0 + 4, class: "rotulo", "text-anchor": "end" }, l.nome));
-    // espalhamento vertical determinístico (pela ordem), para os pontos não se sobreporem todos
-    l.pontos.forEach((p, k) => {
-      const y = y0 + (((k * 7919) % 23) - 11) * 1.3;
-      const c = svg("circle", { cx: X(p.v), cy: y, r: 4, class: "ponto", fill: l.cor });
-      g.append(c);
-      alvos.push({ x: X(p.v), y, el: c, texto: () => [el("strong", {}, p.nome), el("div", {}, l.nome),
-        el("div", {}, `Variação: ${fmtComp(p.v, "pp")}`),
-        p.A !== undefined ? el("div", {}, `${d.ano_a}: ${pct(p.A)} → ${d.ano_b}: ${pct(p.B)}`) : null].filter(Boolean) });
-    });
-    g.append(svg("line", { x1: X(l.ic[0]), x2: X(l.ic[1]), y1: y0, y2: y0, class: "ic", stroke: l.cor }),
-      svg("line", { x1: X(l.media), x2: X(l.media), y1: y0 - 20, y2: y0 + 20, class: "media" }));
-    // rótulos dos destaques acima ou abaixo da faixa, onde couberem sem encostar no anterior (senão, só na dica)
-    const fim = [-Infinity, -Infinity];
-    l.pontos.filter((p) => p.destaque).sort((a, b) => a.v - b.v).forEach((p) => {
-      const meia = (p.nome.length * 5.6) / 2 + 4;
-      const x = Math.min(Math.max(X(p.v), m.l + meia), W - m.r - meia);
-      const lado = [0, 1].find((k) => x - meia > fim[k]);
-      if (lado === undefined) return;
-      fim[lado] = x + meia;
-      g.append(svg("text", { x, y: lado ? y0 + 30 : y0 - 23, class: "rotulo-mun", "text-anchor": "middle" }, p.nome));
-    });
-  });
-  const itensLeg = [...linhas.map((l) => [l.cor, `${l.nome}: um ponto por município`]),
-    [cor("--texto"), `Traço: média${d.ponderado ? " ponderada" : ""}; faixa: intervalo de 95% (bootstrap)`]];
-  return el("div", {}, comDica(g, W, H, alvos), legendaLinha(itensLeg), botoesBaixar(g, itensLeg));
 }
 
 function ajustarVar() {
@@ -2281,60 +1802,6 @@ document.getElementById("var-ponderar").addEventListener("change", () => { rotea
 compCargo.addEventListener("change", ajustarVar);
 compDetalhe.addEventListener("change", ajustarVar);
 
-
-async function desenharDivergente(mapa, d, legendaEl, camada = "municipios") {
-  const geo = camada === "bairros" ? await malhaBairros() : await malha();
-  const idDe = (ft) => (camada === "bairros" ? ft.properties.CD_BAIRRO : ft.properties.codarea);
-  if (mapa._camada) mapa.removeLayer(mapa._camada);
-  if (mapa._contornos) { mapa.removeLayer(mapa._contornos); mapa._contornos = null; }
-  const difs = Object.values(d.itens).map((i) => i.valor).filter((x) => x !== null && x !== undefined);
-  const m = Math.max(...difs.map(Math.abs), 1e-9);
-  const lim = [m * 0.1, m / 3, (2 * m) / 3];  // |dif| < 10% do máximo = "sem variação relevante"
-  const nomes = ["--div-n3", "--div-n2", "--div-n1", "--div-0", "--div-p1", "--div-p2", "--div-p3"];
-  const cores = nomes.map(cor);
-  const classe = (v) => {
-    const a = Math.abs(v);
-    const k = a < lim[0] ? 0 : a < lim[1] ? 1 : a < lim[2] ? 2 : 3;
-    return v < 0 ? 3 - k : 3 + k;
-  };
-  const semDado = cor("--sem-dado");
-  const coresExport = {};
-  mapa._camada = L.geoJSON(geo, {
-    style: (ft) => {
-      const it = d.itens[idDe(ft)];
-      const fill = !it || it.valor === null || it.valor === undefined ? semDado : cores[classe(it.valor)];
-      coresExport[idDe(ft)] = fill;
-      return { fillColor: fill, fillOpacity: 0.9, color: cor("--superficie"), weight: camada === "bairros" ? 0.5 : 1 };
-    },
-    onEachFeature: (ft, layer) => {
-      const it = d.itens[idDe(ft)];
-      const nome = it ? it.municipio
-        : camada === "bairros" ? `${ft.properties.NM_BAIRRO} — ${ft.properties.NM_MUN}` : ft.properties.codarea;
-      layer.bindTooltip(() => el("div", {}, el("strong", {}, nome), el("br"),
-        it ? `${d.ano_a}: ${d.unidade === "var_pct" ? int(it.a) : pct(it.a)} · ${d.ano_b}: ${d.unidade === "var_pct" ? int(it.b) : pct(it.b)}` : "sem dado",
-        el("br"), it ? `diferença: ${fmtComp(it.valor, d.unidade)}` : ""), { sticky: true });
-      layer.on("mouseover", () => layer.setStyle({ weight: 3, color: cor("--texto") }));
-      layer.on("mouseout", () => layer.setStyle({ weight: 1, color: cor("--superficie") }));
-    },
-  }).addTo(mapa);
-  if (camada === "bairros") {
-    mapa._contornos = L.geoJSON(await malha(), {
-      interactive: false, style: { fill: false, color: cor("--texto"), weight: 0.8, opacity: 0.45 },
-    }).addTo(mapa);
-  }
-  if (!mapa._enquadrado) { mapa.fitBounds(mapa._camada.getBounds(), { padding: [10, 10] }); mapa._enquadrado = true; }
-  const mag = (v) => fmtComp(v, d.unidade).replace(/^[+−]/, "");  // magnitude, sem sinal
-  const itens = [
-    [cores[6], `aumento maior que ${mag(lim[2])}`], [cores[5], `aumento de ${mag(lim[1])} a ${mag(lim[2])}`],
-    [cores[4], `aumento de ${mag(lim[0])} a ${mag(lim[1])}`], [cores[3], `variação menor que ±${mag(lim[0])}`],
-    [cores[2], `redução de ${mag(lim[0])} a ${mag(lim[1])}`], [cores[1], `redução de ${mag(lim[1])} a ${mag(lim[2])}`],
-    [cores[0], `redução maior que ${mag(lim[2])}`], [semDado, "sem dado"],
-  ];
-  mapa._export = { camada, cores: coresExport, legenda: itens, titulo: `${d.rotulo}: ${d.ano_b} − ${d.ano_a}`,
-    subtitulo: d.subtitulo || null };
-  legendaEl.replaceChildren(el("h4", {}, `${d.rotulo}: ${d.ano_b} − ${d.ano_a}`),
-    ...itens.map(([c, t]) => el("div", {}, el("span", { class: "amostra", style: { background: c } }), t)));
-}
 
 // endereços diretos: #mapas[?cargo=&metrica=&numero=&momento=&locais=1], #comparacao,
 // #candidato?cargo=&numero=[&municipio=&ordem=COLUNA-desc|asc][&pl=1&pl_ano=&pl_cargo=&pl_numero=&pl_municipio=&pl_comparar=]
@@ -2571,7 +2038,7 @@ async function analisarPerfil() {
       `${e.b >= 0 ? "+" : "−"}${Math.abs(e.b).toLocaleString("pt-BR", { maximumSignificantDigits: 3 })} p.p.`),
   );
   pf("titulo-grafico").textContent = `${d.rotulo_y} × ${d.rotulo_x}`;
-  pf("grafico").replaceChildren(d.pontos.length ? graficoDispersao(d, xk) : el("p", { class: "nota" }, `Nenhum ${nomeUnidade(false)}.`));
+  pf("grafico").replaceChildren(d.pontos.length ? graficoDispersao(d, xk, (v) => fmtX(xk, v), NomeUnidade(false)) : el("p", { class: "nota" }, `Nenhum ${nomeUnidade(false)}.`));
   // correlações: da mais forte para a mais fraca; clicar usa o indicador no eixo X
   const linhas = c.correlacoes.map((k) => el("tr", {
     class: `clicavel${k.indicador === xk ? " selecionado" : ""}`, "data-indicador": k.indicador,
@@ -2606,85 +2073,6 @@ function desenharRegressao(rg) {
   el("td", { class: "num" }, `${sinal(k.ic95[0])} a ${sinal(k.ic95[1])}`), el("td", { class: "num" }, fmtP(k.p)),
   el("td", { class: "num" }, k.vif.toFixed(1).replace(".", ",")), el("td", { class: "num" }, fmtR(k.r_simples)),
   el("td", { class: "num" }, fmtX(k.indicador, k.dp_indicador)))))));
-}
-
-function passos(min, max, n = 5) {  // marcas "redondas" do eixo
-  const bruto = (max - min) / n || 1;
-  const mag = 10 ** Math.floor(Math.log10(bruto));
-  const passo = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((p) => bruto <= p);
-  const ts = [];
-  for (let t = Math.ceil(min / passo) * passo; t <= max + passo * 1e-9; t += passo) ts.push(Number(t.toPrecision(12)));
-  return ts;
-}
-
-function graficoDispersao(d, xk) {
-  const W = 640, H = 400, m = { l: 56, r: 16, t: 12, b: 46 };
-  const xs = d.pontos.map((p) => p.X), ys = d.pontos.map((p) => p.Y);
-  const pad = (a, b) => [a - (b - a) * 0.04 || a - 1, b + (b - a) * 0.04 || b + 1];
-  const [xMin, xMax] = pad(Math.min(...xs), Math.max(...xs));
-  const [yMin, yMax] = pad(Math.max(0, Math.min(...ys)), Math.max(...ys));
-  const X = (v) => m.l + ((W - m.l - m.r) * (v - xMin)) / (xMax - xMin);
-  const Y = (v) => m.t + (H - m.t - m.b) * (1 - (v - yMin) / (yMax - yMin));
-  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "dispersao", role: "img",
-    "aria-label": `${d.rotulo_y} × ${d.rotulo_x}: ${d.pontos.length} bairros` });
-  for (const t of passos(yMin, yMax)) {
-    if (t < yMin || t > yMax) continue;
-    g.append(svg("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), class: "grade" }),
-      svg("text", { x: m.l - 6, y: Y(t) + 3, class: "eixo", "text-anchor": "end" }, `${fmtInt.format(t)}%`));
-  }
-  const curto = (v) => (xk && xk.startsWith("renda") ? `R$ ${fmtInt.format(v)}` : xk === "densidade" ? fmtInt.format(v)
-    : xk === "moradores_domicilio" ? String(v).replace(".", ",") : `${fmtInt.format(v)}%`);
-  for (const t of passos(xMin, xMax, 6)) {
-    if (t < xMin || t > xMax) continue;
-    g.append(svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, class: "grade" }),
-      svg("text", { x: X(t), y: H - m.b + 14, class: "eixo", "text-anchor": "middle" }, curto(t)));
-  }
-  g.append(svg("text", { x: (m.l + W - m.r) / 2, y: H - 8, class: "titulo-eixo", "text-anchor": "middle" }, d.rotulo_x),
-    svg("text", { x: 12, y: (m.t + H - m.b) / 2, class: "titulo-eixo", "text-anchor": "middle",
-      transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }, "Voto (% dos válidos)"));
-  const e = d.estatistica;
-  if (e.b !== null) {  // reta cortada à área do gráfico
-    let x1 = xMin, x2 = xMax;
-    const yDe = (x) => e.a + e.b * x, xDe = (y) => (y - e.a) / e.b;
-    if (e.b !== 0) {
-      const lim = [xDe(yMin), xDe(yMax)].sort((a, b) => a - b);
-      x1 = Math.max(x1, lim[0]); x2 = Math.min(x2, lim[1]);
-    }
-    if (x2 > x1) g.append(svg("line", { x1: X(x1), y1: Y(yDe(x1)), x2: X(x2), y2: Y(yDe(x2)), class: "tendencia" }));
-  }
-  const cAcima = cor("--div-p2"), cAbaixo = cor("--div-n2");
-  const pts = d.pontos.map((p) => svg("circle", { cx: X(p.X), cy: Y(p.Y), r: 4, class: "ponto",
-    fill: (p.RESIDUO ?? 0) >= 0 ? cAcima : cAbaixo }));
-  g.append(...pts);
-  const dica = el("div", { class: "dica", hidden: true });
-  const caixa = el("div", { class: "serie-caixa" }, g, dica);
-  let ativo = null;
-  g.addEventListener("mousemove", (ev) => {
-    const r = g.getBoundingClientRect();
-    const mx = (ev.clientX - r.left) * (W / r.width), my = (ev.clientY - r.top) * (H / r.height);
-    let k = -1, melhor = 14 ** 2;  // alvo de 14 unidades: maior que o ponto
-    d.pontos.forEach((p, i) => { const dd = (X(p.X) - mx) ** 2 + (Y(p.Y) - my) ** 2; if (dd < melhor) { melhor = dd; k = i; } });
-    if (ativo) ativo.classList.remove("ativo");
-    if (k < 0) { dica.hidden = true; ativo = null; return; }
-    ativo = pts[k]; ativo.classList.add("ativo");
-    const p = d.pontos[k];
-    dica.replaceChildren(el("strong", {}, p.BAIRRO), el("div", {}, `Eixo X: ${fmtX(xk, p.X)}`),
-      el("div", {}, `Voto: ${pct(p.Y)} de ${int(p.VALIDOS)} válidos`),
-      el("div", {}, `Resíduo: ${p.RESIDUO >= 0 ? "+" : "−"}${fmtPct.format(Math.abs(p.RESIDUO ?? 0))} p.p.`));
-    dica.hidden = false;
-    dica.style.left = `${Math.min(ev.clientX - r.left + 12, r.width - 220)}px`;
-    dica.style.top = `${Math.max(4, ev.clientY - r.top - 70)}px`;
-  });
-  g.addEventListener("mouseleave", () => { dica.hidden = true; if (ativo) ativo.classList.remove("ativo"); ativo = null; });
-  const u = NomeUnidade(false);
-  const itensLeg = [[cAcima, `${u} acima da tendência`], [cAbaixo, `${u} abaixo da tendência`],
-    [cor("--texto-2"), `Tendência (mínimos quadrados${d.ponderado ? ", ponderada" : ""})`]];
-  const legenda = el("div", { class: "legenda-linha" }, itensLeg.map(([c, t]) => el("span", {},
-    el("span", { class: "amostra", style: { background: c } }), t)));
-  const baixar = el("div", { class: "nota baixar-serie" }, "Baixar gráfico: ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "svg") }, "SVG"), " ",
-    el("button", { type: "button", class: "link", onclick: () => baixarGrafico(g, itensLeg, "png") }, "PNG"));
-  return el("div", {}, caixa, legenda, baixar);
 }
 
 // ---------------------------------------------------------------- transferência 1º → 2º turno
