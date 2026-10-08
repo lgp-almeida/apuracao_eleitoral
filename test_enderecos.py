@@ -21,6 +21,32 @@ pytestmark = pytest.mark.e2e
 T1 = E2E_T[0]
 
 
+# --------------------------------------------------------------------------- troca de aba e link colado
+def test_troca_de_aba_e_link_colado_com_a_pagina_aberta(pagina: Page, site: dict) -> None:
+    """Tabela única de endereços (rodada 62): o botão da aba reescreve o endereço; o painel leva o seu estado;
+    um endereço novo com a página aberta (hashchange) abre a aba pedida, inclusive no formato antigo."""
+    abrir(pagina, site, "#comparacao?cargo=3&metrica=abstencao")
+    pagina.wait_for_function("() => document.querySelector('#aba-comparacao .legenda h4')")
+    pagina.click("button[data-aba=perfil]")
+    esperar_endereco(pagina, "h.startsWith('#perfil')")
+    assert pagina.get_attribute("button[data-aba=perfil]", "aria-selected") == "true"
+
+    pagina.evaluate("() => __apuracao.estado.destacar = new Set(['PT'])")
+    pagina.click("button[data-aba=painel]")
+    esperar_endereco(pagina, "h === '#painel?destacar=PT'")  # o painel grava o destaque ao aparecer
+
+    pagina.evaluate("() => { location.hash = '#mapas?cargo=3&metrica=abstencao_pct'; }")
+    pagina.wait_for_function("() => !document.getElementById('aba-mapas').hidden")
+    assert pagina.input_value("#mapa-metrica") == "abstencao_pct"
+
+    pagina.evaluate(f"() => {{ location.hash = '#candidato/3/{site['numero']}'; }}")
+    pagina.wait_for_selector("#cand-resultado table tbody tr")
+    esperar_endereco(pagina, f"h.startsWith('#candidato?') && h.includes('numero={site['numero']}')")
+
+    pagina.evaluate("() => { location.hash = '#nada?x=1'; }")  # aba desconhecida: fica onde está
+    assert pagina.get_attribute("button[data-aba=candidato]", "aria-selected") == "true"
+
+
 # --------------------------------------------------------------------------- mapas
 def test_mapa_link_abre_momento_e_regrava(pagina: Page, site: dict) -> None:
     abrir(pagina, site, "#mapas?cargo=3&metrica=secoes_totalizadas_pct&momento=2026-09-29T17:20:00")

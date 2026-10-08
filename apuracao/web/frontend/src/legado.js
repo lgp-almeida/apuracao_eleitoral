@@ -6,10 +6,14 @@ import { api, baixar, enviar } from "./core/api.ts";
 import { cor, el, svg, SVG } from "./core/dom.ts";
 import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, fmtPP, fmtR, hora, int, mil, p1, pct } from "./core/formatos.ts";
 import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
+import { Roteador } from "./core/roteador.ts";
+import { lerEndereco } from "./core/rotas.ts";
 
 const REFRESH_MS = 60_000;
 const estado = { aba: "painel", uf: "", ano: 2026, candidatosCache: {}, geo: null, mapa: null, mini: null,
   destacar: new Set(), destacarDefinido: false, cadAbertos: new Set(), painel: null };
+// endereço de cada aba: tabela no fim do arquivo (roteador.registrar)
+const roteador = new Roteador(mostrarAba, () => estado.aba);
 
 // ---------------------------------------------------------------- abas
 document.querySelectorAll(".abas button").forEach((b) =>
@@ -17,10 +21,7 @@ document.querySelectorAll(".abas button").forEach((b) =>
 
 function mostrarAba(aba) {
   estado.aba = aba;
-  const atual = location.hash.replace(/^#/, "").split(/[?/]/)[0];
-  if (atual !== aba && ["mapas", "candidato", "comparacao", "perfil", "transferencia", "painel"].includes(atual)) {
-    history.replaceState(null, "", aba === "painel" ? enderecoPainel() : `#${aba}`);
-  } else if (aba === "painel" && estado.destacar.size) history.replaceState(null, "", enderecoPainel());
+  roteador.aoMostrar(aba);
   document.querySelectorAll(".abas button").forEach((b) => b.setAttribute("aria-selected", b.dataset.aba === aba));
   document.querySelectorAll(".aba").forEach((s) => (s.hidden = s.id !== `aba-${aba}`));
   if (aba === "mapas") {
@@ -158,9 +159,7 @@ function modoTv(ligar) {
     document.documentElement.requestFullscreen().catch(() => { /* sem gesto do usuário: segue sem tela cheia */ });
   }
   if (!ligar && document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  const q = new URLSearchParams(enderecoPainel().split("?")[1] || "");
-  if (ligar) q.set("tv", "1");
-  history.replaceState(null, "", `#painel${q.toString() ? "?" + q : ""}`);
+  roteador.gravar("painel");  // tv=1 entra (ou sai) do endereço
   aplicarTv();
 }
 
@@ -188,22 +187,28 @@ function definirDestaque(lista, gravar = true) {
   estado.destacarDefinido = true;
   if (gravar) {  // escolha do usuário: fica no navegador e no endereço
     gravarJson("destacar", [...estado.destacar]);
-    if (estado.aba === "painel") history.replaceState(null, "", enderecoPainel());
+    roteador.gravar("painel");
   }
   desenharPainel();
 }
 
-function enderecoPainel() {
+function parametrosPainel() {
   const q = new URLSearchParams();
   if (estado.destacar.size) q.set("destacar", [...estado.destacar].join(","));
   if (estado.tv?.ativo) q.set("tv", "1");
-  return q.toString() ? `#painel?${q}` : "#painel";
+  return q;
+}
+
+function aplicarEnderecoPainel(q) {
+  if (q.get("destacar") !== null) definirDestaque(q.get("destacar").split(","), true);
+  mostrarAba("painel");
+  if (q.get("tv") === "1") modoTv(true);
 }
 
 function destaqueInicial(padrao) {  // endereço > navegador > --destacar do site (sem reescrever o endereço)
   if (estado.destacarDefinido) return;
-  const [aba, params] = decodeURIComponent(location.hash.replace(/^#/, "")).split("?");
-  const doEndereco = aba === "painel" && params ? new URLSearchParams(params).get("destacar") : null;
+  const { aba, params } = lerEndereco(location.hash);
+  const doEndereco = aba === "painel" ? params.get("destacar") : null;
   if (doEndereco !== null) { definirDestaque(doEndereco.split(","), false); return; }
   const salvo = lerJson("destacar");
   definirDestaque(Array.isArray(salvo) ? salvo : (padrao || []), false);
@@ -857,7 +862,7 @@ async function consultarCandidato(cargo, numero, municipio = null, ordem = null)
   const tabela = tabelaOrdenavel(cab, d.municipios, (r, k) =>
     k === "VOTOS" ? int(r[k]) : k.startsWith("PCT") ? pct(r[k]) : k === "POSICAO_MUN" ? `${r[k]}º` : r[k],
   (r) => mostrarEvolucao(cargo, numero, r.CD_MUNICIPIO),
-  { ordem, aoOrdenar: (o) => { estado.cand.ordem = o; gravarEnderecoCandidato(); } });
+  { ordem, aoOrdenar: (o) => { estado.cand.ordem = o; roteador.gravar("candidato"); } });
   const miniDiv = el("div", { id: "mini-mapa", class: "mapa mini" });
   const legenda = el("aside", { class: "legenda" });
   const selMun = el("select", { id: "evol-mun", onchange: (e) => mostrarEvolucao(cargo, numero, Number(e.target.value)) },
@@ -866,7 +871,7 @@ async function consultarCandidato(cargo, numero, municipio = null, ordem = null)
   const msgLink = el("span", { "aria-live": "polite" });
   const evol = el("section", { class: "caixa" },
     el("p", { class: "nota" }, el("button", { type: "button", class: "link",
-      onclick: () => copiarLink(enderecoCandidato(), msgLink) }, "Copiar link desta consulta"), msgLink),
+      onclick: () => copiarLink(roteador.endereco("candidato"), msgLink) }, "Copiar link desta consulta"), msgLink),
     el("h3", {}, "Evolução na apuração — % dos válidos do candidato no município e no estado"),
     el("div", { class: "filtros" }, el("label", {}, "Município (ou clique numa linha da tabela)", selMun)),
     el("div", { id: "evol-grafico" }));
@@ -884,7 +889,7 @@ async function mostrarEvolucao(cargo, numero, municipio) {
   const alvo = document.getElementById("evol-grafico");
   if (!alvo) return;
   document.getElementById("evol-mun").value = String(municipio);
-  if (estado.cand) { estado.cand.municipio = municipio; gravarEnderecoCandidato(); }
+  if (estado.cand) { estado.cand.municipio = municipio; roteador.gravar("candidato"); }
   let d;
   try { d = await api(`api/candidato/serie?cargo=${cargo}&numero=${numero}&municipio=${municipio}`); } catch (e) {
     alvo.replaceChildren(el("p", { class: "nota" }, `Erro: ${e.message}`)); return;
@@ -997,7 +1002,7 @@ async function carregarHistorico() {
     el("button", { type: "button", class: "link", onclick: () => {
       document.getElementById("hist-cargo").value = String(o.CARGO);
       document.getElementById("hist-numero").value = String(o.NUMERO);
-      gravarEnderecoCandidato(); carregarHistorico();
+      roteador.gravar("candidato"); carregarHistorico();
     } }, "usar este")))) : null;
   const salvar = el("a", { class: "botao-salvar", href: `api/candidato/historico/planilha?${q}`, download: "" },
     "Salvar planilha (.xlsx)");
@@ -1025,9 +1030,9 @@ function aplicarHistorico(q) {
 }
 
 document.getElementById("form-historico").addEventListener("submit", (e) => {
-  e.preventDefault(); gravarEnderecoCandidato(); carregarHistorico();
+  e.preventDefault(); roteador.gravar("candidato"); carregarHistorico();
 });
-document.getElementById("caixa-historico").addEventListener("toggle", () => { gravarEnderecoCandidato(); carregarHistorico(); });
+document.getElementById("caixa-historico").addEventListener("toggle", () => { roteador.gravar("candidato"); carregarHistorico(); });
 
 // ---------------------------------------------------------------- planilha histórica
 document.getElementById("form-planilha").addEventListener("submit", async (e) => {
@@ -1219,7 +1224,7 @@ async function atualizarMapa() {
     const dados = await api(noPassado ? `${q}&momento=${encodeURIComponent(lt.momentos[lt.idx])}` : q);
     const esc = await desenharMapa(estado.mapa, dados, legenda, "", noPassado ? lt.escalas[chaveEscala] : null);
     if (!noPassado) lt.escalas[chaveEscala] = esc;
-    gravarEnderecoMapa();
+    roteador.gravar("mapas");
   } catch (e) { legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`)); }
 }
 
@@ -1230,7 +1235,7 @@ async function atualizarMapa() {
 const CAMPOS_PLANILHA = [["pl_ano", "pl-ano"], ["pl_cargo", "pl-cargo"], ["pl_numero", "pl-numero"],
   ["pl_municipio", "pl-municipio"], ["pl_comparar", "pl-comparar"]];
 
-function enderecoCandidato() {
+function parametrosCandidato() {
   const c = estado.cand;
   const q = new URLSearchParams(c ? { cargo: c.cargo, numero: c.numero } : {});
   if (c && c.municipio !== null && c.municipio !== undefined) q.set("municipio", String(c.municipio));
@@ -1249,8 +1254,20 @@ function enderecoCandidato() {
       if (v) q.set(k, v);
     }
   }
-  const s = q.toString();
-  return s ? `#candidato?${s}` : "#candidato";
+  return q;
+}
+
+function aplicarEnderecoCandidato(q) {
+  if (q.get("cargo") && q.get("numero")) {
+    // a consulta preenche o nº da planilha com o do candidato; o endereço vem depois e prevalece
+    consultarCandidato(q.get("cargo"), Number(q.get("numero")),
+      q.get("municipio") ? Number(q.get("municipio")) : null, q.get("ordem"))
+      .then(() => { aplicarPlanilha(q); aplicarHistorico(q); roteador.gravar("candidato"); });
+  } else {
+    mostrarAba("candidato");
+    aplicarPlanilha(q);
+    aplicarHistorico(q);
+  }
 }
 
 function aplicarPlanilha(q) {
@@ -1266,15 +1283,9 @@ function aplicarPlanilha(q) {
 }
 
 // mudanças no formulário da planilha e abrir/fechar o bloco também vão para o endereço
-document.getElementById("caixa-planilha").addEventListener("toggle", () => gravarEnderecoCandidato());
+document.getElementById("caixa-planilha").addEventListener("toggle", () => roteador.gravar("candidato"));
 for (const [, id] of CAMPOS_PLANILHA) {
-  document.getElementById(id).addEventListener("change", () => gravarEnderecoCandidato());
-}
-
-function gravarEnderecoCandidato() {
-  if (estado.aba !== "candidato") return;
-  const alvo = enderecoCandidato();
-  if (location.hash !== alvo) history.replaceState(null, "", alvo);
+  document.getElementById(id).addEventListener("change", () => roteador.gravar("candidato"));
 }
 
 async function copiarLink(hash, msg) {
@@ -1364,7 +1375,7 @@ async function atualizarMapaBairros(cargo, metrica, numero, legenda) {
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
     nota.textContent = "";
   }
-  gravarEnderecoMapa();
+  roteador.gravar("mapas");
 }
 
 detalheSel.addEventListener("change", async () => {
@@ -1504,7 +1515,7 @@ async function atualizarMapaLocais(cargo, legenda) {
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
     nota.textContent = "";
   }
-  gravarEnderecoMapa();
+  roteador.gravar("mapas");
 }
 
 // Mudanças seguidas (camada, indicador, detalhe local ↔ área) disparam vários pedidos: vale só o último. Contador
@@ -1551,7 +1562,7 @@ async function atualizarMapaAreas(cargo, legenda) {
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
     nota.textContent = "";
   }
-  gravarEnderecoMapa();
+  roteador.gravar("mapas");
 }
 
 function formatoLocais(d) {
@@ -1639,7 +1650,7 @@ async function desenharPontos(mapa, d, legendaEl) {
 // ---------------------------------------------------------------- endereço do mapa
 // #mapas?cargo=3&metrica=pct_candidato&numero=68&momento=2026-09-29T18:30:00&locais=1
 // (sem `momento` = acompanha o mais recente). replaceState: não enche o histórico nem dispara hashchange.
-function enderecoMapa() {
+function parametrosMapa() {
   const q = new URLSearchParams({ cargo: document.getElementById("mapa-cargo").value, metrica: metricaSel.value });
   if (metricaSel.value.endsWith("_candidato") && numeroMapa.value.trim()) q.set("numero", numeroMapa.value.trim());
   const lt = estado.lt;
@@ -1655,13 +1666,7 @@ function enderecoMapa() {
     }
   } else if (lt.momentos.length > 1 && lt.idx < lt.momentos.length - 1) q.set("momento", lt.momentos[lt.idx]);
   if (document.getElementById("mapa-locais").checked) q.set("locais", "1");
-  return `#mapas?${q}`;
-}
-
-function gravarEnderecoMapa() {
-  if (estado.aba !== "mapas") return;
-  const alvo = enderecoMapa();
-  if (location.hash !== alvo) history.replaceState(null, "", alvo);
+  return q;
 }
 
 async function aplicarEnderecoMapa(params) {
@@ -1688,7 +1693,7 @@ async function aplicarEnderecoMapa(params) {
 }
 
 document.getElementById("copiar-link").addEventListener("click",
-  () => copiarLink(enderecoMapa(), document.getElementById("copiar-msg")));
+  () => copiarLink(roteador.endereco("mapas"), document.getElementById("copiar-msg")));
 
 // ---------------------------------------------------------------- linha do tempo do mapa
 estado.lt = { momentos: [], idx: 0, escalas: {}, timer: null };
@@ -1742,7 +1747,7 @@ ltPlay.addEventListener("click", () => {
 
 async function alternarLocais(e) {
   garantirMapa();
-  gravarEnderecoMapa();
+  roteador.gravar("mapas");
   if (!e.target.checked) { if (estado.camadaLocais) estado.mapa.removeLayer(estado.camadaLocais); return; }
   if (!estado.camadaLocais) {
     const geo = await api(`geo/locais.geojson?ano=${estado.ano}`);
@@ -1907,7 +1912,7 @@ async function atualizarComparacao() {
     document.getElementById("comp-fichas").replaceChildren();
     document.getElementById("comp-tabela").replaceChildren();
     legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
-    gravarEnderecoComp();
+    roteador.gravar("comparacao");
     return;
   }
   if (bairros) {
@@ -1928,14 +1933,14 @@ async function atualizarComparacao() {
     ["Diferença", "DIF", true]];
   document.getElementById("comp-tabela").replaceChildren(tabelaOrdenavel(cab, d.municipios, (r, k) =>
     k === "DIF" ? fmtComp(r[k], d.unidade) : k === "NM_MUNICIPIO" ? r[k] : valorAno(r[k]), null,
-  { ordem: estado.compOrdem, aoOrdenar: (o) => { estado.compOrdem = o; gravarEnderecoComp(); } }));
-  gravarEnderecoComp();
+  { ordem: estado.compOrdem, aoOrdenar: (o) => { estado.compOrdem = o; roteador.gravar("comparacao"); } }));
+  roteador.gravar("comparacao");
 }
 
 // ---------------------------------------------------------------- endereço da aba Comparação
 // #comparacao?cargo=7&metrica=partido&partido=PL&ordem=DIF-desc
 // #comparacao?cargo=3&metrica=candidato&numero_a=22&numero_b=22
-function enderecoComp() {
+function parametrosComp() {
   const m = compMetrica.value;
   const q = new URLSearchParams({ cargo: compCargo.value, metrica: m });
   if (m === "partido" && document.getElementById("comp-partido").value) q.set("partido", document.getElementById("comp-partido").value);
@@ -1962,13 +1967,7 @@ function enderecoComp() {
     if (ps.length) q.set("var_partidos", ps.join(","));
     if (document.getElementById("var-ponderar").checked) q.set("var_ponderar", "1");
   }
-  return `#comparacao?${q}`;
-}
-
-function gravarEnderecoComp() {
-  if (estado.aba !== "comparacao") return;
-  const alvo = enderecoComp();
-  if (location.hash !== alvo) history.replaceState(null, "", alvo);
+  return q;
 }
 
 async function aplicarEnderecoComp(params) {
@@ -2002,7 +2001,7 @@ async function aplicarEnderecoComp(params) {
 }
 
 document.getElementById("comp-copiar").addEventListener("click",
-  () => copiarLink(enderecoComp(), document.getElementById("comp-copiar-msg")));
+  () => copiarLink(roteador.endereco("comparacao"), document.getElementById("comp-copiar-msg")));
 
 // ---------------------------------------------------------------- bancadas × eleição anterior (aba Comparação)
 // Endereço: &banc=1&banc_cargo=7 (TODO 15, rodada 45)
@@ -2042,8 +2041,8 @@ async function desenharBancadas() {
     el("h3", { class: "sub" }, `Eleitos em ${b} que não voltaram ao cargo`), el("div", { class: "tabela-rolagem" }, tSa));
 }
 
-bancCaixa.addEventListener("toggle", () => { gravarEnderecoComp(); desenharBancadas(); });
-document.getElementById("banc-cargo").addEventListener("change", () => { gravarEnderecoComp(); desenharBancadas(); });
+bancCaixa.addEventListener("toggle", () => { roteador.gravar("comparacao"); desenharBancadas(); });
+document.getElementById("banc-cargo").addEventListener("change", () => { roteador.gravar("comparacao"); desenharBancadas(); });
 
 // ---------------------------------------------------------------- variação por partido (aba Comparação)
 // Dispersão A × B por município (diagonal = sem mudança), distribuição da variação e estatística
@@ -2081,7 +2080,7 @@ async function prepararVar(escolhidos = null) {
   estado.varCargo = cargo;
   estado.varOrdem = [...marcados];
   caixa.replaceChildren(...ps.map((x) => el("label", {}, el("input", { type: "checkbox", value: x.PARTIDO,
-    checked: marcados.has(x.PARTIDO), onchange: () => { limitarVar(); gravarEnderecoComp(); } }),
+    checked: marcados.has(x.PARTIDO), onchange: () => { limitarVar(); roteador.gravar("comparacao"); } }),
   rotuloEntidade(x, estado.comp.ano_a, estado.comp.ano_b))));
   limitarVar();
 }
@@ -2269,16 +2268,16 @@ function graficoSwing(d, series) {
 function ajustarVar() {
   const bairros = estado.compDetalhe === "bairros";
   varCaixa.hidden = bairros;
-  if (varCaixa.open && !bairros) prepararVar().then(() => { gravarEnderecoComp(); desenharVar(); });
+  if (varCaixa.open && !bairros) prepararVar().then(() => { roteador.gravar("comparacao"); desenharVar(); });
 }
 
 varCaixa.addEventListener("toggle", async () => {
   if (varCaixa.open) await prepararVar();
-  gravarEnderecoComp();
+  roteador.gravar("comparacao");
   if (varCaixa.open) desenharVar();
 });
-document.getElementById("form-var").addEventListener("submit", (e) => { e.preventDefault(); gravarEnderecoComp(); desenharVar(); });
-document.getElementById("var-ponderar").addEventListener("change", () => { gravarEnderecoComp(); desenharVar(); });
+document.getElementById("form-var").addEventListener("submit", (e) => { e.preventDefault(); roteador.gravar("comparacao"); desenharVar(); });
+document.getElementById("var-ponderar").addEventListener("change", () => { roteador.gravar("comparacao"); desenharVar(); });
 compCargo.addEventListener("change", ajustarVar);
 compDetalhe.addEventListener("change", ajustarVar);
 
@@ -2473,9 +2472,9 @@ pf("reg-btn").addEventListener("click", () => {
   analisarPerfil();
 });
 document.getElementById("form-perfil").addEventListener("submit", (e) => { e.preventDefault(); analisarPerfil(); });
-pf("copiar").addEventListener("click", () => copiarLink(`#perfil?${enderecoPerfil()}`, pf("copiar-msg")));
+pf("copiar").addEventListener("click", () => copiarLink(roteador.endereco("perfil"), pf("copiar-msg")));
 
-function enderecoPerfil() {
+function parametrosPerfil() {
   const q = new URLSearchParams({ ano: pf("ano").value, turno: pf("turno").value, cargo: pf("cargo").value });
   if (pf("tipo").value === "partido") q.set("partido", pf("partido").value);
   else q.set("numero", numeroPerfil(""));
@@ -2491,7 +2490,7 @@ function enderecoPerfil() {
   if (pf("ponderar").checked) q.set("ponderar", "true");
   const reg = estado.pf.reg || REG_PADRAO;
   if (reg.join(",") !== REG_PADRAO.join(",")) q.set("reg", reg.join(","));
-  return q.toString();
+  return q;
 }
 
 async function aplicarEnderecoPerfil(params) {
@@ -2535,21 +2534,20 @@ function forca(r) {
 async function analisarPerfil() {
   const msg = pf("msg");
   const limpar = () => ["fichas", "grafico", "correlacoes", "acima", "abaixo", "reg", "reg-fichas"].forEach((k) => pf(k).replaceChildren());
-  const q = enderecoPerfil();
-  history.replaceState(null, "", `#perfil?${q}`);
-  const params = new URLSearchParams(q);
+  roteador.gravar("perfil");
+  const params = parametrosPerfil();
   if (!params.get("numero") && !params.get("partido")) { limpar(); msg.textContent = "Escolha o candidato ou o partido."; return; }
   if (params.get("x") === "voto" && !params.get("x_numero") && !params.get("x_partido")) {
     limpar(); msg.textContent = "Escolha o candidato ou o partido da outra eleição (eixo X)."; return;
   }
   msg.textContent = "calculando… (a 1ª vez de um ano baixa o perfil do eleitorado do TSE)";
-  const base = new URLSearchParams(q); base.delete("x"); for (const k of [...base.keys()]) if (k.startsWith("x_")) base.delete(k);
+  const base = new URLSearchParams(params); base.delete("x"); for (const k of [...base.keys()]) if (k.startsWith("x_")) base.delete(k);
   base.delete("reg");
   const reg = estado.pf.reg || REG_PADRAO;
   let d, c, rg;
   const pedido = ++estado.pf.pedido;  // só a análise mais recente desenha (cliques rápidos não se atropelam)
   try {
-    [d, c, rg] = await Promise.all([api(`api/perfil/dispersao?${q}`), api(`api/perfil/correlacoes?${base}`),
+    [d, c, rg] = await Promise.all([api(`api/perfil/dispersao?${params}`), api(`api/perfil/correlacoes?${base}`),
       reg.length ? api(`api/perfil/regressao?${base}&indicadores=${reg.join(",")}`).catch((err) => ({ erro: err.message }))
         : Promise.resolve(null)]);
   } catch (e) {
@@ -2707,7 +2705,7 @@ function iniciarTransferencia() {
     if (tf.info.tempo_real) tfq("fonte").value = "tempo_real";  // noite do 2º turno: é o que existe
     for (const id of ["fonte", "ano", "cargo"]) tfq(id).addEventListener("change", () => ajustarTf());
     document.getElementById("form-tf").addEventListener("submit", (e) => { e.preventDefault(); calcularTf(); });
-    tfq("link").addEventListener("click", () => copiarLink(enderecoTf(), tfq("link-msg")));
+    tfq("link").addEventListener("click", () => copiarLink(roteador.endereco("transferencia"), tfq("link-msg")));
     await ajustarTf();
   })();
   return tf.pronto;
@@ -2740,7 +2738,6 @@ function parametrosTf() {
   }
   return q;
 }
-const enderecoTf = () => `#transferencia?${parametrosTf()}`;
 
 async function aplicarEnderecoTf(params) {
   await iniciarTransferencia();
@@ -2758,7 +2755,7 @@ async function calcularTf() {
   const out = tfq("resultado");
   if (!tfq("cargo").value) { tfq("msg").textContent = "Nenhum cargo com 2º turno nesta fonte."; return; }
   tfq("msg").textContent = "Calculando… a 1ª vez lê os microdados e roda o bootstrap (10 a 30 s).";
-  history.replaceState(null, "", enderecoTf());
+  roteador.gravar("transferencia");
   const pedido = q.toString();
   tf.ultimo = pedido;
   let r;
@@ -2953,7 +2950,7 @@ function seguindo(cargo, numero) {
   return alertas.interesse.some((i) => i.cargo === Number(cargo) && i.numero === Number(numero));
 }
 
-// o rótulo vem sempre do estado dos alertas: o candidato pode ser redesenhado (ex.: abrirPorHash inicial)
+// o rótulo vem sempre do estado dos alertas: o candidato pode ser redesenhado (ex.: a abertura do endereço na carga)
 // enquanto o pedido ainda está em curso, e o botão novo precisa refletir a resposta
 function rotularAcompanhar() {
   const b = document.getElementById("botao-acompanhar");
@@ -2976,7 +2973,7 @@ function botaoAcompanhar(cargo, numero) {
 
 document.getElementById("destaque-limpar").addEventListener("click", () => definirDestaque([]));
 document.getElementById("destaque-link").addEventListener("click", () =>
-  copiarLink(enderecoPainel(), document.getElementById("destaque-link-msg")));
+  copiarLink(roteador.endereco("painel"), document.getElementById("destaque-link-msg")));
 
 // Ponto de acesso dos testes e2e: no script clássico estes nomes eram globais; no módulo, não.
 window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
@@ -2997,38 +2994,17 @@ window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizar
   repetir(atualizarAlertas, ALERTAS_MS).agora();  // continua com a aba escondida: é quando o som importa
 })();
 
-function abrirPorHash() {
-  const [caminho, params] = location.hash.replace(/^#/, "").split("?");
-  const [aba, cargo, numero, mun] = caminho.split("/");
-  if (aba === "mapas" && params) { aplicarEnderecoMapa(params).then(() => mostrarAba("mapas")); return; }
-  if (aba === "comparacao" && params) { aplicarEnderecoComp(params); return; }
-  if (aba === "perfil" && params) { aplicarEnderecoPerfil(params); return; }
-  if (aba === "painel" && params) {
-    const q = new URLSearchParams(params);
-    if (q.get("destacar") !== null) definirDestaque(q.get("destacar").split(","), true);
-    mostrarAba("painel");
-    if (q.get("tv") === "1") modoTv(true);
-    return;
-  }
-  if (aba === "transferencia" && params) { mostrarAba("transferencia"); aplicarEnderecoTf(params); return; }
-  if (aba === "candidato" && params) {
-    const q = new URLSearchParams(params);
-    if (q.get("cargo") && q.get("numero")) {
-      // a consulta preenche o nº da planilha com o do candidato; o endereço vem depois e prevalece
-      consultarCandidato(q.get("cargo"), Number(q.get("numero")),
-        q.get("municipio") ? Number(q.get("municipio")) : null, q.get("ordem"))
-        .then(() => { aplicarPlanilha(q); aplicarHistorico(q); gravarEnderecoCandidato(); });
-    } else {
-      mostrarAba("candidato");
-      aplicarPlanilha(q);
-      aplicarHistorico(q);
-    }
-    return;
-  }
-  if (aba === "candidato" && cargo && numero) consultarCandidato(cargo, Number(numero), mun ? Number(mun) : null);
-  else if (["painel", "candidato", "mapas", "comparacao", "perfil", "transferencia"].includes(aba)) mostrarAba(aba);
-}
-window.addEventListener("hashchange", abrirPorHash);
+// ---------------------------------------------------------------- endereços das abas (tabela única)
+// escrever: estado da aba → parâmetros (gravar e "Copiar link"); aplicar: parâmetros → estado (abre a aba)
+roteador
+  .registrar("painel", { escrever: parametrosPainel, aplicar: aplicarEnderecoPainel, enderecoAoMostrar: true })
+  .registrar("candidato", { escrever: parametrosCandidato, aplicar: aplicarEnderecoCandidato })
+  .registrar("mapas", { escrever: parametrosMapa, aplicar: (q) => aplicarEnderecoMapa(q).then(() => mostrarAba("mapas")) })
+  .registrar("comparacao", { escrever: parametrosComp, aplicar: aplicarEnderecoComp })
+  .registrar("perfil", { escrever: parametrosPerfil, aplicar: aplicarEnderecoPerfil })
+  .registrar("transferencia", {
+    escrever: parametrosTf, aplicar: (q) => { mostrarAba("transferencia"); return aplicarEnderecoTf(q); } });
+window.addEventListener("hashchange", () => roteador.abrir());
 
 // ---------------------------------------------------------------- seletor de UF (site com várias UFs)
 // O site de várias UFs monta cada uma em /<uf>/ e lista as disponíveis em /ufs.json; no site de uma UF
@@ -3047,5 +3023,5 @@ iniciarSeletorUf();
 
 // o ciclo de 60 s nunca roda duas vezes ao mesmo tempo; com a aba escondida espera a volta
 const ciclo = repetir(tick, REFRESH_MS, { pausarOculto: true });
-iniciarComparacao().then(() => ciclo.agora()).then(abrirPorHash);
+iniciarComparacao().then(() => ciclo.agora()).then(() => roteador.abrir());
 preencherLista(document.getElementById("cand-cargo").value, "cand-lista");

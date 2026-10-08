@@ -351,7 +351,8 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
 
 - **Andamento:** fase 0 (andaime) feita no ramo `frontend-refatoracao`, na
   [RODADA_60](RODADA_60_2026-10-07_frontend_fase0_andaime.md); fase 1 (núcleo) na
-  [RODADA_61](RODADA_61_2026-10-07_frontend_fase1_nucleo.md). Próxima: fase 2 (roteador).
+  [RODADA_61](RODADA_61_2026-10-07_frontend_fase1_nucleo.md); fase 2 (roteador) na
+  [RODADA_62](RODADA_62_2026-10-07_frontend_fase2_roteador.md). Próxima: fase 3 (componentes).
 
 - **Proposta completa:** [PROPOSTA_REFATORACAO_FRONTEND.md](PROPOSTA_REFATORACAO_FRONTEND.md). Traz o diagnóstico com
   números, a arquitetura por módulos, o design system, a robustez, as fases e os riscos.
