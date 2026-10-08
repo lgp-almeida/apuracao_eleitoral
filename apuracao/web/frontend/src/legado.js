@@ -7,29 +7,34 @@ import { dicaFlutuante } from "./componentes/dica.ts";
 import { quebrasQuantis } from "./componentes/escalas.ts";
 import { salvarBlob } from "./componentes/exportar.ts";
 import { graficoLinhas } from "./componentes/grafico/linhas.ts";
-import { graficoSwing, graficoVariacao } from "./componentes/grafico/variacao.ts";
 import { criarCamadas } from "./componentes/mapa/camadas.ts";
 import { criarMapa } from "./componentes/mapa/criar.ts";
 import { copiarLink } from "./componentes/link.ts";
+import { criarAbaCandidato } from "./abas/candidato/index.ts";
+import { criarAbaComparacao } from "./abas/comparacao/index.ts";
+import { criarCandidatos } from "./dados/candidatos.ts";
 import { criarAbaPerfil } from "./abas/perfil/index.ts";
 import { criarAbaTransferencia } from "./abas/transferencia/index.ts";
 import { NOMES_CARGO } from "./core/cargos.ts";
-import { ficha, tabelaOrdenavel } from "./componentes/tabela.ts";
+import { tabelaOrdenavel } from "./componentes/tabela.ts";
 import { cor, el } from "./core/dom.ts";
-import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, hora, int, pct } from "./core/formatos.ts";
+import { fmtFreq, fmtInt, fmtPct, fmtVariacao, hora, int, pct } from "./core/formatos.ts";
 import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
 import { Roteador } from "./core/roteador.ts";
 import { lerEndereco } from "./core/rotas.ts";
 
 const REFRESH_MS = 60_000;
-const estado = { aba: "painel", uf: "", ano: 2026, candidatosCache: {}, geo: null, mapa: null, mini: null,
+const estado = { aba: "painel", uf: "", ano: 2026, geo: null, mapa: null,
   destacar: new Set(), destacarDefinido: false, cadAbertos: new Set(), painel: null };
 // endereço de cada aba: tabela no fim do arquivo (roteador.registrar)
 const roteador = new Roteador(mostrarAba, () => estado.aba);
 // abas já migradas para abas/<aba>/ (registradas no fim do arquivo)
+const candidatos = criarCandidatos();  // listas de candidatos por cargo: abas Candidato e Mapas
 const modulos = new Map();
-const contexto = { uf: () => estado.uf, mostrarAba, gravarEndereco: (a) => roteador.gravar(a),
-  endereco: (a) => roteador.endereco(a) };
+const contexto = { uf: () => estado.uf, turno: () => estado.turno || 1, mostrarAba,
+  gravarEndereco: (a) => roteador.gravar(a), endereco: (a) => roteador.endereco(a),
+  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas },
+  registrarMapa: (nome, mapa) => { estado[nome] = mapa; } };
 
 // ---------------------------------------------------------------- abas
 document.querySelectorAll(".abas button").forEach((b) =>
@@ -43,10 +48,6 @@ function mostrarAba(aba) {
   if (aba === "mapas") {
     garantirMapa();
     carregarMomentos().then(atualizarMapa);
-  }
-  if (aba === "comparacao") {
-    if (!estado.compMapa) estado.compMapa = criarMapa(document.getElementById("comp-mapa"));
-    if (!estado.compFeito) { estado.compFeito = true; atualizarComparacao(); }
   }
   modulos.get(aba)?.aoMostrar?.();
 }
@@ -311,8 +312,6 @@ function blocoProjecao(p) {
   ];
 }
 
-const STATUS_CAD = { "consolidado": "Consolidado", "em disputa (dentro)": "Em disputa — hoje dentro",
-  "em disputa (fora)": "Em disputa — hoje fora" };
 
 // cadeiras sobre os votos PROJETADOS (a partir de 30% apurado): faixa de cadeiras e eleitos consolidados × em disputa
 // agremiações com algum escolhido: a própria (partido ou federação) ou um partido da federação
@@ -651,254 +650,10 @@ function linhaCandidato(pos, x, maxPct, cargo) {
     el("span", { class: "sit" }, (x.SITUACAO || "") + destinacao(x)));
 }
 
-// ---------------------------------------------------------------- candidatos (busca)
-async function listaCandidatos(cargo) {
-  if (!estado.candidatosCache[cargo]) estado.candidatosCache[cargo] = await api(`api/candidatos?cargo=${cargo}`);
-  return estado.candidatosCache[cargo];
-}
-
-async function preencherLista(cargo, datalistId) {
-  try {
-    const lista = await listaCandidatos(cargo);
-    document.getElementById(datalistId).replaceChildren(
-      ...lista.map((c) => el("option", { value: c.NUMERO }, `${c.NOME_URNA} (${c.PARTIDO})`)));
-  } catch (_) { /* sem dados ainda */ }
-}
-
-async function resolverNumero(cargo, texto) {
-  const t = texto.trim();
-  if (/^\d+$/.test(t)) return Number(t);
-  const alvo = t.toUpperCase();
-  const achado = (await listaCandidatos(cargo)).find((c) => (c.NOME_URNA || "").toUpperCase().includes(alvo));
-  return achado ? achado.NUMERO : null;
-}
-
-// ---------------------------------------------------------------- aba candidato
-const formCand = document.getElementById("form-candidato");
-document.getElementById("cand-cargo").addEventListener("change", (e) => {
-  estado.candidatosCache = {};
-  preencherLista(e.target.value, "cand-lista");
-});
-formCand.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const cargo = document.getElementById("cand-cargo").value;
-  const numero = await resolverNumero(cargo, document.getElementById("cand-numero").value);
-  const out = document.getElementById("cand-resultado");
-  if (numero === null) { out.replaceChildren(el("p", { class: "aviso" }, "Candidato não encontrado.")); return; }
-  consultarCandidato(cargo, numero);
-});
-
-function textoCadeira(k) {
-  if (k.projecao) {
-    const pr = k.projecao;
-    return `${STATUS_CAD[pr.status] || "Fora da disputa"} · eleito em ${fmtFreq(pr.freq)} das simulações · ` +
-      `${int(pr.votos_proj)} votos projetados (${pct(pr.pct_apurado)} apurado)`;
-  }
-  if (k.situacao.startsWith("Eleito")) {
-    return `${k.situacao}${k.margem !== null ? ` · ${int(k.margem)} votos à frente do 1º suplente de ${k.agremiacao}` : ""}`;
-  }
-  if (k.situacao === "Suplente") {
-    return k.margem !== null
-      ? `Suplente (${k.ordem}º de ${k.agremiacao}) · faltam ${int(k.margem)} votos para passar o último eleito da agremiação`
-      : `Suplente · ${k.agremiacao} sem cadeira na projeção`;
-  }
-  return `${k.situacao} (votos não válidos para a vaga)`;
-}
-
-async function consultarCandidato(cargo, numero, municipio = null, ordem = null) {
-  mostrarAba("candidato");
-  if (estado.cand && (estado.cand.cargo !== String(cargo) || estado.cand.numero !== String(numero))) {
-    for (const [, id] of CAMPOS_HISTORICO) document.getElementById(id).value = "";  // indicação era do anterior
-  }
-  estado.cand = { cargo: String(cargo), numero: String(numero), municipio: municipio ?? null, ordem };
-  carregarHistorico();
-  document.getElementById("cand-cargo").value = String(cargo);
-  document.getElementById("cand-numero").value = String(numero);
-  document.getElementById("pl-numero").value = String(numero);
-  const out = document.getElementById("cand-resultado");
-  let d;
-  try { d = await api(`api/candidato?cargo=${cargo}&numero=${numero}`); } catch (e) {
-    out.replaceChildren(el("p", { class: "aviso" }, e.message)); return;
-  }
-  const c = d.candidato;
-  const fichas = el("div", { class: "fichas" },
-    ficha("Candidato", `${c.NUMERO} — ${c.NOME_URNA}`), ficha("Partido", `${c.PARTIDO}${c.FEDERACAO ? " · " + c.FEDERACAO : ""}`),
-    ficha(`Votos (${estado.uf})`, int(c.VOTOS)), ficha("% dos válidos", pct(c.PCT_VALIDOS)),
-    ficha("Posição", `${d.posicao_uf}º de ${int(d.n_candidatos_uf)}`), ficha("Situação", c.SITUACAO || "—"),
-    c.DESTINACAO && c.DESTINACAO !== "Válido" ? ficha("Destinação dos votos", c.DESTINACAO) : null,
-    d.brasil ? ficha("Votos (Brasil)", `${int(d.brasil.VOTOS)} · ${pct(d.brasil.PCT_VALIDOS)}`) : null,
-    c.VICES ? ficha("Vice / suplentes", c.VICES) : null,
-    d.cadeira ? ficha("Projeção de cadeira", textoCadeira(d.cadeira)) : null);
-  const cab = [["Município", "NM_MUNICIPIO"], ["Votos", "VOTOS", true], ["% válidos", "PCT_VALIDOS", true],
-    ["Posição", "POSICAO_MUN", true], ["Seções totalizadas", "PCT_SECOES_TOTALIZADAS", true]];
-  const tabela = tabelaOrdenavel(cab, d.municipios, (r, k) =>
-    k === "VOTOS" ? int(r[k]) : k.startsWith("PCT") ? pct(r[k]) : k === "POSICAO_MUN" ? `${r[k]}º` : r[k],
-  (r) => mostrarEvolucao(cargo, numero, r.CD_MUNICIPIO),
-  { ordem, aoOrdenar: (o) => { estado.cand.ordem = o; roteador.gravar("candidato"); } });
-  const miniDiv = el("div", { id: "mini-mapa", class: "mapa mini" });
-  const legenda = el("aside", { class: "legenda" });
-  const selMun = el("select", { id: "evol-mun", onchange: (e) => mostrarEvolucao(cargo, numero, Number(e.target.value)) },
-    d.municipios.map((mu) => el("option", { value: mu.CD_MUNICIPIO }, mu.NM_MUNICIPIO)));
-  estado.nomesMun = Object.fromEntries(d.municipios.map((mu) => [mu.CD_MUNICIPIO, mu.NM_MUNICIPIO]));
-  const msgLink = el("span", { "aria-live": "polite" });
-  const evol = el("section", { class: "caixa" },
-    el("p", { class: "nota" }, el("button", { type: "button", class: "link",
-      onclick: () => copiarLink(roteador.endereco("candidato"), msgLink) }, "Copiar link desta consulta"), msgLink),
-    el("h3", {}, "Evolução na apuração — % dos válidos do candidato no município e no estado"),
-    el("div", { class: "filtros" }, el("label", {}, "Município (ou clique numa linha da tabela)", selMun)),
-    el("div", { id: "evol-grafico" }));
-  out.replaceChildren(...[fichas, botaoAcompanhar(cargo, c.NUMERO), evol, el("div", { class: "cand-duplo" },
-    el("div", { class: "tabela-rolagem" }, tabela), el("div", {}, miniDiv, legenda))].filter(Boolean));
-  if (d.municipios.length) mostrarEvolucao(cargo, numero, municipio ?? d.municipios[0].CD_MUNICIPIO);
-  if (estado.mini) { estado.mini.remove(); estado.mini = null; }
-  estado.mini = criarMapa(miniDiv);
-  const itens = {};
-  d.municipios.forEach((m) => { itens[m.CD_MUNICIPIO_IBGE] = { valor: m.PCT_VALIDOS, municipio: m.NM_MUNICIPIO }; });
-  await desenharMapa(estado.mini, { tipo: "sequencial", rotulo: `% dos válidos — ${c.NOME_URNA}`, itens }, legenda, "%");
-}
-
-async function mostrarEvolucao(cargo, numero, municipio) {
-  const alvo = document.getElementById("evol-grafico");
-  if (!alvo) return;
-  document.getElementById("evol-mun").value = String(municipio);
-  if (estado.cand) { estado.cand.municipio = municipio; roteador.gravar("candidato"); }
-  let d;
-  try { d = await api(`api/candidato/serie?cargo=${cargo}&numero=${numero}&municipio=${municipio}`); } catch (e) {
-    alvo.replaceChildren(el("p", { class: "nota" }, `Erro: ${e.message}`)); return;
-  }
-  const nomeDe = (s) => (s.abrangencia === "mun" ? estado.nomesMun[s.municipio] || `município ${s.municipio}`
-    : s.abrangencia === "br" ? "Brasil" : estado.uf);
-  const com = d.series.filter((s) => s.pontos.length);
-  const maxPts = Math.max(0, ...com.map((s) => s.pontos.length));
-  if (maxPts < 2) {
-    alvo.replaceChildren(el("p", { class: "nota" },
-      `A evolução aparece a partir da 2ª totalização (${maxPts} registrada${maxPts === 1 ? "" : "s"} até agora).`));
-    return;
-  }
-  const t = (iso) => new Date(iso).getTime();
-  const todosX = com.flatMap((s) => s.pontos.map((p) => t(p.dt)));
-  const xMin = Math.min(...todosX), xMax = Math.max(...todosX);
-  const hm = (ms) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  alvo.replaceChildren(graficoLinhas({
-    xMin, xMax, xTicks: [0, 1, 2, 3].map((i) => xMin + ((xMax - xMin) * i) / 3), xFmt: hm,
-    series: com.map((s) => ({ nome: nomeDe(s), rotulo: nomeDe(s), xs: s.pontos.map((p) => t(p.dt)),
-      valores: s.pontos.map((p) => p.pct), pontos: s.pontos })),
-    dica: (k, xv) => `por volta de ${hm(xv)}`,
-    dicaSerie: (s, j) => `${s.nome}: ${pct(s.valores[j])} · ${int(s.pontos[j].votos)} votos · ` +
-      `${pct(s.pontos[j].pct_secoes)} das seções (${hm(s.xs[j])})`,
-  }));
-}
-
-
-// ---------------------------------------------------------------- resultado por município × eleição anterior
-const CAMPOS_HISTORICO = [["hist_cargo", "hist-cargo"], ["hist_numero", "hist-numero"]];
-const CRITERIO_HIST = {
-  "nome completo": "mesmo nome civil completo", "indicado": "indicado à mão",
-  "ambíguo": "há homônimos — escolha abaixo", "não concorreu": "não encontrado pelo nome completo",
-  "sem referência": "site sem eleição de referência (--comparar-com)",
-};
-
-function paramsHistorico() {
-  const c = estado.cand;
-  if (!c) return null;
-  const q = new URLSearchParams({ cargo: c.cargo, numero: c.numero });
-  const nr = document.getElementById("hist-numero").value.trim();
-  const cr = document.getElementById("hist-cargo").value;
-  if (nr) { q.set("numero_ref", nr); if (cr) q.set("cargo_ref", cr); }
-  return q;
-}
-
-function descCandidato(c) {
-  return `${c.NUMERO} — ${c.NOME_URNA} · ${c.PARTIDO}${c.FEDERACAO ? " · " + c.FEDERACAO : ""} · ${c.DS_CARGO || c.CARGO}`;
-}
-
-async function carregarHistorico() {
-  const out = document.getElementById("hist-resultado");
-  if (!document.getElementById("caixa-historico").open) return;
-  const q = paramsHistorico();
-  if (!q) { out.replaceChildren(el("p", { class: "nota" }, "Consulte um candidato acima.")); return; }
-  if (estado.histEmCurso === q.toString()) return;  // o mesmo pedido já está a caminho (navegação dispara 2×)
-  const pedido = (estado.histPedido = estado.histEmCurso = q.toString());
-  // recarga do mesmo pedido: o que está na tela fica até chegar o novo (sem piscar "Carregando…")
-  if (estado.histMostrado !== pedido) out.replaceChildren(el("p", { class: "nota" }, "Carregando…"));
-  let d;
-  try { d = await api(`api/candidato/historico?${q}`); } catch (e) {
-    if (estado.histPedido === pedido) {
-      estado.histEmCurso = estado.histMostrado = null;
-      out.replaceChildren(el("p", { class: "aviso" }, e.message));
-    }
-    return;
-  }
-  if (estado.histPedido !== pedido) return;  // outro candidato pedido enquanto este carregava
-  estado.histEmCurso = null;
-  estado.histMostrado = pedido;
-  const [a, b] = d.sufixos, anoRef = d.ano_ref ?? "anterior";
-  const uf = d.linhas.find((r) => r.ABRANGENCIA === "uf") || {};
-  const at = d.atual, an = d.anterior;
-  const fichas = el("div", { class: "fichas" },
-    ficha(`Em ${d.ano}`, descCandidato(at)), ficha(`Votos ${d.ano} (${estado.uf})`, `${int(at.VOTOS)} · ${pct(at.PCT_VALIDOS)}`),
-    ficha(`Em ${anoRef}`, an ? descCandidato(an) : "—"),
-    an ? ficha(`Votos ${anoRef} (${estado.uf})`, `${int(an.VOTOS)} · ${pct(an.PCT_VALIDOS)} · ${an.SITUACAO || "—"}`) : null,
-    an ? ficha("Variação no estado", `${fmtComp(uf.VAR_VOTOS_PCT, "var_pct")} votos · ` +
-      `${fmtComp(uf.VAR_PCT_VALIDOS_PP, "pp")}`) : null,
-    ficha("Identificação", CRITERIO_HIST[d.criterio] || d.criterio));
-  const notas = d.notas.map((n) => el("p", { class: "nota" }, n));
-  const opcoes = d.opcoes.length ? el("ul", {}, d.opcoes.map((o) => el("li", {}, `${descCandidato(o)} (${int(o.VOTOS)} votos) `,
-    el("button", { type: "button", class: "link", onclick: () => {
-      document.getElementById("hist-cargo").value = String(o.CARGO);
-      document.getElementById("hist-numero").value = String(o.NUMERO);
-      roteador.gravar("candidato"); carregarHistorico();
-    } }, "usar este")))) : null;
-  const salvar = el("a", { class: "botao-salvar", href: `api/candidato/historico/planilha?${q}`, download: "" },
-    "Salvar planilha (.xlsx)");
-  const cab = [["Município", "NM_MUNICIPIO"], [`Votos ${a}`, `VOTOS_${a}`, true], [`% válidos ${a}`, `PCT_VALIDOS_${a}`, true],
-    [`Posição ${a}`, `POSICAO_${a}`, true], [`Votos ${b}`, `VOTOS_${b}`, true], [`% válidos ${b}`, `PCT_VALIDOS_${b}`, true],
-    [`Posição ${b}`, `POSICAO_${b}`, true], ["Variação dos votos", "VAR_VOTOS_PCT", true],
-    ["Variação % válidos", "VAR_PCT_VALIDOS_PP", true], ["Seções totalizadas", "PCT_SECOES_TOTALIZADAS", true]];
-  const tabela = tabelaOrdenavel(cab, d.linhas.filter((r) => r.ABRANGENCIA === "mun"), (r, k) => {
-    const x = r[k];
-    if (k === "VAR_VOTOS_PCT") return fmtComp(x, "var_pct");
-    if (k === "VAR_PCT_VALIDOS_PP") return fmtComp(x, "pp");
-    if (k.startsWith("VOTOS_")) return int(x);
-    if (k.startsWith("POSICAO_")) return x === null || x === undefined ? "—" : `${x}º`;
-    if (k.startsWith("PCT")) return pct(x);
-    return x;
-  });
-  out.replaceChildren(...[fichas, ...notas, opcoes, salvar, el("div", { class: "tabela-rolagem" }, tabela)].filter(Boolean));
-}
-
-function aplicarHistorico(q) {
-  const caixa = document.getElementById("caixa-historico");
-  for (const [k, id] of CAMPOS_HISTORICO) document.getElementById(id).value = q.get(k) ?? "";
-  if (caixa.open !== (q.get("hist") === "1")) caixa.open = q.get("hist") === "1";  // o "toggle" carrega
-  else carregarHistorico();
-}
-
-document.getElementById("form-historico").addEventListener("submit", (e) => {
-  e.preventDefault(); roteador.gravar("candidato"); carregarHistorico();
-});
-document.getElementById("caixa-historico").addEventListener("toggle", () => { roteador.gravar("candidato"); carregarHistorico(); });
-
-// ---------------------------------------------------------------- planilha histórica
-document.getElementById("form-planilha").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const q = new URLSearchParams({
-    ano: document.getElementById("pl-ano").value, cargo: document.getElementById("pl-cargo").value,
-    numero: document.getElementById("pl-numero").value,
-  });
-  const mun = document.getElementById("pl-municipio").value.trim();
-  const cmp = document.getElementById("pl-comparar").value.trim();
-  if (mun) q.set("municipio", mun);
-  if (cmp) q.set("comparar_com", cmp);
-  const msg = document.getElementById("pl-msg");
-  msg.textContent = "Gerando planilha…";
-  try {
-    const { blob } = await baixar(`api/planilha?${q}`, "planilha.xlsx");
-    const a = el("a", { href: URL.createObjectURL(blob), download: `planilha_${q.get("numero")}_${q.get("ano")}.xlsx` });
-    document.body.append(a); a.click(); a.remove();
-    msg.textContent = "Planilha gerada.";
-  } catch (err) { msg.textContent = `Erro: ${err.message}`; }
-});
+// ---------------------------------------------------------------- candidatos (abas/candidato; lista em dados/candidatos.ts)
+const preencherLista = (cargo, datalistId) => candidatos.preencher(cargo, document.getElementById(datalistId));
+const resolverNumero = (cargo, texto) => candidatos.resolver(cargo, texto);
+const consultarCandidato = (...args) => abaCandidato.consultar(...args);
 
 // ---------------------------------------------------------------- mapas
 function garantirMapa() {
@@ -910,9 +665,9 @@ async function malha() {
   return estado.geo;
 }
 
-// polígonos, pontos e comparação: componentes/mapa/camadas.ts (malhas com o cache desta página)
-const { desenharMapa, desenharPontos, desenharDivergente } = criarCamadas({
-  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas }, fmtDif: fmtComp });
+// polígonos e pontos: componentes/mapa/camadas.ts (malhas com o cache desta página)
+const { desenharMapa, desenharPontos } = criarCamadas({
+  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas }, fmtDif: fmtVariacao });
 
 const metricaSel = document.getElementById("mapa-metrica");
 const numeroMapa = document.getElementById("mapa-numero");
@@ -921,7 +676,7 @@ metricaSel.addEventListener("change", () => {
   if (!numeroMapa.disabled) preencherLista(document.getElementById("mapa-cargo").value, "mapa-lista");
 });
 document.getElementById("mapa-cargo").addEventListener("change", (e) => {
-  estado.candidatosCache = {};
+  candidatos.limpar();
   estado.lt.idx = Number.MAX_SAFE_INTEGER;  // novo cargo: começa no momento mais recente
   carregarMomentos();
   if (!numeroMapa.disabled) preencherLista(e.target.value, "mapa-lista");
@@ -958,66 +713,6 @@ async function atualizarMapa() {
     if (!noPassado) lt.escalas[chaveEscala] = esc;
     roteador.gravar("mapas");
   } catch (e) { legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`)); }
-}
-
-// ---------------------------------------------------------------- endereço da aba Candidato
-// #candidato?cargo=7&numero=13713&municipio=60011&ordem=VOTOS-desc (formato antigo /cargo/número/município aceito)
-// campos da planilha histórica no endereço (prefixo pl_), só com o bloco aberto (pl=1); idem o resultado
-// por município × eleição anterior (hist=1, hist_cargo, hist_numero)
-const CAMPOS_PLANILHA = [["pl_ano", "pl-ano"], ["pl_cargo", "pl-cargo"], ["pl_numero", "pl-numero"],
-  ["pl_municipio", "pl-municipio"], ["pl_comparar", "pl-comparar"]];
-
-function parametrosCandidato() {
-  const c = estado.cand;
-  const q = new URLSearchParams(c ? { cargo: c.cargo, numero: c.numero } : {});
-  if (c && c.municipio !== null && c.municipio !== undefined) q.set("municipio", String(c.municipio));
-  if (c && c.ordem) q.set("ordem", c.ordem);
-  if (document.getElementById("caixa-historico").open) {
-    q.set("hist", "1");
-    for (const [k, id] of CAMPOS_HISTORICO) {
-      const v = document.getElementById(id).value.trim();
-      if (v) q.set(k, v);
-    }
-  }
-  if (document.getElementById("caixa-planilha").open) {
-    q.set("pl", "1");
-    for (const [k, id] of CAMPOS_PLANILHA) {
-      const v = document.getElementById(id).value.trim();
-      if (v) q.set(k, v);
-    }
-  }
-  return q;
-}
-
-function aplicarEnderecoCandidato(q) {
-  if (q.get("cargo") && q.get("numero")) {
-    // a consulta preenche o nº da planilha com o do candidato; o endereço vem depois e prevalece
-    consultarCandidato(q.get("cargo"), Number(q.get("numero")),
-      q.get("municipio") ? Number(q.get("municipio")) : null, q.get("ordem"))
-      .then(() => { aplicarPlanilha(q); aplicarHistorico(q); roteador.gravar("candidato"); });
-  } else {
-    mostrarAba("candidato");
-    aplicarPlanilha(q);
-    aplicarHistorico(q);
-  }
-}
-
-function aplicarPlanilha(q) {
-  const caixa = document.getElementById("caixa-planilha");
-  caixa.open = q.get("pl") === "1";
-  if (!caixa.open) return;
-  for (const [k, id] of CAMPOS_PLANILHA) {
-    const campo = document.getElementById(id), v = q.get(k);
-    if (v === null) continue;
-    if (campo.tagName === "SELECT" && ![...campo.options].some((o) => o.value === v)) continue;  // valor desconhecido
-    campo.value = v;
-  }
-}
-
-// mudanças no formulário da planilha e abrir/fechar o bloco também vão para o endereço
-document.getElementById("caixa-planilha").addEventListener("toggle", () => roteador.gravar("candidato"));
-for (const [, id] of CAMPOS_PLANILHA) {
-  document.getElementById(id).addEventListener("change", () => roteador.gravar("candidato"));
 }
 
 // ---------------------------------------------------------------- mapa por bairro (malha do IBGE + microdados)
@@ -1420,379 +1115,6 @@ async function tick() {
     if (noFim) await atualizarMapa();  // quem está vendo um momento passado não é atropelado
   }
 }
-// ---------------------------------------------------------------- comparação entre eleições
-const compMetrica = document.getElementById("comp-metrica");
-const compCargo = document.getElementById("comp-cargo");
-
-async function iniciarComparacao() {
-  let info;
-  try { info = await api("api/comparacao/info"); } catch (_) { return; }
-  if (!info.disponivel) return;
-  estado.comp = info;
-  document.getElementById("botao-comparacao").hidden = false;
-  document.getElementById("botao-comparacao").textContent = `Comparação ${info.ano_a} × ${info.ano_b}`;
-  document.getElementById("comp-rot-a").textContent = `Nº em ${info.ano_a}`;
-  document.getElementById("comp-rot-b").textContent = `Nº em ${info.ano_b}`;
-  compCargo.replaceChildren(...info.cargos.filter((c) => NOMES_CARGO[c]).map((c) =>
-    el("option", { value: c, selected: c === 3 }, NOMES_CARGO[c])));
-}
-
-compMetrica.addEventListener("change", ajustarCamposComp);
-compCargo.addEventListener("change", ajustarCamposComp);
-document.getElementById("form-comp").addEventListener("submit", (e) => { e.preventDefault(); atualizarComparacao(); });
-
-async function ajustarCamposComp() {
-  const m = compMetrica.value;
-  document.getElementById("comp-l-partido").hidden = m !== "partido";
-  document.getElementById("comp-l-na").hidden = document.getElementById("comp-l-nb").hidden = m !== "candidato";
-  const bairros = estado.compDetalhe === "bairros";
-  const [a, b] = bairros ? [compAnoA.value, compAnoB.value] : [estado.comp.ano_a, estado.comp.ano_b];
-  document.getElementById("comp-rot-a").textContent = `Nº em ${a}`;
-  document.getElementById("comp-rot-b").textContent = `Nº em ${b}`;
-  if (m !== "partido") return;
-  const sel = document.getElementById("comp-partido");
-  if (!bairros) {
-    const ps = await api(`api/comparacao/partidos?cargo=${compCargo.value}`);
-    sel.replaceChildren(...ps.map((p) => el("option", { value: p.PARTIDO }, rotuloEntidade(p, a, b))));
-    return;
-  }
-  // bairros: partido pelo NÚMERO do ano mais recente, ligado pela entidade (o 14 de 2026 não é o de 2022)
-  const ps = await api(`api/comparacao/bairros/partidos?ano_a=${a}&cargo_a=${compCargoA.value}` +
-    `&ano_b=${b}&cargo_b=${compCargoB.value}&turno=${estado.turno || 1}`);
-  sel.replaceChildren(...ps.map((p) => {
-    const sigla = p.SIGLA_A && p.SIGLA_B && p.SIGLA_A !== p.SIGLA_B ? `${p.SIGLA_B} (${p.SIGLA_A} em ${a})` : (p.SIGLA_A || p.SIGLA_B || "");
-    return el("option", { value: p.PARTIDO },
-      `${p.PARTIDO} ${sigla}${p.NOS_DOIS ? "" : p.VOTOS_A ? ` (só ${a})` : ` (só ${b})`}`);
-  }));
-}
-
-// ---------------------------------------------------------------- comparação por bairro
-const compDetalhe = document.getElementById("comp-detalhe");
-const compAnoA = document.getElementById("comp-ano-a"), compAnoB = document.getElementById("comp-ano-b");
-const compCargoA = document.getElementById("comp-cargo-a"), compCargoB = document.getElementById("comp-cargo-b");
-const METRICAS_COMP_BAIRRO = ["abstencao", "comparecimento", "brancos_nulos", "brancos", "nulos", "eleitorado", "partido",
-  "candidato"];
-estado.compDetalhe = "municipios";
-
-function cargosDoAno(sel, ano, preferido = null) {
-  const info = estado.compBairrosInfo;
-  const cs = info.anos_votos[ano] || [1, 3, 5, 6, 7];  // ano sem votos (ex.: 2026): só "eleitorado" terá dado
-  const alvo = String(preferido ?? sel.value);
-  sel.replaceChildren(...cs.map((c) => el("option", { value: c }, info.cargos[c])));
-  sel.value = cs.map(String).includes(alvo) ? alvo : String(cs[0]);
-}
-
-async function prepararCompDetalhe(pref = {}) {
-  const bairros = compDetalhe.value === "bairros";
-  estado.compDetalhe = compDetalhe.value;
-  document.getElementById("comp-l-cargo").hidden = bairros;
-  document.querySelectorAll(".comp-bairro").forEach((e) => { e.hidden = !bairros; });
-  document.getElementById("comp-bairros-nota").hidden = !bairros;
-  for (const op of compMetrica.options) op.disabled = bairros && !METRICAS_COMP_BAIRRO.includes(op.value);
-  if (compMetrica.selectedOptions[0]?.disabled) compMetrica.value = "brancos_nulos";
-  if (bairros) {
-    if (!estado.compBairrosInfo) estado.compBairrosInfo = await api("api/comparacao/bairros/info");
-    const info = estado.compBairrosInfo;
-    const anos = [...new Set([...Object.keys(info.anos_votos).map(Number), ...info.anos_cadastro, estado.comp.ano_b])]
-      .sort((x, y) => x - y);
-    const preencher = (sel, padrao, preferido) => {
-      const alvo = String(preferido ?? sel.value ?? "");
-      sel.replaceChildren(...anos.map((a) => el("option", { value: a }, String(a))));
-      sel.value = anos.map(String).includes(alvo) ? alvo : String(padrao);
-    };
-    preencher(compAnoA, anos.includes(estado.comp.ano_a) ? estado.comp.ano_a : anos[0], pref.ano_a);
-    preencher(compAnoB, anos.includes(estado.comp.ano_b) ? estado.comp.ano_b : anos.at(-1), pref.ano_b);
-    cargosDoAno(compCargoA, compAnoA.value, pref.cargo_a ?? compCargo.value);
-    cargosDoAno(compCargoB, compAnoB.value, pref.cargo_b ?? compCargo.value);
-  }
-  await ajustarCamposComp();
-}
-
-compDetalhe.addEventListener("change", async () => { await prepararCompDetalhe(); atualizarComparacao(); });
-compAnoA.addEventListener("change", () => { cargosDoAno(compCargoA, compAnoA.value); ajustarCamposComp(); });
-compAnoB.addEventListener("change", () => { cargosDoAno(compCargoB, compAnoB.value); ajustarCamposComp(); });
-compCargoA.addEventListener("change", ajustarCamposComp);
-compCargoB.addEventListener("change", ajustarCamposComp);
-
-// rótulo de um partido ligado entre dois anos pela entidade (rodada 41): "PRD (PTB + PATRIOTA em 2022)",
-// "PCDOB (PC do B em 2022)", "MISSÃO (só 2026: sem antecessor)"
-function rotuloEntidade(p, a, b) {
-  const siglaA = p.SIGLAS_A ?? p.SIGLA_A, siglaB = p.SIGLAS_B ?? p.SIGLA_B;
-  if (!p.NOS_DOIS) return `${p.PARTIDO}${p.VOTOS_A ? ` (só ${a})` : ` (só ${b})`}`;
-  return siglaA && siglaA !== p.PARTIDO ? `${p.PARTIDO} (${siglaA} em ${a})` : String(p.PARTIDO);
-}
-
-function fmtComp(v, unidade) {
-  if (v === null || v === undefined) return "—";
-  const s = fmtPct.format(Math.abs(v));
-  const sinal = v > 0 ? "+" : v < 0 ? "−" : "";
-  return unidade === "var_pct" ? `${sinal}${s}%` : `${sinal}${s} p.p.`;
-}
-
-async function atualizarComparacao() {
-  if (!estado.comp) return;
-  if (!estado.compMapa) estado.compMapa = criarMapa(document.getElementById("comp-mapa"));
-  const m = compMetrica.value;
-  const bairros = estado.compDetalhe === "bairros";
-  const q = new URLSearchParams(bairros
-    ? { ano_a: compAnoA.value, cargo_a: compCargoA.value, ano_b: compAnoB.value, cargo_b: compCargoB.value,
-        metrica: m, turno: estado.turno || 1 }
-    : { cargo: compCargo.value, metrica: m });
-  if (m === "partido") q.set("partido", document.getElementById("comp-partido").value);
-  if (m === "candidato") {
-    q.set("numero_a", document.getElementById("comp-num-a").value);
-    q.set("numero_b", document.getElementById("comp-num-b").value);
-  }
-  const legenda = document.getElementById("comp-legenda");
-  let d;
-  try { d = await api(`api/comparacao${bairros ? "/bairros" : ""}?${q}`); } catch (e) {
-    const mp = estado.compMapa;  // nada desenhado de consulta anterior pode ficar na tela (nem ir para o arquivo)
-    if (mp._camada) { mp.removeLayer(mp._camada); mp._camada = null; }
-    if (mp._contornos) { mp.removeLayer(mp._contornos); mp._contornos = null; }
-    mp._export = null;
-    document.getElementById("comp-fichas").replaceChildren();
-    document.getElementById("comp-tabela").replaceChildren();
-    legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
-    roteador.gravar("comparacao");
-    return;
-  }
-  if (bairros) {
-    document.getElementById("comp-bairros-nota").textContent = `${d.subtitulo ? d.subtitulo + " · " : ""}` +
-      "área = bairros do IBGE que têm local de votação; cada local conta no bairro que contém sua coordenada.";
-  }
-  const valorAno = (v) => (v === null || v === undefined ? "—" : d.unidade === "var_pct" ? int(v) : pct(v));
-  const u = d.uf || {};
-  const area = bairros ? "área dos bairros" : estado.uf;
-  document.getElementById("comp-titulo-tabela").textContent =
-    `Por ${bairros ? "bairro" : "município"} (clique no cabeçalho para ordenar)`;
-  document.getElementById("comp-fichas").replaceChildren(
-    ficha(`${d.rotulo} — ${area} ${d.ano_a}`, valorAno(u.VALOR_A)),
-    ficha(`${area} ${d.ano_b}`, valorAno(u.VALOR_B)),
-    ficha(bairros ? "Diferença na área dos bairros" : "Diferença no estado", fmtComp(u.DIF, d.unidade)));
-  await desenharDivergente(estado.compMapa, d, legenda, d.camada || "municipios");
-  const cab = [[bairros ? "Bairro — município" : "Município", "NM_MUNICIPIO"], [String(d.ano_a), "VALOR_A", true], [String(d.ano_b), "VALOR_B", true],
-    ["Diferença", "DIF", true]];
-  document.getElementById("comp-tabela").replaceChildren(tabelaOrdenavel(cab, d.municipios, (r, k) =>
-    k === "DIF" ? fmtComp(r[k], d.unidade) : k === "NM_MUNICIPIO" ? r[k] : valorAno(r[k]), null,
-  { ordem: estado.compOrdem, aoOrdenar: (o) => { estado.compOrdem = o; roteador.gravar("comparacao"); } }));
-  roteador.gravar("comparacao");
-}
-
-// ---------------------------------------------------------------- endereço da aba Comparação
-// #comparacao?cargo=7&metrica=partido&partido=PL&ordem=DIF-desc
-// #comparacao?cargo=3&metrica=candidato&numero_a=22&numero_b=22
-function parametrosComp() {
-  const m = compMetrica.value;
-  const q = new URLSearchParams({ cargo: compCargo.value, metrica: m });
-  if (m === "partido" && document.getElementById("comp-partido").value) q.set("partido", document.getElementById("comp-partido").value);
-  if (m === "candidato") {
-    for (const [k, id] of [["numero_a", "comp-num-a"], ["numero_b", "comp-num-b"]]) {
-      const v = document.getElementById(id).value.trim();
-      if (v) q.set(k, v);
-    }
-  }
-  if (estado.compDetalhe === "bairros") {
-    q.set("detalhe", "bairros");
-    for (const [k, sel] of [["ano_a", compAnoA], ["cargo_a", compCargoA], ["ano_b", compAnoB], ["cargo_b", compCargoB]]) {
-      q.set(k, sel.value);
-    }
-  }
-  if (estado.compOrdem) q.set("ordem", estado.compOrdem);
-  if (bancCaixa.open) {
-    q.set("banc", "1");
-    q.set("banc_cargo", document.getElementById("banc-cargo").value);
-  }
-  if (varCaixa.open && estado.compDetalhe !== "bairros") {
-    q.set("var", "1");
-    const ps = partidosVar();
-    if (ps.length) q.set("var_partidos", ps.join(","));
-    if (document.getElementById("var-ponderar").checked) q.set("var_ponderar", "1");
-  }
-  return q;
-}
-
-async function aplicarEnderecoComp(params) {
-  if (!estado.comp) return;  // sem eleição de referência: a aba nem existe
-  const q = new URLSearchParams(params);
-  const temOpcao = (sel, v) => v !== null && [...sel.options].some((o) => o.value === v);
-  if (temOpcao(compCargo, q.get("cargo"))) compCargo.value = q.get("cargo");
-  compDetalhe.value = q.get("detalhe") === "bairros" ? "bairros" : "municipios";
-  await prepararCompDetalhe({ ano_a: q.get("ano_a"), cargo_a: q.get("cargo_a"), ano_b: q.get("ano_b"),
-                              cargo_b: q.get("cargo_b") });
-  const metrica = q.get("metrica");
-  if (metrica && [...compMetrica.options].some((o) => o.value === metrica && !o.disabled)) compMetrica.value = metrica;
-  await ajustarCamposComp();  // carrega a lista de partidos do cargo antes de escolher o partido
-  const partido = document.getElementById("comp-partido");
-  if (temOpcao(partido, q.get("partido"))) partido.value = q.get("partido");
-  document.getElementById("comp-num-a").value = q.get("numero_a") || "";
-  document.getElementById("comp-num-b").value = q.get("numero_b") || "";
-  estado.compOrdem = q.get("ordem");
-  estado.compFeito = true;  // mostrarAba não deve disparar a consulta padrão
-  mostrarAba("comparacao");
-  await atualizarComparacao();
-  if (["6", "7", "8"].includes(q.get("banc_cargo"))) document.getElementById("banc-cargo").value = q.get("banc_cargo");
-  const abrirBanc = q.get("banc") === "1";
-  if (bancCaixa.open !== abrirBanc) bancCaixa.open = abrirBanc;  // o "toggle" desenha
-  else if (abrirBanc) desenharBancadas();
-  document.getElementById("var-ponderar").checked = q.get("var_ponderar") === "1";
-  const abrir = q.get("var") === "1" && estado.compDetalhe !== "bairros";
-  estado.varEscolha = abrir && q.get("var_partidos") ? q.get("var_partidos").split(",").slice(0, MAX_VAR) : null;
-  if (varCaixa.open !== abrir) varCaixa.open = abrir;  // o "toggle" prepara e desenha
-  else if (abrir) await prepararVar().then(desenharVar);
-}
-
-document.getElementById("comp-copiar").addEventListener("click",
-  () => copiarLink(roteador.endereco("comparacao"), document.getElementById("comp-copiar-msg")));
-
-// ---------------------------------------------------------------- bancadas × eleição anterior (aba Comparação)
-// Endereço: &banc=1&banc_cargo=7 (TODO 15, rodada 45)
-const bancCaixa = document.getElementById("comp-bancadas");
-
-async function desenharBancadas() {
-  const out = document.getElementById("banc-resultado");
-  if (!bancCaixa.open) return;
-  const cargo = document.getElementById("banc-cargo").value;
-  const pedido = (estado.bancPedido = cargo);
-  out.replaceChildren(el("p", { class: "nota" }, "Carregando…"));
-  let d;
-  try { d = await api(`api/bancadas?cargo=${cargo}`); } catch (e) {
-    if (estado.bancPedido === pedido) out.replaceChildren(el("p", { class: "aviso" }, e.message));
-    return;
-  }
-  if (estado.bancPedido !== pedido) return;
-  const r = d.resumo, a = d.ano, b = d.ano_ref;
-  const fichas = el("div", { class: "fichas" },
-    ficha(`Eleitos ${b} → ${a}`, `${int(r.eleitos_antes)} → ${int(r.eleitos_agora)}`),
-    ficha("Reeleitos", int(r.reeleito)), ficha("Novatos", int(r.novato)),
-    ficha("Já tinham concorrido", int(r["já concorreu, sem se eleger"])),
-    ficha("Eleitos antes para outro cargo", int(r["eleito antes para outro cargo"])),
-    ficha(`Eleitos em ${b} que saíram`, int(r.nao_reeleitos)));
-  const sinal = (x) => (x > 0 ? `+${x}` : String(x));
-  const tPart = tabelaOrdenavel([["Partido", "PARTIDO"], [`Em ${b} como`, "ANTES_COMO"], [`Eleitos ${b}`, "ELEITOS_ANTES", true],
-    [`Eleitos ${a}`, "ELEITOS_AGORA", true], ["Variação", "VARIACAO", true]], d.partidos,
-  (x, k) => (k === "VARIACAO" ? sinal(x[k]) : x[k] ?? "—"));
-  const tEl = tabelaOrdenavel([["Eleito", "NOME_URNA"], ["Partido", "PARTIDO"], ["Votos", "VOTOS", true],
-    ["Trajetória", "TRAJETORIA"], ["Detalhe", "DETALHE"]], d.eleitos, (x, k) => (k === "VOTOS" ? int(x[k]) : x[k] ?? "—"));
-  const tSa = tabelaOrdenavel([[`Eleito em ${b}`, "NOME_URNA"], ["Partido", "PARTIDO_ANTES"], [`Votos ${b}`, "VOTOS_ANTES", true],
-    [`Em ${a}`, "DESTINO"]], d.sairam, (x, k) => (k === "VOTOS_ANTES" ? int(x[k]) : x[k] ?? "—"));
-  out.replaceChildren(fichas,
-    el("a", { class: "botao-salvar", href: `api/bancadas/planilha?cargo=${cargo}`, download: "" }, "Salvar planilha (.xlsx)"),
-    el("h3", { class: "sub" }, `Por partido — ${d.ds_cargo}`), el("div", { class: "tabela-rolagem" }, tPart),
-    el("h3", { class: "sub" }, `Eleitos em ${a}`), el("div", { class: "tabela-rolagem" }, tEl),
-    el("h3", { class: "sub" }, `Eleitos em ${b} que não voltaram ao cargo`), el("div", { class: "tabela-rolagem" }, tSa));
-}
-
-bancCaixa.addEventListener("toggle", () => { roteador.gravar("comparacao"); desenharBancadas(); });
-document.getElementById("banc-cargo").addEventListener("change", () => { roteador.gravar("comparacao"); desenharBancadas(); });
-
-// ---------------------------------------------------------------- variação por partido (aba Comparação)
-// Dispersão A × B por município (diagonal = sem mudança), distribuição da variação e estatística
-// (apuracao/comparacao.py: variacao_partidos). Endereço: &var=1&var_partidos=PT,PL[&var_ponderar=1]
-const MAX_VAR = 3;
-const CORES_VAR = ["--serie-1", "--serie-2", "--serie-3"];  // ordem fixa da escolha (dataviz)
-const PADRAO_VAR = { 1: ["PT", "PL"] };
-const varCaixa = document.getElementById("comp-variacao");
-
-// na ordem em que foram escolhidos (o 1º e o 2º definem o sentido do swing de Butler), não na da lista
-function partidosVar() {
-  const marcados = new Set([...document.querySelectorAll("#var-partidos input:checked")].map((i) => i.value));
-  estado.varOrdem = (estado.varOrdem || []).filter((p) => marcados.has(p));
-  for (const p of marcados) if (!estado.varOrdem.includes(p)) estado.varOrdem.push(p);
-  return [...estado.varOrdem];
-}
-
-function limitarVar() {
-  const n = partidosVar().length;
-  document.querySelectorAll("#var-partidos input").forEach((i) => { i.disabled = !i.checked && n >= MAX_VAR; });
-}
-
-async function prepararVar(escolhidos = null) {
-  const caixa = document.getElementById("var-partidos");
-  const cargo = compCargo.value;
-  let ps;
-  try { ps = await api(`api/comparacao/partidos?cargo=${cargo}`); } catch (e) {
-    caixa.replaceChildren(el("span", { class: "nota" }, e.message)); return;
-  }
-  escolhidos = escolhidos ?? estado.varEscolha;
-  estado.varEscolha = null;
-  const marcados = new Set(escolhidos ?? (estado.varCargo === cargo ? partidosVar() : null)
-    ?? PADRAO_VAR[cargo]?.filter((p) => ps.some((x) => x.PARTIDO === p && x.NOS_DOIS))
-    ?? ps.filter((x) => x.NOS_DOIS).slice(0, 2).map((x) => x.PARTIDO));
-  estado.varCargo = cargo;
-  estado.varOrdem = [...marcados];
-  caixa.replaceChildren(...ps.map((x) => el("label", {}, el("input", { type: "checkbox", value: x.PARTIDO,
-    checked: marcados.has(x.PARTIDO), onchange: () => { limitarVar(); roteador.gravar("comparacao"); } }),
-  rotuloEntidade(x, estado.comp.ano_a, estado.comp.ano_b))));
-  limitarVar();
-}
-
-async function desenharVar() {
-  const out = document.getElementById("var-resultado");
-  if (!varCaixa.open || estado.compDetalhe === "bairros") return;
-  const ps = partidosVar();
-  if (!ps.length) { out.replaceChildren(el("p", { class: "nota" }, "Escolha de 1 a 3 partidos.")); return; }
-  const q = new URLSearchParams({ cargo: compCargo.value, partidos: ps.join(",") });
-  if (document.getElementById("var-ponderar").checked) q.set("ponderar", "true");
-  if (estado.varEmCurso === q.toString()) return;  // o mesmo pedido já está a caminho
-  const pedido = (estado.varPedido = estado.varEmCurso = q.toString());
-  if (estado.varMostrado !== pedido) out.replaceChildren(el("p", { class: "nota" }, "Calculando…"));
-  let d;
-  try { d = await api(`api/comparacao/variacao?${q}`); } catch (e) {
-    if (estado.varPedido === pedido) {
-      estado.varEmCurso = estado.varMostrado = null;
-      out.replaceChildren(el("p", { class: "aviso" }, e.message));
-    }
-    return;
-  }
-  if (estado.varPedido !== pedido) return;
-  estado.varEmCurso = null;
-  estado.varMostrado = pedido;
-  const series = d.partidos.map((p, i) => ({ ...p, cor: cor(CORES_VAR[i]) }));
-  const fichas = el("div", { class: "fichas" }, ...series.flatMap((p) => [
-    ficha(`${p.partido} no estado`, p.uf ? `${pct(p.uf.A)} → ${pct(p.uf.B)} (${fmtComp(p.uf.DIF, "pp")})` : "—"),
-    ficha(`${p.partido}: variação média por município${d.ponderado ? " (ponderada)" : ""}`,
-      `${fmtComp(p.media, "pp")} · IC 95% ${fmtComp(p.ic_media[0], "pp")} a ${fmtComp(p.ic_media[1], "pp")} · DP ${fmtNum(p.dp)}`),
-    ficha(`${p.partido}: inclinação b (${d.ano_b} = a + b·${d.ano_a})`, p.reta.b === null ? "—"
-      : `${fmtNum(p.reta.b, 3)}${p.reta.ic_b ? ` · IC 95% ${fmtNum(p.reta.ic_b[0], 3)} a ${fmtNum(p.reta.ic_b[1], 3)}` : ""}` +
-        ` · p(b = 1) ${fmtP(p.reta.p_b1)} · r ${fmtNum(p.reta.pearson, 3)}`),
-  ]), d.butler ? ficha(`Swing de Butler ${d.butler.de} → ${d.butler.para}`,
-    `estado ${fmtComp(d.butler.uf, "pp")} · média por município ${fmtComp(d.butler.media, "pp")} ` +
-    `(IC 95% ${fmtComp(d.butler.ic_media[0], "pp")} a ${fmtComp(d.butler.ic_media[1], "pp")})`) : null);
-  const leituras = series.map((p) => el("p", { class: "nota var-leitura" }, el("strong", {}, `${p.partido}: `), p.leitura));
-  const cab = [["Município", "NM_MUNICIPIO"], ...series.flatMap((p) => [[`${p.partido} ${d.ano_a}`, `${p.partido}_A`, true],
-    [`${p.partido} ${d.ano_b}`, `${p.partido}_B`, true], [`${p.partido} variação`, `${p.partido}_DIF`, true]])];
-  if (d.butler) cab.push([`Butler ${d.butler.de} → ${d.butler.para}`, "BUTLER", true]);
-  const linhas = {};
-  series.forEach((p) => p.pontos.forEach((r) => {
-    const l = (linhas[r.CD_MUNICIPIO] ||= { NM_MUNICIPIO: r.NM_MUNICIPIO });
-    Object.assign(l, { [`${p.partido}_A`]: r.A, [`${p.partido}_B`]: r.B, [`${p.partido}_DIF`]: r.DIF });
-  }));
-  if (d.butler) d.butler.pontos.forEach((r) => { if (linhas[r.CD_MUNICIPIO]) linhas[r.CD_MUNICIPIO].BUTLER = r.VALOR; });
-  const tabela = tabelaOrdenavel(cab, Object.values(linhas), (r, k) =>
-    k === "NM_MUNICIPIO" ? r[k] : k.endsWith("_DIF") || k === "BUTLER" ? fmtComp(r[k], "pp") : pct(r[k]));
-  out.replaceChildren(fichas, ...leituras,
-    el("h3", { class: "sub" }, `% dos válidos em ${d.ano_a} × ${d.ano_b} por município`), graficoVariacao(d, series, (v) => fmtComp(v, "pp")),
-    el("h3", { class: "sub" }, `Variação por município (p.p.) — média e intervalo de 95%`), graficoSwing(d, series, (v) => fmtComp(v, "pp")),
-    el("h3", { class: "sub" }, "Tabela"), el("div", { class: "tabela-rolagem" }, tabela));
-}
-
-function ajustarVar() {
-  const bairros = estado.compDetalhe === "bairros";
-  varCaixa.hidden = bairros;
-  if (varCaixa.open && !bairros) prepararVar().then(() => { roteador.gravar("comparacao"); desenharVar(); });
-}
-
-varCaixa.addEventListener("toggle", async () => {
-  if (varCaixa.open) await prepararVar();
-  roteador.gravar("comparacao");
-  if (varCaixa.open) desenharVar();
-});
-document.getElementById("form-var").addEventListener("submit", (e) => { e.preventDefault(); roteador.gravar("comparacao"); desenharVar(); });
-document.getElementById("var-ponderar").addEventListener("change", () => { roteador.gravar("comparacao"); desenharVar(); });
-compCargo.addEventListener("change", ajustarVar);
-compDetalhe.addEventListener("change", ajustarVar);
-
-
 // ---------------------------------------------------------------- alertas da noite
 // O servidor verifica a cada 15 s (apuracao/alertas.py); a página consulta /api/alertas?desde=<último id>.
 // Condições ativas (coletor parado, bloqueio…) ficam na faixa do topo; alertas novos viram avisos com som.
@@ -1935,7 +1257,7 @@ document.getElementById("destaque-link").addEventListener("click", () =>
 
 // Ponto de acesso dos testes e2e: no script clássico estes nomes eram globais; no módulo, não.
 window.__apuracao = { estado, alertas, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
-  consultarCandidato, partidosVar };
+  consultarCandidato, partidosVar: () => abaComparacao.partidosVar() };
 
 (function iniciarAlertas() {
   const som = document.getElementById("alertas-som");
@@ -1954,12 +1276,14 @@ window.__apuracao = { estado, alertas, tocar, api, desenharPainel, atualizarPain
 
 // ---------------------------------------------------------------- endereços das abas (tabela única)
 function registrarModulo(m) { modulos.set(m.id, m); return m; }
+const abaComparacao = registrarModulo(criarAbaComparacao(contexto));
+const abaCandidato = registrarModulo(criarAbaCandidato(contexto, { candidatos, botaoAcompanhar }));
 // escrever: estado da aba → parâmetros (gravar e "Copiar link"); aplicar: parâmetros → estado (abre a aba)
 roteador
   .registrar("painel", { escrever: parametrosPainel, aplicar: aplicarEnderecoPainel, enderecoAoMostrar: true })
-  .registrar("candidato", { escrever: parametrosCandidato, aplicar: aplicarEnderecoCandidato })
+  .registrar("candidato", abaCandidato)
   .registrar("mapas", { escrever: parametrosMapa, aplicar: (q) => aplicarEnderecoMapa(q).then(() => mostrarAba("mapas")) })
-  .registrar("comparacao", { escrever: parametrosComp, aplicar: aplicarEnderecoComp })
+  .registrar("comparacao", abaComparacao)
   .registrar("perfil", registrarModulo(criarAbaPerfil(contexto)))
   .registrar("transferencia", registrarModulo(criarAbaTransferencia(contexto)));
 window.addEventListener("hashchange", () => roteador.abrir());
@@ -1981,5 +1305,5 @@ iniciarSeletorUf();
 
 // o ciclo de 60 s nunca roda duas vezes ao mesmo tempo; com a aba escondida espera a volta
 const ciclo = repetir(tick, REFRESH_MS, { pausarOculto: true });
-iniciarComparacao().then(() => ciclo.agora()).then(() => roteador.abrir());
-preencherLista(document.getElementById("cand-cargo").value, "cand-lista");
+abaComparacao.preparar().then(() => ciclo.agora()).then(() => roteador.abrir());
+void abaCandidato.preparar();

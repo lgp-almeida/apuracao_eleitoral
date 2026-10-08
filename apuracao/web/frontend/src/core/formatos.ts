@@ -32,3 +32,11 @@ export const fmtP = (p: Talvez): string => (ausente(p) ? VAZIO : p < 0.001 ? "< 
 /** Contagem arredondada; de 10 mil em diante, em milhares ("12 mil"). */
 export const mil = (n: number): string =>
   (n >= 10_000 ? `${fmtInt.format(Math.round(n / 1000))} mil` : fmtInt.format(Math.round(n)));
+
+/** Variação com sinal (2 casas): "var_pct" = variação relativa em %; o resto em p.p. Zero sem sinal. */
+export function fmtVariacao(v: Talvez, unidade: string): string {
+  if (ausente(v)) return VAZIO;
+  const s = fmtPct.format(Math.abs(v));
+  const sinal = v > 0 ? "+" : v < 0 ? "−" : "";
+  return unidade === "var_pct" ? `${sinal}${s}%` : `${sinal}${s} p.p.`;
+}

@@ -19,7 +19,7 @@ export type MapaApuracao = L.Map & {
   _contornos?: L.Layer | null;
   /** Já enquadrado uma vez: a atualização automática não desfaz o zoom do usuário. */
   _enquadrado?: boolean;
-  _export?: ExportacaoMapa;
+  _export?: ExportacaoMapa | null;
 };
 
 export type Geo = GeoJSON.FeatureCollection;
