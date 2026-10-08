@@ -62,5 +62,5 @@ def test_escolha_fica_no_navegador(nova_pagina, site) -> None:
     pg.goto(site["url"] + "#painel")
     pg.reload()
     pg.wait_for_selector("#destaque:not([hidden])")
-    assert pg.evaluate("[...__apuracao.estado.destacar]") == [alvo]
+    assert pg.evaluate("[...__apuracao.abas.painel.estado.destacar]") == [alvo]
     assert pg.locator(f"#destaque-opcoes input[value='{alvo}']").first.is_checked()

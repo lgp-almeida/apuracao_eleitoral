@@ -75,12 +75,12 @@ def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
     texto = dica.inner_text()
     for trecho in ("Brancos", "Nulos", "Abstenção", "% válidos"):
         assert trecho in texto, trecho
-    assert pagina.evaluate("__apuracao.estado.brasil.ufs.find(u => u.uf === 'SP').candidatos[0].nome") in texto
+    assert pagina.evaluate("__apuracao.abas.painel.estado.brasil.dados.ufs.find(u => u.uf === 'SP').candidatos[0].nome") in texto
     caixa = pagina.locator(".dica-flutuante").bounding_box()
     assert caixa["y"] >= 0 and caixa["y"] + caixa["height"] <= pagina.viewport_size["height"]  # inteira na janela
     pagina.mouse.move(1, 1)
     pagina.locator(".dica-flutuante").wait_for(state="hidden")
-    numero = pagina.evaluate("__apuracao.estado.brasil.candidatos[0].NUMERO")
+    numero = pagina.evaluate("__apuracao.abas.painel.estado.brasil.dados.candidatos[0].NUMERO")
     br.locator("#brasil-metrica").select_option(str(numero))
     seq = cores(pagina, "--mapa-1", "--mapa-2", "--mapa-3", "--mapa-4", "--mapa-5")
     assert set(pagina.evaluate("__apuracao.estado.brasilMapa._camada.getLayers().map(l => l.options.fillColor)")) <= seq

@@ -31,7 +31,7 @@ def test_troca_de_aba_e_link_colado_com_a_pagina_aberta(pagina: Page, site: dict
     esperar_endereco(pagina, "h.startsWith('#perfil')")
     assert pagina.get_attribute("button[data-aba=perfil]", "aria-selected") == "true"
 
-    pagina.evaluate("() => __apuracao.estado.destacar = new Set(['PT'])")
+    pagina.evaluate("() => __apuracao.abas.painel.estado.destacar = new Set(['PT'])")
     pagina.click("button[data-aba=painel]")
     esperar_endereco(pagina, "h === '#painel?destacar=PT'")  # o painel grava o destaque ao aparecer
 

@@ -28,11 +28,6 @@ export default defineConfig([
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
-  {  // legado: só o que pega erro de verdade (nome indefinido depois de mover algo para core/) e a regra de HTML
-    files: ["src/legado.js"],
-    languageOptions: { sourceType: "module", globals: globals.browser },
-    rules: { "no-undef": "error", "no-redeclare": "error", "no-dupe-keys": "error", ...semHtml },
-  },
   {  // configuração do build (Node)
     files: ["*.ts", "*.js"],
     extends: [js.configs.recommended, tseslint.configs.strict],
