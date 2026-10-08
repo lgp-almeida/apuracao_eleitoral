@@ -69,7 +69,7 @@ export function criarAlertas(ano: () => number) {
       el("div", { class: "interesse-linha" },
         el("span", {}, `${NOMES_CARGO[i.cargo] || i.cargo}: ${i.nome}`),
         el("span", { class: "sit" }, i.situacao || "aguardando 30% apurado"),
-        el("button", { type: "button", class: "link", onclick: () => void acompanhar(i.cargo, i.numero, false) }, "remover")))
+        el("button", { type: "button", class: "link", onclick: () => void acompanhar(i.cargo, i.numero, false) }, "Remover")))
       : [el("p", { class: "nota" }, "Nenhum.")]));
     atualizarTitulo();
     rotularAcompanhar();
@@ -150,5 +150,3 @@ export function criarAlertas(ano: () => number) {
 
   return central;
 }
-
-export type CentralAlertas = ReturnType<typeof criarAlertas>;

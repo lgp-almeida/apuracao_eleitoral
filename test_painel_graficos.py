@@ -89,6 +89,24 @@ def test_painel_presidente_por_estado(pagina: Page, site: dict) -> None:
     assert cartao(pagina, "Presidente — RJ").locator(".brasil-ufs").count() == 0
 
 
+def test_mapa_por_estado_desenhado_com_o_painel_escondido(pagina: Page, site: dict) -> None:
+    """Site aberto em outra aba: o painel carrega escondido e o mapa "Por estado" não pode ser enquadrado com tamanho
+    0 (zoom infinito → LatLng NaN ao abrir o Painel). Achado no ensaio da rodada 69."""
+    erros: list[str] = []
+    pagina.on("pageerror", lambda e: erros.append(e.message))
+    abrir(pagina, site, "#mapas?cargo=3")
+    pagina.wait_for_function("() => __apuracao.estado.brasilMapa && __apuracao.estado.brasilMapa._camada")
+    assert pagina.evaluate("Number.isFinite(__apuracao.estado.brasilMapa.getZoom())")
+    pagina.locator("#botao-painel").click()
+    pagina.wait_for_function("() => __apuracao.estado.brasilMapa.getContainer().clientWidth > 0")
+    pagina.wait_for_function("() => !__apuracao.estado.brasilMapa._animatingZoom")
+    assert pagina.evaluate("Number.isFinite(__apuracao.estado.brasilMapa.getZoom())")
+    # enquadrado ao aparecer: o Brasil inteiro cabe no mapa
+    assert pagina.evaluate("""(() => { const m = __apuracao.estado.brasilMapa;
+      return m.getBounds().contains(m._camada.getBounds()); })()""")
+    assert erros == []
+
+
 def test_painel_mostra_html_como_texto(pagina: Page, site: dict) -> None:
     abrir(pagina, site, "#painel")
     pagina.wait_for_function("() => document.querySelectorAll('.cartao').length === 6")

@@ -6,6 +6,7 @@ import { cor, el } from "../../core/dom";
 import { fmtFreq, fmtInt, fmtPct, int, pct } from "../../core/formatos";
 import { agremiacoesDestacadas, destacado } from "./destaque";
 import type { Cadeiras, Eleito } from "./tipos";
+import { metadados } from "../../componentes/metadados";
 
 export interface ContextoCadeiras {
   destacar: ReadonlySet<string>;
@@ -73,7 +74,7 @@ function cadeirasProjetadas(k: Cadeiras, c: ContextoCadeiras): HTMLElement[] {
   }, c);
   return [
     el("h3", {}, `Cadeiras projetadas — ${k.vagas} vagas`),
-    el("div", { class: "sub" }, `Projeção com ${pct(p.pct_apurado)} do eleitorado apurado · QE projetado ${int(p.qe)}`),
+    metadados(`Projeção com ${pct(p.pct_apurado)} do eleitorado apurado`, `QE projetado ${int(p.qe)}`),
     el("p", { class: "proj-situacao" }, `${p.consolidados} eleitos consolidados · ${k.vagas - p.consolidados} vagas em disputa ` +
       `entre ${disputa} candidatos`),
     el("div", { class: "legenda-linha" },
@@ -94,7 +95,7 @@ export function blocoCadeiras(k: Cadeiras, c: ContextoCadeiras): HTMLElement[] {
   const cQp = cor("--serie-1"), cMedia = cor("--seq-2");
   const max = Math.max(...k.agremiacoes.map((a) => a.VAGAS), 1);
   const estagio = k.final ? "resultado final" : `projeção com ${pct(k.pct_secoes)} das seções — muda até o fim da apuração`;
-  const confere = k.conferencia_tse ? ` · confere com o TSE: ${k.conferencia_tse.coincidentes} de ${k.conferencia_tse.eleitos_tse} eleitos` : "";
+  const confere = k.conferencia_tse ? `confere com o TSE: ${k.conferencia_tse.coincidentes} de ${k.conferencia_tse.eleitos_tse} eleitos` : null;
   const agrDest = agremiacoesDestacadas(c.destacar, k);
   const linhas = k.agremiacoes.map((a) => el("div", { class: agrDest.has(a.AGREMIACAO) ? "cad-item destaque" : "cad-item",
     title: `${a.NOME}: ${int(a.VOTOS)} votos (${fmtPct.format(a.PCT_QE)}% do QE) · ${a.VAGAS_QP} por QP + ${a.VAGAS_MEDIA} por média` },
@@ -120,7 +121,7 @@ export function blocoCadeiras(k: Cadeiras, c: ContextoCadeiras): HTMLElement[] {
   }, c);
   return [
     el("h3", {}, `Cadeiras projetadas — ${k.vagas} vagas`),
-    el("div", { class: "sub" }, `QE ${int(k.qe)} · ${k.eleitos_qp} por QP + ${k.eleitos_media} por média · ${estagio}${confere}`),
+    metadados(`QE ${int(k.qe)}`, `${k.eleitos_qp} por QP + ${k.eleitos_media} por média`, estagio, confere),
     el("div", { class: "legenda-linha" }, el("span", {}, amostra(cQp), "Quociente partidário (QP)"),
       el("span", {}, amostra(cMedia), "Sobras (maior média)")),
     el("div", { class: "cad-lista", role: "list" }, linhas),

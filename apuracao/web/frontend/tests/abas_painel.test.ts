@@ -8,8 +8,9 @@ import type { Cadeiras, Cartao, UfPresidente } from "../src/abas/painel/tipos";
 import { cartaoDaVez } from "../src/abas/painel/tv";
 import { tituloMudancas } from "../src/abas/painel/mudancas";
 import { cartaoAlerta, maisGrave, notasDoSom, tituloComAlertas } from "../src/alertas/apresentacao";
-import { limitarCargos, textoProgresso } from "../src/pagina/situacao";
+import { itensProgresso, limitarCargos } from "../src/pagina/situacao";
 import { el } from "../src/core/dom";
+import { metadados } from "../src/componentes/metadados";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -127,9 +128,9 @@ describe("alertas e cabeçalho", () => {
   });
 
   it("progresso do status e cargos limitados aos dos dados", () => {
-    expect(textoProgresso({ progresso: [{ ABRANGENCIA: "uf", UF: "RJ", ELEICAO: 6257, PCT_SECOES_TOTALIZADAS: 45 },
+    expect(itensProgresso({ progresso: [{ ABRANGENCIA: "uf", UF: "RJ", ELEICAO: 6257, PCT_SECOES_TOTALIZADAS: 45 },
       { ABRANGENCIA: "br", UF: "BR", ELEICAO: 6259, PCT_SECOES_TOTALIZADAS: 100, TOTALIZACAO_FINAL: true }] }))
-      .toBe("RJ (eleição 6257): 45,00% das seções · Brasil (eleição 6259): 100,00% das seções — final");
+      .toEqual(["RJ (eleição 6257): 45,00% das seções", "Brasil (eleição 6259): 100,00% das seções — final"]);
     const sel = document.createElement("select");
     for (const v of ["1", "3", "7"]) sel.append(el("option", { value: v }, v));
     sel.value = "3";
@@ -138,5 +139,22 @@ describe("alertas e cabeçalho", () => {
     expect([...sel.options].map((o) => o.disabled)).toEqual([false, true, true]);
     expect(sel.value).toBe("1");
     expect(mudou).toHaveBeenCalled();
+  });
+});
+
+describe("metadados", () => {
+  it("um elemento por item, sem separador; itens vazios saem", () => {
+    const n = metadados("Seções 45,00%", false, null, "", "totalização 21:34", 2);
+    expect(n.className).toBe("sub metadados");
+    expect([...n.children].map((c) => c.textContent)).toEqual(["Seções 45,00%", "totalização 21:34", "2"]);
+    expect(n.textContent).not.toContain("·");
+  });
+  it("cartão: seções, hora, FINAL e vagas como itens", () => {
+    const c = { cargo: 7, ds_cargo: "Deputado Estadual", abrangencia: "RJ", proporcional: true, n_candidatos: 0,
+      totais: { PCT_SECOES_TOTALIZADAS: 100, SECOES_TOTALIZADAS: 10, SECOES_TOTAL: 10, DT_TOTALIZACAO: null, TOTALIZACAO_FINAL: true, VAGAS: 70 },
+      candidatos: [] } as unknown as Cartao;
+    const n = cartao(c, { destacar: new Set(), abertos: new Set(), consultarCandidato: vi.fn(), blocoBrasil: () => el("div") });
+    expect([...(n.querySelector(".metadados")?.children ?? [])].map((x) => x.textContent))
+      .toEqual(["Seções totalizadas 100,00% (10 de 10)", "totalização —", "FINAL", "70 vagas"]);
   });
 });

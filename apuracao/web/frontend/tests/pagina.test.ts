@@ -56,6 +56,7 @@ describe("régua de apuração", () => {
   it("hora curta: só a hora no mesmo dia, com a data em outro", () => {
     expect(horaCurta("2026-10-04T22:22:21", new Date(2026, 9, 4, 23))).toBe("22:22");
     expect(horaCurta("2026-10-04T22:22:21", new Date(2026, 9, 5, 9))).toBe("04/10 22:22");
+    expect(horaCurta("2023-09-08T13:18:00", new Date(2026, 9, 5, 9))).toBe("08/09/2023 13:18");
     expect(horaCurta("lixo")).toBe("lixo");
   });
   it("desenha o %, o trilho e o texto acessível; sem dados esconde os dois", () => {

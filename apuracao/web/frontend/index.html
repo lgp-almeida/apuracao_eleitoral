@@ -58,7 +58,7 @@
         Ainda não há resultados coletados. Inicie o coletor
         (<code>python site_apuracao.py --coletar</code> ou <code>python coletar_resultados.py</code>).
       </div>
-      <p class="nota painel-acoes"><button type="button" class="link" id="botao-tv">Modo TV (tela cheia, um cargo por vez)</button></p>
+      <p class="nota painel-acoes"><button type="button" class="link" id="botao-tv">Abrir modo TV (tela cheia, um cargo por vez)</button></p>
       <details id="mudancas" class="caixa mudancas-caixa" open hidden>
         <summary id="mudancas-titulo">O que mudou</summary>
         <ul id="mudancas-lista" class="mudancas-lista"></ul>
@@ -68,7 +68,7 @@
         <div id="destaque-opcoes" class="destaque-opcoes"></div>
         <p class="nota">Marcar uma federação destaca todos os partidos dela. A escolha fica neste navegador e no
           endereço da página.
-          <button type="button" class="link" id="destaque-limpar">Limpar</button> ·
+          <button type="button" class="link" id="destaque-limpar">Limpar destaque</button> ·
           <button type="button" class="link" id="destaque-link">Copiar link</button><span id="destaque-link-msg" aria-live="polite"></span></p>
       </details>
       <div id="cartoes" class="grade"></div>
@@ -110,7 +110,7 @@
             </select>
           </label>
           <label>Número na eleição anterior <input id="hist-numero" type="number" placeholder="pelo nome"></label>
-          <button type="submit">Atualizar</button>
+          <button type="submit">Atualizar tabela</button>
         </form>
         <div id="hist-resultado"></div>
       </details>
@@ -295,7 +295,7 @@
         <form id="form-var" class="filtros">
           <fieldset class="grupo"><legend>Partidos (até 3)</legend><div id="var-partidos" class="destaque-opcoes"></div></fieldset>
           <label><input type="checkbox" id="var-ponderar"> Ponderar pelos válidos (a capital domina)</label>
-          <button type="submit">Desenhar</button>
+          <button type="submit">Desenhar gráfico</button>
         </form>
         <div id="var-resultado"></div>
         <p class="nota">Cada ponto é um município. Leitura <strong>ecológica</strong>: fala de municípios, não de pessoas — não
@@ -409,7 +409,7 @@
           </select>
         </label>
         <label class="tf-md">Área <select id="tf-municipio"></select></label>
-        <button type="submit">Calcular</button>
+        <button type="submit">Calcular transferência</button>
       </form>
       <p class="nota"><button type="button" class="link" id="tf-link">Copiar link desta análise</button>
         <span id="tf-link-msg" aria-live="polite"></span></p>

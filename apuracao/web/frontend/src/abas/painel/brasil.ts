@@ -5,7 +5,7 @@ import * as L from "leaflet";
 import { dicaFlutuante } from "../../componentes/dica";
 import { escalaSequencial, quebrasQuantis, type ItemLegenda, TOKENS_CAT } from "../../componentes/escalas";
 import { legendaLinha } from "../../componentes/legenda";
-import { criarMapa } from "../../componentes/mapa/criar";
+import { criarMapa, enquadrarUmaVez } from "../../componentes/mapa/criar";
 import type { MapaApuracao } from "../../componentes/mapa/tipos";
 import { tabelaOrdenavel } from "../../componentes/tabela";
 import { api } from "../../core/api";
@@ -102,7 +102,7 @@ export function criarBrasil(registrarMapa: (m: MapaApuracao) => void) {
         },
       }).addTo(mapa);
       mapa._camada = camada;
-      if (!mapa._enquadrado) { mapa.fitBounds(camada.getBounds(), { padding: [4, 4] }); mapa._enquadrado = true; }
+      enquadrarUmaVez(mapa, camada.getBounds(), [4, 4]);
     }
     if (divMapa) divMapa.hidden = !estado.geo;
     const linhas: LinhaUf[] = d.ufs.map((u) => ({ ...u, ordem: u.uf === "ZZ" ? "ZZZ" : u.nome, lider: nome(u.primeiro),

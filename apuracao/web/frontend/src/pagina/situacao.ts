@@ -18,10 +18,11 @@ export interface Status {
   };
 }
 
-/** "RJ (eleição 6257): 45,00% das seções · Brasil (eleição 6259): 40,00% das seções — final". */
-export const textoProgresso = (s: Pick<Status, "progresso">): string => s.progresso.map((p) =>
+/** Um item por eleição: "RJ (eleição 6257): 45,00% das seções", "Brasil (eleição 6259): 100,00% das seções — final".
+ * Cada um vira um elemento próprio no cabeçalho (sem juntar com "·"). */
+export const itensProgresso = (s: Pick<Status, "progresso">): string[] => s.progresso.map((p) =>
   `${p.ABRANGENCIA === "br" ? "Brasil" : p.UF} (eleição ${p.ELEICAO}): ${pct(p.PCT_SECOES_TOTALIZADAS)} das seções` +
-  (p.TOTALIZACAO_FINAL ? " — final" : "")).join(" · ");
+  (p.TOTALIZACAO_FINAL ? " — final" : ""));
 
 /** Só os cargos presentes nos dados (ex.: 2º turno de 2022 no RJ só tem presidente) nos seletores de cargo. */
 export function limitarCargos(cargos: readonly number[], seletores: readonly HTMLSelectElement[]): void {
@@ -53,8 +54,10 @@ export function criarSituacao(aoReceber: (s: Status) => void) {
     r.ambiente.textContent = amb === "oficial" ? "OFICIAL" : `ambiente: ${amb}`;
     r.ambiente.className = "selo" + (amb === "oficial" ? " oficial" : "");
     const quando = s.coletor.ano ? "Importado em" : "Última coleta";
-    const linhas = [el("div", {}, textoProgresso(s) || "sem dados de apuração"),
-      el("div", {}, `${quando}: ${hora(s.coletor.ultimo_ciclo_fim || s.coletor.ultimo_ciclo_inicio)}`)];
+    const itens = itensProgresso(s);
+    const linhas = [itens.length ? el("ul", { class: "situacao-itens" }, itens.map((t) => el("li", {}, t)))
+      : el("div", {}, "Sem dados de apuração."),
+    el("div", {}, `${quando}: ${hora(s.coletor.ultimo_ciclo_fim || s.coletor.ultimo_ciclo_inicio)}`)];
     if (s.coletor.erro) linhas.push(el("div", { class: "erro" }, "⚠ ", s.coletor.erro));
     r.box.replaceChildren(...linhas);
     r.vazio.hidden = s.tem_dados;

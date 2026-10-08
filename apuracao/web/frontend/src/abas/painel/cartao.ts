@@ -6,6 +6,7 @@ import { hora, int, pct } from "../../core/formatos";
 import { blocoCadeiras, type ContextoCadeiras } from "./cadeiras";
 import { blocoProjecao } from "./projecao";
 import type { CandidatoPainel, Cartao, SeriePainel } from "./tipos";
+import { metadados } from "../../componentes/metadados";
 
 /** Votos de candidatura sub judice entram nos votos do candidato, mas não nos válidos. */
 export const destinacao = (x: Pick<CandidatoPainel, "DESTINACAO">): string =>
@@ -63,11 +64,11 @@ export function cartao(c: Cartao, ctx: ContextoCartao): HTMLElement {
   const comp = (t.COMPARECIMENTO || 0) + (t.ABSTENCAO || 0);
   const votos = (t.VALIDOS || 0) + (t.BRANCOS || 0) + (t.NULOS || 0) + (t.ANULADOS_SUB_JUDICE || 0);
   const maxPct = Math.max(...c.candidatos.map((x) => x.PCT_VALIDOS || 0), 0.0001);
-  const vagas = t.VAGAS ? ` · ${t.VAGAS} vaga${t.VAGAS > 1 ? "s" : ""}` : "";
   const filhos: HTMLElement[] = [
     el("div", {}, el("h2", {}, `${c.ds_cargo} — ${c.abrangencia}`),
-      el("div", { class: "sub" }, `Seções totalizadas ${pct(t.PCT_SECOES_TOTALIZADAS)} (${int(t.SECOES_TOTALIZADAS)} de ${int(t.SECOES_TOTAL)})` +
-        ` · totalização ${hora(t.DT_TOTALIZACAO)}${t.TOTALIZACAO_FINAL ? " · FINAL" : ""}${vagas}`)),
+      metadados(`Seções totalizadas ${pct(t.PCT_SECOES_TOTALIZADAS)} (${int(t.SECOES_TOTALIZADAS)} de ${int(t.SECOES_TOTAL)})`,
+        `totalização ${hora(t.DT_TOTALIZACAO)}`, t.TOTALIZACAO_FINAL && "FINAL",
+        t.VAGAS ? `${t.VAGAS} vaga${t.VAGAS > 1 ? "s" : ""}` : null)),
     el("div", { class: "progresso", role: "progressbar", "aria-valuenow": t.PCT_SECOES_TOTALIZADAS || 0, "aria-valuemin": 0, "aria-valuemax": 100 },
       el("div", { style: { width: `${t.PCT_SECOES_TOTALIZADAS || 0}%` } })),
     el("h3", {}, `Eleitorado ${int(t.ELEITORADO)}`),

@@ -19,6 +19,8 @@ export type MapaApuracao = L.Map & {
   _contornos?: L.Layer | null;
   /** Já enquadrado uma vez: a atualização automática não desfaz o zoom do usuário. */
   _enquadrado?: boolean;
+  /** Enquadramento pedido com o mapa escondido (tamanho 0): feito quando ele aparecer. */
+  _enquadrarPendente?: { limites: L.LatLngBounds; padding: L.PointExpression } | null;
   _export?: ExportacaoMapa | null;
 };
 

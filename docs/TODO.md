@@ -347,7 +347,7 @@ Registrado em 07/10/2026 (pedido do usuário: "Coloque no TODO a prontidão do 2
 
 Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-end, só a proposta).
 
-## 27. Refatoração do front-end (Vite + TypeScript + design system)
+## 27. Refatoração do front-end (Vite + TypeScript + design system) — FEITO no ramo (rodadas 60–69)
 
 - **Andamento:** fase 0 (andaime) feita no ramo `frontend-refatoracao`, na
   [RODADA_60](RODADA_60_2026-10-07_frontend_fase0_andaime.md); fase 1 (núcleo) na
@@ -358,7 +358,8 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
   [RODADA_65](RODADA_65_2026-10-07_frontend_fase4_comparacao_candidato.md); parte 3 (Mapas) na
   [RODADA_66](RODADA_66_2026-10-07_frontend_fase4_mapas.md); parte 4 (Painel, alertas, fim do `legado.js`) na
   [RODADA_67](RODADA_67_2026-10-08_frontend_fase4_painel_fim_do_legado.md); fase 5 (design system) na
-  [RODADA_68](RODADA_68_2026-10-08_frontend_fase5_design_system.md). Próxima: fase 6 (limpeza).
+  [RODADA_68](RODADA_68_2026-10-08_frontend_fase5_design_system.md); fase 6 (limpeza) na
+  [RODADA_69](RODADA_69_2026-10-08_frontend_fase6_limpeza.md). Falta só entrar em `main`, depois de 25/10.
 
 - **Proposta completa:** [PROPOSTA_REFATORACAO_FRONTEND.md](PROPOSTA_REFATORACAO_FRONTEND.md). Traz o diagnóstico com
   números, a arquitetura por módulos, o design system, a robustez, as fases e os riscos.
@@ -371,3 +372,18 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
   mudar asserções, no Vitest, no `tsc --strict` e no ensaio geral.
 - **Quando:** num ramo (`frontend-refatoracao`), que só entra em `main` **depois do 2º turno (25/10/2026)**. Até lá,
   as correções do front-end vão para o `app.js` atual.
+
+## 28. Cópia de segurança para de espelhar `raw/` depois do instantâneo "final"
+
+Registrado em 08/10/2026 (achado no ensaio da [RODADA_69](RODADA_69_2026-10-08_frontend_fase6_limpeza.md)). **Vale para
+o `main` e para o 2º turno (25/10).**
+
+- **O defeito:** em `apuracao/copia.py`, `Copiador.verificar()` devolve `None` quando o instantâneo `final` já existe,
+  antes do espelho de `raw/` a cada `espelho_min`. Toda parcial que chegar depois do "final" nunca é copiada.
+  Exemplos: o EA20 regerado depois do anúncio no EA15 (rodada 36) e uma retotalização.
+- **Como apareceu:** o ensaio a 60× (`--atraso-ea20` 3 min de 2022 = 3 s reais) falhou em "cópia final com todas as
+  parciais do TSE" com 3.680 de 3.682. As duas que faltaram eram os `rj-e0212{70,72}-ab` gerados às 00:23. Chegaram
+  13 s depois do instantâneo `final`.
+- **Proposta:** com o `final` feito, continuar o espelho de `raw/` no intervalo de sempre. O instantâneo `final` deve
+  ser refeito (ou completado) quando chegarem parciais novas depois dele. Teste: parcial nova depois do `final` →
+  aparece na cópia.

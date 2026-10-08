@@ -5,6 +5,7 @@ import { api } from "../../core/api";
 import { cor, el } from "../../core/dom";
 import { fmtPct, int, pct } from "../../core/formatos";
 import type { Projecao } from "./tipos";
+import { metadados } from "../../componentes/metadados";
 
 /** Posição (%) no trilho: 0 a `topo`. */
 export const posicao = (v: number | null | undefined, topo: number): string =>
@@ -46,8 +47,9 @@ export function blocoProjecao(p: Projecao): HTMLElement[] {
   parcial.style.width = "3px";
   return [
     el("h3", {}, "Projeção do resultado final"),
-    el("div", { class: "sub" }, `${pct(p.pct_apurado)} do eleitorado apurado · margem ±${fmtPct.format(p.margem_pp ?? 0)} p.p. ` +
-      `(erro de 95% das projeções na apuração de 2022) · ${p.municipios_sem_apuracao} município(s) ainda sem apuração`),
+    metadados(`${pct(p.pct_apurado)} do eleitorado apurado`,
+      `margem ±${fmtPct.format(p.margem_pp ?? 0)} p.p. (erro de 95% das projeções na apuração de 2022)`,
+      `${p.municipios_sem_apuracao} município(s) ainda sem apuração`),
     el("p", { class: "proj-situacao" }, p.situacao),
     el("div", { class: "legenda-linha" },
       el("span", {}, amostra(cProj), "Projeção"),

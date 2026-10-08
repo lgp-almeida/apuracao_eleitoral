@@ -4,7 +4,10 @@ import { notaAreas, notaBairros, notaLinhaDoTempo, notaLocais } from "../src/aba
 import { consultaCamada, controles, metricaPadrao, metricasPermitidas, METRICAS_BAIRRO, METRICAS_VARIACAO } from "../src/abas/mapas/regras";
 import type { MapaAreas, MapaLocais } from "../src/abas/mapas/tipos";
 import { corpoExportacao } from "../src/componentes/mapa/exportar";
+import { enquadrarUmaVez } from "../src/componentes/mapa/criar";
+import type { MapaApuracao } from "../src/componentes/mapa/tipos";
 import { criarMalhas } from "../src/dados/malhas";
+import * as L from "leaflet";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -115,5 +118,30 @@ describe("dados e exportação", () => {
     expect(corpoExportacao({ ...e, camada: "locais", ano: 2022 }, "svg", c, cores).subtitulo)
       .toBe("RJ · locais de votação (cadastro de 2022); área do ponto ∝ eleitorado");
     expect(corpoExportacao({ ...e, subtitulo: "Abstenção" }, "svg", c, cores).subtitulo).toBe("Abstenção — RJ · bairros do IBGE");
+  });
+});
+
+describe("enquadramento", () => {
+  const mapaFalso = (conteiner: HTMLElement) =>
+    ({ getContainer: () => conteiner, fitBounds: vi.fn() }) as unknown as MapaApuracao & { fitBounds: ReturnType<typeof vi.fn> };
+  const limites = L.latLngBounds([[-33, -74], [5, -34]]);
+
+  it("mapa escondido (tamanho 0): não enquadra agora, guarda para quando aparecer", () => {
+    const m = mapaFalso(document.createElement("div"));  // fora do documento: tamanho 0
+    enquadrarUmaVez(m, limites, [4, 4]);
+    expect(m.fitBounds).not.toHaveBeenCalled();
+    expect(m._enquadrarPendente).toEqual({ limites, padding: [4, 4] });
+    expect(m._enquadrado).toBe(true);  // a atualização automática não refaz
+  });
+  it("mapa visível: enquadra uma vez só", () => {
+    const div = document.createElement("div");
+    document.body.append(div);
+    Object.defineProperties(div, { clientWidth: { value: 400 }, clientHeight: { value: 300 } });
+    const m = mapaFalso(div);
+    enquadrarUmaVez(m, limites);
+    enquadrarUmaVez(m, limites);
+    expect(m.fitBounds).toHaveBeenCalledOnce();
+    expect(m._enquadrarPendente).toBeUndefined();
+    div.remove();
   });
 });

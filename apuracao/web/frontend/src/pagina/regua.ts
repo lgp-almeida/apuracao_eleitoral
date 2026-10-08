@@ -20,13 +20,15 @@ export function dadosRegua(s: Pick<Status, "uf" | "progresso">): DadosRegua | nu
   };
 }
 
-/** "22:22" no dia de hoje; "04/10 22:22" em outro dia (a hora do TSE é a de Brasília, sem fuso). */
+/** "22:22" no dia de hoje; "04/10 22:22" em outro dia do ano; "08/09/2023 13:18" em outro ano (eleição importada).
+ * A hora do TSE é a de Brasília, sem fuso. */
 export function horaCurta(iso: string, hoje: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const hm = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  return d.toDateString() === hoje.toDateString() ? hm
-    : `${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} ${hm}`;
+  if (d.toDateString() === hoje.toDateString()) return hm;
+  const mesmoAno = d.getFullYear() === hoje.getFullYear();
+  return `${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", ...(mesmoAno ? {} : { year: "numeric" }) })} ${hm}`;
 }
 
 export function desenharRegua(raiz: HTMLElement, trilho: HTMLElement, d: DadosRegua | null): void {
