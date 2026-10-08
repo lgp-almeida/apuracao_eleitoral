@@ -137,23 +137,28 @@ class Copiador:
         return t.replace(hour=minutos // 60, minute=minutos % 60, second=0, microsecond=0)
 
     def verificar(self) -> dict[str, Any] | None:
-        """Espelha raw/ se passou `espelho_min`; faz o instantâneo da hora ou o final se for a vez."""
+        """Faz o instantâneo da hora ou o final se for a vez; senão espelha raw/ se passou `espelho_min`.
+
+        O espelho continua depois do final: o TSE ainda publica parciais (o EA20 regerado depois do anúncio,
+        rodada 36; uma retotalização). Parcial nova depois do final refaz o final, com o estado que chegou com ela."""
         sit = self.situacao()
         if sit == "sem dados":
             return None
-        pasta = self.destino / "instantaneos"
-        if sit == "final":
-            if (pasta / FINAL).exists():
-                return None
-            return self.copiar(FINAL)
-        nome = f"{self._horario(self.agora()):%Y-%m-%d_%Hh%M}"
-        if not (pasta / nome).exists():
+        nome = FINAL if sit == "final" else f"{self._horario(self.agora()):%Y-%m-%d_%Hh%M}"
+        if not (self.destino / "instantaneos" / nome).exists():
             return self.copiar(nome)
-        if time.monotonic() - self._ultimo_espelho >= 60 * self.espelho_min:
-            n = self.espelhar_raw()
-            if n:
-                logger.info("cópia de segurança: %d parciais novas espelhadas", n)
-        return None
+        if time.monotonic() - self._ultimo_espelho < 60 * self.espelho_min:
+            return None
+        n = self.espelhar_raw()
+        if not n:
+            return None
+        logger.info("cópia de segurança: %d parciais novas espelhadas", n)
+        return self.copiar(FINAL) if sit == "final" else None
+
+    def encerrar(self) -> dict[str, Any] | None:
+        """Verificação sem esperar `espelho_min` (fim do ensaio): nenhuma parcial que já chegou fica fora da cópia."""
+        self._ultimo_espelho = float("-inf")
+        return self.verificar()
 
     def executar(self, parar: threading.Event, verificar_s: float = 60.0) -> None:
         """Laço até `parar`; um erro (ex.: disco da cópia cheio ou desconectado) vai para o log e o

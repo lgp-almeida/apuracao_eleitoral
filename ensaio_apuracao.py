@@ -278,8 +278,8 @@ def main(argv: list[str] | None = None) -> int:
                 break
             time.sleep(max(0.0, a.intervalo - (time.time() - c0)))
         time.sleep(3)
-        try:  # a totalização final pode ter chegado no último ciclo
-            if r_copia := copiador.verificar():
+        try:  # a totalização final ou uma parcial depois dela (EA20 regerado) pode ter chegado no último ciclo
+            if r_copia := copiador.encerrar():
                 copiadas.append({"hora_2022": ult["hora_2022"], "nome": r_copia["nome"],
                                  "raw_novos": r_copia["raw_novos"], "segundos": r_copia["segundos"]})
         except Exception as exc:
