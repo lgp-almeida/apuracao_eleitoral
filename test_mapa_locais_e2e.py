@@ -46,7 +46,7 @@ def test_voltar_para_municipios(pagina, site) -> None:
     abrir(pagina, site, f"{BASE}&camada=voto&numero={CAND}")
     _pronto(pagina)
     pagina.select_option("#mapa-detalhe", "municipios")
-    pagina.wait_for_function("() => __apuracao.estado.detalhe === 'municipios' && !location.hash.includes('camada=')")
+    pagina.wait_for_function("() => __apuracao.abas.mapas.estado.detalhe === 'municipios' && !location.hash.includes('camada=')")
     assert pagina.locator("#mapa-l-camada").is_hidden() and pagina.locator("#mapa-l-locais").is_visible()
 
 

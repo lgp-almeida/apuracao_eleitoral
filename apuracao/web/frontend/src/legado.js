@@ -1,39 +1,40 @@
 /* Apuração 2026 — página do site local (código anterior à refatoração, migrado aos poucos para módulos).
  * Todo texto vindo dos dados entra por textContent (o TSE testa nomes com aspas e símbolos). */
 import * as L from "leaflet";
-import { repetir } from "./core/agendador.ts";
-import { api, baixar, enviar } from "./core/api.ts";
-import { dicaFlutuante } from "./componentes/dica.ts";
-import { quebrasQuantis } from "./componentes/escalas.ts";
-import { salvarBlob } from "./componentes/exportar.ts";
-import { graficoLinhas } from "./componentes/grafico/linhas.ts";
-import { criarCamadas } from "./componentes/mapa/camadas.ts";
-import { criarMapa } from "./componentes/mapa/criar.ts";
-import { copiarLink } from "./componentes/link.ts";
 import { criarAbaCandidato } from "./abas/candidato/index.ts";
 import { criarAbaComparacao } from "./abas/comparacao/index.ts";
-import { criarCandidatos } from "./dados/candidatos.ts";
+import { criarAbaMapas } from "./abas/mapas/index.ts";
 import { criarAbaPerfil } from "./abas/perfil/index.ts";
 import { criarAbaTransferencia } from "./abas/transferencia/index.ts";
-import { NOMES_CARGO } from "./core/cargos.ts";
+import { dicaFlutuante } from "./componentes/dica.ts";
+import { quebrasQuantis } from "./componentes/escalas.ts";
+import { graficoLinhas } from "./componentes/grafico/linhas.ts";
+import { copiarLink } from "./componentes/link.ts";
+import { criarMapa } from "./componentes/mapa/criar.ts";
+import { exportarMapa } from "./componentes/mapa/exportar.ts";
 import { tabelaOrdenavel } from "./componentes/tabela.ts";
+import { repetir } from "./core/agendador.ts";
+import { api, enviar } from "./core/api.ts";
+import { NOMES_CARGO } from "./core/cargos.ts";
 import { cor, el } from "./core/dom.ts";
-import { fmtFreq, fmtInt, fmtPct, fmtVariacao, hora, int, pct } from "./core/formatos.ts";
+import { fmtFreq, fmtInt, fmtPct, hora, int, pct } from "./core/formatos.ts";
 import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
 import { Roteador } from "./core/roteador.ts";
 import { lerEndereco } from "./core/rotas.ts";
+import { criarCandidatos } from "./dados/candidatos.ts";
+import { criarMalhas } from "./dados/malhas.ts";
 
 const REFRESH_MS = 60_000;
-const estado = { aba: "painel", uf: "", ano: 2026, geo: null, mapa: null,
+const estado = { aba: "painel", uf: "", ano: 2026, mapa: null,
   destacar: new Set(), destacarDefinido: false, cadAbertos: new Set(), painel: null };
 // endereço de cada aba: tabela no fim do arquivo (roteador.registrar)
 const roteador = new Roteador(mostrarAba, () => estado.aba);
 // abas já migradas para abas/<aba>/ (registradas no fim do arquivo)
 const candidatos = criarCandidatos();  // listas de candidatos por cargo: abas Candidato e Mapas
+const malhas = criarMalhas();  // municípios, bairros e áreas de ponderação, uma vez por página
 const modulos = new Map();
-const contexto = { uf: () => estado.uf, turno: () => estado.turno || 1, mostrarAba,
-  gravarEndereco: (a) => roteador.gravar(a), endereco: (a) => roteador.endereco(a),
-  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas },
+const contexto = { uf: () => estado.uf, turno: () => estado.turno || 1, ano: () => estado.ano, mostrarAba,
+  gravarEndereco: (a) => roteador.gravar(a), endereco: (a) => roteador.endereco(a), malhas,
   registrarMapa: (nome, mapa) => { estado[nome] = mapa; } };
 
 // ---------------------------------------------------------------- abas
@@ -45,10 +46,6 @@ function mostrarAba(aba) {
   roteador.aoMostrar(aba);
   document.querySelectorAll(".abas button").forEach((b) => b.setAttribute("aria-selected", b.dataset.aba === aba));
   document.querySelectorAll(".aba").forEach((s) => (s.hidden = s.id !== `aba-${aba}`));
-  if (aba === "mapas") {
-    garantirMapa();
-    carregarMomentos().then(atualizarMapa);
-  }
   modulos.get(aba)?.aoMostrar?.();
 }
 
@@ -608,30 +605,11 @@ function graficoSerie(serie) {  // painel: x = % de seções totalizadas
 }
 
 // ---------------------------------------------------------------- exportar mapas (desenhados no servidor)
-async function baixarMapa(qual, formato, msg) {
-  const m = estado[qual];
-  if (!m || !m._export) { msg.textContent = " desenhe o mapa primeiro."; return; }
-  const aba = qual === "mapa" ? "mapas" : "comparacao";
+function baixarMapa(qual, formato, msg) {
   const cargoSel = document.getElementById(qual === "mapa" ? "mapa-cargo" : "comp-cargo");
-  const amb = document.getElementById("ambiente").textContent;
-  const corpo = {
-    formato, camada: m._export.camada, titulo: m._export.titulo, ano: m._export.ano ?? null,
-    subtitulo: m._export.camada === "locais" ? `${estado.uf} · locais de votação (cadastro de ${m._export.ano}); área do ponto ∝ eleitorado`
-      : m._export.camada === "areas" ? `${estado.uf} · áreas de ponderação do Censo 2022 (IBGE)`
-      : m._export.subtitulo ? `${m._export.subtitulo} — ${estado.uf} · bairros do IBGE`
-      : `${cargoSel.selectedOptions[0]?.textContent || ""} — ${estado.uf} · ${amb}`,
-    nome: `mapa ${aba} ${m._export.titulo}`, cores: m._export.cores, legenda: m._export.legenda,
-    fundo: cor("--superficie"), texto: cor("--texto"), sem_dado: cor("--sem-dado"), contorno: cor("--superficie"),
-    extras: [...(m._export.extras || []), `Link: ${location.origin}${location.pathname}${location.hash}`],
-  };
-  msg.textContent = " gerando…";
-  try {
-    const { blob, nome } = await baixar("api/exportar/mapa", `mapa.${formato}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
-    salvarBlob(blob, nome);
-    msg.textContent = " arquivo gerado.";
-  } catch (e) { msg.textContent = ` erro: ${e.message}`; }
-  setTimeout(() => { msg.textContent = ""; }, 5000);
+  return exportarMapa(estado[qual], formato, msg, { aba: qual === "mapa" ? "mapas" : "comparacao", uf: estado.uf,
+    cargo: cargoSel.selectedOptions[0]?.textContent || "", ambiente: document.getElementById("ambiente").textContent,
+    link: `${location.origin}${location.pathname}${location.hash}` });
 }
 
 document.querySelectorAll(".baixar-mapa").forEach((b) => b.addEventListener("click",
@@ -651,469 +629,13 @@ function linhaCandidato(pos, x, maxPct, cargo) {
 }
 
 // ---------------------------------------------------------------- candidatos (abas/candidato; lista em dados/candidatos.ts)
-const preencherLista = (cargo, datalistId) => candidatos.preencher(cargo, document.getElementById(datalistId));
-const resolverNumero = (cargo, texto) => candidatos.resolver(cargo, texto);
 const consultarCandidato = (...args) => abaCandidato.consultar(...args);
-
-// ---------------------------------------------------------------- mapas
-function garantirMapa() {
-  if (!estado.mapa) estado.mapa = criarMapa(document.getElementById("mapa"));
-}
-
-async function malha() {
-  if (!estado.geo) estado.geo = await api("geo/municipios.geojson");
-  return estado.geo;
-}
-
-// polígonos e pontos: componentes/mapa/camadas.ts (malhas com o cache desta página)
-const { desenharMapa, desenharPontos } = criarCamadas({
-  malhas: { municipios: malha, bairros: malhaBairros, areas: malhaAreas }, fmtDif: fmtVariacao });
-
-const metricaSel = document.getElementById("mapa-metrica");
-const numeroMapa = document.getElementById("mapa-numero");
-metricaSel.addEventListener("change", () => {
-  numeroMapa.disabled = !metricaSel.value.endsWith("_candidato");
-  if (!numeroMapa.disabled) preencherLista(document.getElementById("mapa-cargo").value, "mapa-lista");
-});
-document.getElementById("mapa-cargo").addEventListener("change", (e) => {
-  candidatos.limpar();
-  estado.lt.idx = Number.MAX_SAFE_INTEGER;  // novo cargo: começa no momento mais recente
-  carregarMomentos();
-  if (!numeroMapa.disabled) preencherLista(e.target.value, "mapa-lista");
-});
-document.getElementById("form-mapa").addEventListener("submit", (e) => { e.preventDefault(); atualizarMapa(); });
-document.getElementById("mapa-locais").addEventListener("change", alternarLocais);
-
-async function atualizarMapa() {
-  garantirMapa();
-  const cargo = document.getElementById("mapa-cargo").value;
-  const metrica = metricaSel.value;
-  const legenda = document.getElementById("mapa-legenda");
-  // por local, cada camada valida o que precisa (a métrica escondida não vale nas camadas sem ela)
-  if (estado.detalhe === "locais") { await atualizarMapaLocais(cargo, legenda); return; }
-  if (estado.detalhe === "areas") { await atualizarMapaAreas(cargo, legenda); return; }
-  let q = `api/mapa?cargo=${cargo}&metrica=${metrica}`;
-  let numero = null;
-  if (metrica.endsWith("_candidato")) {
-    numero = /^\d+$/.test(numeroMapa.value.trim()) ? Number(numeroMapa.value.trim())
-      : estado.detalhe !== "municipios" ? null : await resolverNumero(cargo, numeroMapa.value || "");
-    if (numero === null) { legenda.replaceChildren(el("p", {}, "Informe o número de um candidato.")); return; }
-    q += `&numero=${numero}`;
-  }
-  if (estado.detalhe === "bairros") { await atualizarMapaBairros(cargo, metrica, numero, legenda); return; }
-  const lt = estado.lt;
-  const noPassado = lt.momentos.length > 1 && lt.idx < lt.momentos.length - 1;
-  const chaveEscala = q;  // a escala do quadro "agora" vale para todos os quadros da mesma consulta
-  try {
-    if (noPassado && !lt.escalas[chaveEscala]) {  // escala ainda não calculada: pega do momento mais recente
-      lt.escalas[chaveEscala] = await desenharMapa(estado.mapa, await api(q), legenda);
-    }
-    const dados = await api(noPassado ? `${q}&momento=${encodeURIComponent(lt.momentos[lt.idx])}` : q);
-    const esc = await desenharMapa(estado.mapa, dados, legenda, "", noPassado ? lt.escalas[chaveEscala] : null);
-    if (!noPassado) lt.escalas[chaveEscala] = esc;
-    roteador.gravar("mapas");
-  } catch (e) { legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`)); }
-}
-
-// ---------------------------------------------------------------- mapa por bairro (malha do IBGE + microdados)
-const detalheSel = document.getElementById("mapa-detalhe");
-const anoBairrosSel = document.getElementById("mapa-ano");
-const cargoMapa = document.getElementById("mapa-cargo");
-const OPCOES_CARGO_MUN = [...cargoMapa.options].map((o) => [o.value, o.textContent]);
-const METRICAS_BAIRRO = ["vencedor", "pct_candidato", "votos_candidato", "brancos_nulos_pct", "brancos_pct",
-  "nulos_pct", "abstencao_pct", "comparecimento_pct"];
-estado.detalhe = "municipios";
-
-async function malhaBairros() {
-  if (!estado.geoBairros) estado.geoBairros = await api("geo/bairros.geojson");
-  return estado.geoBairros;
-}
-
-async function malhaAreas() {
-  if (!estado.geoAreas) estado.geoAreas = await api("geo/areas.geojson");
-  return estado.geoAreas;
-}
-
-function preencherCargos(opcoes, preferido) {
-  const atual = String(preferido ?? cargoMapa.value);
-  cargoMapa.replaceChildren(...opcoes.map(([val, t]) => el("option", { value: val }, t)));
-  cargoMapa.value = opcoes.some(([val]) => val === atual) ? atual : (opcoes[0]?.[0] ?? "");
-}
-
-// ajusta os controles ao detalhe escolhido; no modo bairros, anos e cargos vêm dos microdados no cache
-async function prepararDetalhe(anoPreferido = null, cargoPreferido = null) {
-  const bairros = detalheSel.value !== "municipios";  // bairros ou locais: microdados (anos e cargos do cache)
-  const locais = detalheSel.value === "locais";
-  const areas = detalheSel.value === "areas";
-  if (estado.detalhe === "municipios" && bairros) estado.cargoMun = cargoMapa.value;  // volta ao mesmo cargo depois
-  estado.detalhe = detalheSel.value;
-  document.getElementById("mapa-l-ano").hidden = !bairros;
-  document.getElementById("bairros-nota").hidden = detalheSel.value !== "bairros";
-  document.getElementById("locais-nota").hidden = !locais;
-  document.getElementById("areas-nota").hidden = !areas;
-  document.getElementById("mapa-l-locais").hidden = locais;  // os pontos já são os locais
-  if (locais && document.getElementById("mapa-locais").checked) {
-    document.getElementById("mapa-locais").checked = false;
-    alternarLocais({ target: document.getElementById("mapa-locais") });
-  }
-  for (const op of metricaSel.options) op.disabled = bairros && !METRICAS_BAIRRO.includes(op.value);
-  if (metricaSel.selectedOptions[0]?.disabled) metricaSel.value = "vencedor";
-  if (locais || areas) await prepararLocais(areas ? "area" : "local");
-  ajustarControlesLocais();
-  if (!bairros) { preencherCargos(OPCOES_CARGO_MUN, cargoPreferido ?? estado.cargoMun); return; }
-  document.getElementById("linha-tempo").hidden = true;  // microdados = resultado final: sem linha do tempo
-  document.getElementById("lt-nota").hidden = true;
-  if (!estado.bairrosInfo) estado.bairrosInfo = await api("api/bairros/anos");
-  const info = estado.bairrosInfo;
-  const anos = Object.keys(info.anos).map(Number);
-  if (!anos.includes(estado.ano)) anos.push(estado.ano);  // o ano do site (2026: só após a publicação)
-  anos.sort((a, b) => b - a);
-  const padrao = info.anos[estado.ano] ? estado.ano : (anos.find((a) => info.anos[a]) ?? anos[0]);
-  const escolhido = anos.map(String).includes(String(anoPreferido ?? anoBairrosSel.value))
-    ? String(anoPreferido ?? anoBairrosSel.value) : String(padrao);
-  anoBairrosSel.replaceChildren(...anos.map((a) => el("option", { value: a }, String(a))));
-  anoBairrosSel.value = escolhido;
-  const cargos = info.anos[escolhido] || [1, 3, 5, 6, 7];
-  preencherCargos(cargos.map((c) => [String(c), info.cargos[c]]), cargoPreferido);
-}
-
-async function atualizarMapaBairros(cargo, metrica, numero, legenda) {
-  const nota = document.getElementById("bairros-nota");
-  let q = `api/mapa/bairros?ano=${anoBairrosSel.value}&cargo=${cargo}&metrica=${metrica}&turno=${estado.turno || 1}`;
-  if (numero !== null) q += `&numero=${numero}`;
-  try {
-    const dados = await api(q);
-    await desenharMapa(estado.mapa, dados, legenda, "", null, "bairros");
-    const c = dados.cobertura;
-    nota.textContent = `Bairros do IBGE (Censo 2022): ${int(c.bairros_com_dado)} de ${int(c.bairros)} bairros têm local ` +
-      `de votação (${int(c.locais_em_bairro)} locais). Municípios sem malha de bairros aparecem só com o contorno. ` +
-      "Cada local é contado no bairro que contém sua coordenada.";
-  } catch (e) {
-    if (estado.mapa._camada) { estado.mapa.removeLayer(estado.mapa._camada); estado.mapa._camada = null; }
-    if (estado.mapa._contornos) { estado.mapa.removeLayer(estado.mapa._contornos); estado.mapa._contornos = null; }
-    estado.mapa._export = null;
-    legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
-    nota.textContent = "";
-  }
-  roteador.gravar("mapas");
-}
-
-detalheSel.addEventListener("change", async () => {
-  await prepararDetalhe();
-  if (detalheSel.value === "municipios") await carregarMomentos();
-  atualizarMapa();
-});
-anoBairrosSel.addEventListener("change", async () => { await prepararDetalhe(anoBairrosSel.value); atualizarMapa(); });
-
-// ---------------------------------------------------------------- mapa por local de votação (rodada 32)
-// Um ponto por local (microdados): voto, perfil do eleitorado, resíduo do Perfil × voto ou variação desde a eleição
-// anterior (rodada 46: partido pela entidade, abstenção, brancos/nulos) ou destino dos eliminados no 2º turno
-// (rodada 47: microdados dos dois turnos). Área do ponto ∝ eleitorado.
-const METRICAS_VARIACAO = ["pct_candidato", "abstencao_pct", "comparecimento_pct", "brancos_nulos_pct", "brancos_pct", "nulos_pct"];
-const camadaSel = document.getElementById("mapa-camada");
-const indicadorSel = document.getElementById("mapa-indicador");
-const transfSel = document.getElementById("mapa-transf");
-const municipioLocSel = document.getElementById("mapa-municipio");
-
-// indicadores e municípios da unidade do detalhe ("local" ou "area": a área tem a religião e a amostra do Censo)
-async function prepararLocais(unidade = "local") {
-  estado.mapaInfos ||= {};
-  if (!estado.mapaInfos[unidade]) estado.mapaInfos[unidade] = await api(`api/perfil/info?unidade=${unidade}`);
-  if (estado.indicadoresDe === unidade) return;
-  estado.indicadoresDe = unidade;
-  const info = estado.mapaInfos[unidade];
-  const indAtual = indicadorSel.value, munAtual = municipioLocSel.value;
-  const grupos = {};
-  for (const [k, d] of Object.entries(info.indicadores)) (grupos[d.fonte] = grupos[d.fonte] || []).push([k, d.rotulo]);
-  indicadorSel.replaceChildren(...Object.entries(grupos).map(([fonte, itens]) =>
-    el("optgroup", { label: fonte }, ...itens.map(([k, r]) => el("option", { value: k }, r)))));
-  if ([...indicadorSel.options].some((o) => o.value === indAtual)) indicadorSel.value = indAtual;
-  municipioLocSel.replaceChildren(el("option", { value: "" }, `Todo o estado (${estado.uf})`),
-    ...info.municipios.map((m) => el("option", { value: m.CD_MUN }, m.NM_MUN)));
-  if ([...municipioLocSel.options].some((o) => o.value === munAtual)) municipioLocSel.value = munAtual;
-}
-
-const CAMADAS_AREA = ["voto", "perfil", "residuo", "variacao", "transferencia"];  // por área de ponderação
-
-function ajustarControlesLocais() {
-  const locais = estado.detalhe === "locais" || estado.detalhe === "areas";  // os dois usam camada/indicador/município
-  for (const op of camadaSel.options) op.disabled = estado.detalhe === "areas" && !CAMADAS_AREA.includes(op.value);
-  if (camadaSel.selectedOptions[0]?.disabled) camadaSel.value = "voto";
-  const camada = camadaSel.value;
-  document.getElementById("mapa-l-camada").hidden = !locais;
-  document.getElementById("mapa-l-municipio").hidden = !locais;
-  const comMetrica = ["voto", "variacao"].includes(camada);
-  document.getElementById("mapa-l-indicador").hidden = !locais || comMetrica || camada === "transferencia";
-  document.getElementById("mapa-l-transf").hidden = !locais || camada !== "transferencia";
-  document.getElementById("mapa-l-metrica").hidden = locais && !comMetrica;
-  if (locais) {
-    const permitidas = camada === "variacao" ? METRICAS_VARIACAO : METRICAS_BAIRRO;
-    for (const op of metricaSel.options) op.disabled = !permitidas.includes(op.value);
-    if (metricaSel.selectedOptions[0]?.disabled) metricaSel.value = camada === "variacao" ? "pct_candidato" : "vencedor";
-  }
-  numeroMapa.disabled = locais ? !(camada === "residuo" || (comMetrica && metricaSel.value.endsWith("_candidato")))
-    : !metricaSel.value.endsWith("_candidato");
-  numeroMapa.placeholder = !locais ? "número" : camada === "residuo" ? "número (2 dígitos = partido)"
-    : camada === "variacao" ? "número (vale o partido)" : "número";
-}
-camadaSel.addEventListener("change", () => { ajustarControlesLocais(); atualizarMapa(); });
-indicadorSel.addEventListener("change", () => atualizarMapa());
-transfSel.addEventListener("change", () => atualizarMapa());
-municipioLocSel.addEventListener("change", () => { if (estado.mapa) estado.mapa._enquadrado = false; atualizarMapa(); });
-metricaSel.addEventListener("change", ajustarControlesLocais);
-
-// parâmetros da camada escolhida, comuns ao mapa por local e por área; null (com o aviso na legenda) se falta o nº
-function consultaCamada(cargo, legenda) {
-  const camada = camadaSel.value;
-  const q = new URLSearchParams({ ano: anoBairrosSel.value, camada, cargo, turno: estado.turno || 1 });
-  const num = numeroMapa.value.trim();
-  if (camada === "voto" || camada === "variacao") {
-    q.set("metrica", metricaSel.value);
-    if (metricaSel.value.endsWith("_candidato")) {
-      if (!/^\d+$/.test(num)) {
-        legenda.replaceChildren(el("p", {}, camada === "variacao" ? "Informe o número de um candidato ou partido (vale o partido)."
-          : "Informe o número de um candidato.")); return null;
-      }
-      q.set("numero", num);
-    }
-  } else if (camada === "transferencia") {
-    q.set("metrica", transfSel.value);
-    q.set("turno", "2");
-  } else {
-    q.set("indicador", indicadorSel.value);
-    if (camada === "residuo") {
-      if (!/^\d+$/.test(num)) {
-        legenda.replaceChildren(el("p", {}, "Informe o número do candidato (ou 2 dígitos para o partido).")); return null;
-      }
-      q.set("numero", num);
-    }
-  }
-  if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
-  return q;
-}
-
-// a leitura das camadas divergentes (resíduo e variação) no mapa por área
-function notaDivergenteArea(d) {
-  const est = d.estatistica;
-  return (est && est.pearson !== null ? ` Reta voto × indicador: r = ${est.pearson.toFixed(2).replace(".", ",")}, ` +
-    `R² = ${est.r2.toFixed(2).replace(".", ",")}, ${int(est.n)} áreas com ≥ ${int(d.min_validos)} votos válidos. ` +
-    "Azul: o voto foi MAIOR que o esperado pelo indicador; vermelho: menor. Correlação ecológica." : "") +
-    (d.camada === "variacao" ? " Partido pela entidade (fusões e trocas de nº). Azul: subiu; vermelho: caiu." : "") +
-    (!Object.keys(d.itens).length && d.camada === "residuo" ? ` Nenhuma área com ${int(d.min_validos)} votos válidos ` +
-      "ou mais para o resíduo (ele só usa áreas com votos suficientes)." : "");
-}
-
-async function atualizarMapaLocais(cargo, legenda) {
-  const nota = document.getElementById("locais-nota");
-  const camada = camadaSel.value;
-  const q = consultaCamada(cargo, legenda);
-  if (!q) return;
-  legenda.replaceChildren(el("p", { class: "nota" }, "carregando os locais…"));
-  const pedido = novoPedidoMapa();
-  try {
-    const d = await api(`api/mapa/locais?${q}`);
-    if (pedido !== estado.pedidoMapa) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
-    await desenharPontos(estado.mapa, d, legenda);
-    const c = d.cobertura;
-    const est = d.estatistica;
-    nota.textContent = `${int(c.com_valor)} de ${int(c.locais)} locais com valor (coordenada do cadastro de eleitorado ` +
-      `de ${d.ano}); a área do ponto é proporcional ao eleitorado do local.` +
-      (est && est.pearson !== null ? ` Reta voto × indicador: r = ${est.pearson.toFixed(2).replace(".", ",")}, ` +
-        `R² = ${est.r2.toFixed(2).replace(".", ",")}, ${int(est.n)} locais com ≥ ${int(d.min_validos)} votos válidos. ` +
-        "Azul: o voto foi MAIOR que o esperado pelo indicador; vermelho: menor. Correlação ecológica." : "") +
-      (camada === "variacao" ? ` Só os locais presentes em ${d.ano_ref} e ${d.ano} (mesmo município, zona e nº do local); ` +
-        "partido pela entidade (fusões e trocas de nº). Azul: subiu; vermelho: caiu." : "") +
-      (camada === "transferencia" ? " Inferência ecológica (padrão médio, não o voto de pessoas): o destino dos " +
-        "eliminados é estimado por município (todos os locais do município têm o mesmo valor); eliminados, abstenção " +
-        "extra e o resíduo são de cada local." : "") +
-      (!d.itens.length && camada === "residuo" ? ` Nenhum local com ${int(d.min_validos)} votos válidos ou mais ` +
-        "para o resíduo (ele só usa locais com votos suficientes)." : "");
-  } catch (e) {
-    if (pedido !== estado.pedidoMapa) return;
-    for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
-    estado.mapa._export = null;
-    legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
-    nota.textContent = "";
-  }
-  roteador.gravar("mapas");
-}
-
-// Mudanças seguidas (camada, indicador, detalhe local ↔ área) disparam vários pedidos: vale só o último. Contador
-// único para os dois detalhes, para a resposta atrasada de um não desenhar por cima do outro.
-const novoPedidoMapa = () => (estado.pedidoMapa = (estado.pedidoMapa || 0) + 1);
-
-// ---------------------------------------------------------------- mapa por área de ponderação (TODO 25)
-// Polígonos = fusão dos setores do Censo pela composição do IBGE. Voto: soma dos locais de votação da área (o local
-// fica na área do setor que contém a sua coordenada); perfil: indicadores da unidade área (religião e amostra do Censo).
-async function atualizarMapaAreas(cargo, legenda) {
-  const nota = document.getElementById("areas-nota");
-  const camada = camadaSel.value;
-  const q = consultaCamada(cargo, legenda);
-  if (!q) return;
-  const mun = municipioLocSel.value;
-  legenda.replaceChildren(el("p", { class: "nota" }, "carregando as áreas…"));
-  const pedido = novoPedidoMapa();
-  try {
-    const d = await api(`api/mapa/areas?${q}`);
-    if (pedido !== estado.pedidoMapa) return;  // um pedido mais novo já saiu: esta resposta chegou atrasada
-    await desenharMapa(estado.mapa, d, legenda, d.unidade === "%" ? "%" : "", null, "areas");
-    if (mun) {  // enquadra o município escolhido (as demais áreas ficam "sem dado")
-      const b = L.latLngBounds([]);
-      estado.mapa._camada.eachLayer((l) => { if (String(l.feature.properties.CD_MUN) === mun) b.extend(l.getBounds()); });
-      if (b.isValid()) estado.mapa.fitBounds(b, { padding: [10, 10] });
-    }
-    const c = d.cobertura;
-    const amostra = (d.fonte_indicador || "").includes("amostra");
-    nota.textContent = `Áreas de ponderação do Censo 2022 (IBGE): ${int(c.areas_com_dado)} de ${int(c.areas)} áreas ` +
-      "com local de votação têm valor; uma cidade pequena é uma área só. " +
-      (camada === "perfil" ? `Fonte: ${d.fonte_indicador}.` + (amostra ? " Estimativa da amostra do Censo: tem erro amostral" +
-        (c.areas_cv_fragil != null ? ` — ${int(c.areas_cv_fragil)} áreas pouco confiáveis (CV > 30%) e ` +
-          `${int(c.areas_cv_cautela)} para usar com cautela (CV de 15% a 30%), pelos coeficientes do IBGE.` : ".") : "")
-        : "O voto da área é a soma dos locais de votação dentro dela (o local fica na área do setor que contém a sua " +
-          "coordenada)." + (camada === "variacao" ? ` A área é a mesma nos dois anos (${d.ano_ref} e ${d.ano}).` : "") +
-          (camada === "transferencia" ? " Inferência ecológica (padrão médio, não o voto de pessoas), feita por local e " +
-            "somada na área: o destino dos eliminados é estimado por município (todas as áreas do município têm o mesmo " +
-            "valor); eliminados, abstenção extra e o resíduo são de cada área." : "")) +
-      notaDivergenteArea(d);
-  } catch (e) {
-    if (pedido !== estado.pedidoMapa) return;
-    for (const k of ["_camada", "_contornos"]) if (estado.mapa[k]) { estado.mapa.removeLayer(estado.mapa[k]); estado.mapa[k] = null; }
-    estado.mapa._export = null;
-    legenda.replaceChildren(el("p", {}, `Erro: ${e.message}`));
-    nota.textContent = "";
-  }
-  roteador.gravar("mapas");
-}
-
-// ---------------------------------------------------------------- endereço do mapa
-// #mapas?cargo=3&metrica=pct_candidato&numero=68&momento=2026-09-29T18:30:00&locais=1
-// (sem `momento` = acompanha o mais recente). replaceState: não enche o histórico nem dispara hashchange.
-function parametrosMapa() {
-  const q = new URLSearchParams({ cargo: document.getElementById("mapa-cargo").value, metrica: metricaSel.value });
-  if (metricaSel.value.endsWith("_candidato") && numeroMapa.value.trim()) q.set("numero", numeroMapa.value.trim());
-  const lt = estado.lt;
-  if (estado.detalhe !== "municipios") {
-    q.set("detalhe", estado.detalhe);
-    q.set("ano_bairros", anoBairrosSel.value);
-    if (estado.detalhe === "locais" || estado.detalhe === "areas") {
-      q.set("camada", camadaSel.value);
-      if (["perfil", "residuo"].includes(camadaSel.value)) q.set("indicador", indicadorSel.value);
-      if (camadaSel.value === "transferencia") q.set("transf", transfSel.value);
-      if (camadaSel.value === "residuo" && numeroMapa.value.trim()) q.set("numero", numeroMapa.value.trim());
-      if (municipioLocSel.value) q.set("municipio", municipioLocSel.value);
-    }
-  } else if (lt.momentos.length > 1 && lt.idx < lt.momentos.length - 1) q.set("momento", lt.momentos[lt.idx]);
-  if (document.getElementById("mapa-locais").checked) q.set("locais", "1");
-  return q;
-}
-
-async function aplicarEnderecoMapa(params) {
-  const q = new URLSearchParams(params);
-  const metrica = q.get("metrica");
-  detalheSel.value = ["bairros", "locais", "areas"].includes(q.get("detalhe")) ? q.get("detalhe") : "municipios";
-  await prepararDetalhe(q.get("ano_bairros"), q.get("cargo"));  // cargos dependem do detalhe e do ano
-  if (metrica && [...metricaSel.options].some((o) => o.value === metrica && !o.disabled)) metricaSel.value = metrica;
-  const temOpcao = (sel, val) => val !== null && [...sel.options].some((o) => o.value === val);
-  if (temOpcao(camadaSel, q.get("camada"))) camadaSel.value = q.get("camada");
-  if (temOpcao(indicadorSel, q.get("indicador"))) indicadorSel.value = q.get("indicador");
-  if (temOpcao(transfSel, q.get("transf"))) transfSel.value = q.get("transf");
-  if (temOpcao(municipioLocSel, q.get("municipio"))) municipioLocSel.value = q.get("municipio");
-  ajustarControlesLocais();
-  numeroMapa.value = q.get("numero") || "";
-  // o momento vira índice só quando os momentos do cargo chegarem (carregarMomentos)
-  estado.lt.pedido = q.get("momento") || null;
-  estado.lt.idx = Number.MAX_SAFE_INTEGER;
-  const locais = document.getElementById("mapa-locais");
-  if (locais.checked !== (q.get("locais") === "1")) {
-    locais.checked = q.get("locais") === "1";
-    alternarLocais({ target: locais });
-  }
-}
-
-document.getElementById("copiar-link").addEventListener("click",
-  () => copiarLink(roteador.endereco("mapas"), document.getElementById("copiar-msg")));
-
-// ---------------------------------------------------------------- linha do tempo do mapa
-estado.lt = { momentos: [], idx: 0, escalas: {}, timer: null };
-const ltRange = document.getElementById("lt-range");
-const ltPlay = document.getElementById("lt-play");
-
-async function carregarMomentos() {
-  const lt = estado.lt;
-  if (estado.detalhe !== "municipios") return;  // bairros/locais: microdados finais, sem linha do tempo
-  const noFim = lt.idx >= lt.momentos.length - 1;
-  try { lt.momentos = (await api(`api/mapa/momentos?cargo=${document.getElementById("mapa-cargo").value}`)).momentos; }
-  catch (_) { lt.momentos = []; }
-  const barra = document.getElementById("linha-tempo"), nota = document.getElementById("lt-nota");
-  barra.hidden = lt.momentos.length < 2;
-  nota.hidden = !barra.hidden;
-  nota.textContent = `Linha do tempo: aparece a partir da 2ª totalização municipal ` +
-    `(${lt.momentos.length} registrada${lt.momentos.length === 1 ? "" : "s"} para este cargo).`;
-  ltRange.max = String(Math.max(0, lt.momentos.length - 1));
-  if (noFim) lt.idx = lt.momentos.length - 1;  // acompanhando o "agora": continua no fim
-  if (lt.pedido) {  // momento vindo do endereço: última totalização até aquela hora (ISO compara como texto)
-    const ate = lt.momentos.filter((mm) => mm <= lt.pedido).length - 1;
-    lt.idx = Math.max(0, ate);
-    lt.pedido = null;
-  }
-  ltRange.value = String(lt.idx);
-  rotuloMomento();
-}
-
-function rotuloMomento() {
-  const lt = estado.lt;
-  if (!lt.momentos.length) return;
-  const ultimo = lt.idx === lt.momentos.length - 1;
-  document.getElementById("lt-rotulo").textContent =
-    `${hora(lt.momentos[lt.idx])}${ultimo ? " (mais recente)" : ""} · totalização ${lt.idx + 1} de ${lt.momentos.length}`;
-}
-
-ltRange.addEventListener("input", () => { estado.lt.idx = Number(ltRange.value); rotuloMomento(); atualizarMapa(); });
-ltPlay.addEventListener("click", () => {
-  const lt = estado.lt;
-  if (lt.timer) { clearInterval(lt.timer); lt.timer = null; ltPlay.textContent = "▶"; return; }
-  if (lt.idx >= lt.momentos.length - 1) lt.idx = 0;
-  ltPlay.textContent = "⏸"; ltPlay.setAttribute("aria-label", "Pausar");
-  const passo = async () => {
-    ltRange.value = String(lt.idx); rotuloMomento(); await atualizarMapa();
-    if (lt.idx >= lt.momentos.length - 1) { clearInterval(lt.timer); lt.timer = null; ltPlay.textContent = "▶"; return; }
-    lt.idx += 1;
-  };
-  passo();
-  lt.timer = setInterval(passo, 900);
-});
-
-async function alternarLocais(e) {
-  garantirMapa();
-  roteador.gravar("mapas");
-  if (!e.target.checked) { if (estado.camadaLocais) estado.mapa.removeLayer(estado.camadaLocais); return; }
-  if (!estado.camadaLocais) {
-    const geo = await api(`geo/locais.geojson?ano=${estado.ano}`);
-    const renderer = L.canvas({ padding: 0.5 });
-    estado.camadaLocais = L.geoJSON(geo, {
-      pointToLayer: (ft, ll) => L.circleMarker(ll, {
-        renderer, radius: Math.max(2, Math.sqrt(ft.properties.eleitores || 0) / 12),
-        color: cor("--texto"), weight: 0.5, fillColor: cor("--serie-2"), fillOpacity: 0.7,
-      }),
-      onEachFeature: (ft, layer) => layer.bindPopup(() => {
-        const p = ft.properties;
-        return el("div", {}, el("strong", {}, p.nome), el("br"), `${p.bairro || ""} — ${p.municipio}`, el("br"),
-          `Zona ${p.zona}, local ${p.local} · ${int(p.eleitores)} eleitores em ${p.secoes} seções (${estado.ano})`);
-      }),
-    });
-  }
-  estado.camadaLocais.addTo(estado.mapa);
-}
 
 // ---------------------------------------------------------------- ciclo de atualização
 async function tick() {
   await atualizarStatus();
   if (estado.aba === "painel") { await atualizarPainel(); atualizarMudancas(); }
-  if (estado.aba === "mapas" && !estado.lt.timer && estado.detalhe === "municipios") {
-    const noFim = estado.lt.idx >= estado.lt.momentos.length - 1;
-    await carregarMomentos();
-    if (noFim) await atualizarMapa();  // quem está vendo um momento passado não é atropelado
-  }
+  await modulos.get(estado.aba)?.atualizar?.();
 }
 // ---------------------------------------------------------------- alertas da noite
 // O servidor verifica a cada 15 s (apuracao/alertas.py); a página consulta /api/alertas?desde=<último id>.
@@ -1257,7 +779,8 @@ document.getElementById("destaque-link").addEventListener("click", () =>
 
 // Ponto de acesso dos testes e2e: no script clássico estes nomes eram globais; no módulo, não.
 window.__apuracao = { estado, alertas, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
-  consultarCandidato, partidosVar: () => abaComparacao.partidosVar() };
+  consultarCandidato, partidosVar: () => abaComparacao.partidosVar(),
+  get abas() { return Object.fromEntries(modulos); } };
 
 (function iniciarAlertas() {
   const som = document.getElementById("alertas-som");
@@ -1278,11 +801,12 @@ window.__apuracao = { estado, alertas, tocar, api, desenharPainel, atualizarPain
 function registrarModulo(m) { modulos.set(m.id, m); return m; }
 const abaComparacao = registrarModulo(criarAbaComparacao(contexto));
 const abaCandidato = registrarModulo(criarAbaCandidato(contexto, { candidatos, botaoAcompanhar }));
+const abaMapas = registrarModulo(criarAbaMapas(contexto, { candidatos }));
 // escrever: estado da aba → parâmetros (gravar e "Copiar link"); aplicar: parâmetros → estado (abre a aba)
 roteador
   .registrar("painel", { escrever: parametrosPainel, aplicar: aplicarEnderecoPainel, enderecoAoMostrar: true })
   .registrar("candidato", abaCandidato)
-  .registrar("mapas", { escrever: parametrosMapa, aplicar: (q) => aplicarEnderecoMapa(q).then(() => mostrarAba("mapas")) })
+  .registrar("mapas", abaMapas)
   .registrar("comparacao", abaComparacao)
   .registrar("perfil", registrarModulo(criarAbaPerfil(contexto)))
   .registrar("transferencia", registrarModulo(criarAbaTransferencia(contexto)));

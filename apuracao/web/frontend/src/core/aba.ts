@@ -10,6 +10,8 @@ export interface ModuloAba extends RotaAba {
   aoMostrar?(): void;
   /** Carga na abertura da página, antes de abrir o endereço (ex.: a comparação descobre se existe). */
   preparar?(): Promise<void>;
+  /** Ciclo de atualização (60 s), só com a aba aberta. */
+  atualizar?(): Promise<void>;
 }
 
 /** O que a página dá às abas (sem import circular com o resto do legado). */
@@ -24,6 +26,8 @@ export interface Contexto {
   endereco(aba: Aba): string;
   /** Turno da eleição no site (do /api/status). */
   turno(): number;
+  /** Ano da eleição do site (2026 no tempo real; o da importação num histórico). */
+  ano(): number;
   /** Malhas do site, com cache da página. */
   malhas: Malhas;
   /** Torna um mapa conhecido da página pelo nome (exportação: data-mapa="<nome>"; testes e2e). */

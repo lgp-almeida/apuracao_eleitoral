@@ -355,7 +355,8 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
   [RODADA_62](RODADA_62_2026-10-07_frontend_fase2_roteador.md); fase 3 (componentes) na
   [RODADA_63](RODADA_63_2026-10-07_frontend_fase3_componentes.md); fase 4, parte 1 (Transferência e Perfil) na
   [RODADA_64](RODADA_64_2026-10-07_frontend_fase4_transferencia_perfil.md); parte 2 (Comparação e Candidato) na
-  [RODADA_65](RODADA_65_2026-10-07_frontend_fase4_comparacao_candidato.md). Próxima: fase 4, parte 3 (Mapas e Painel).
+  [RODADA_65](RODADA_65_2026-10-07_frontend_fase4_comparacao_candidato.md); parte 3 (Mapas) na
+  [RODADA_66](RODADA_66_2026-10-07_frontend_fase4_mapas.md). Próxima: fase 4, parte 4 (Painel, alertas e modo TV).
 
 - **Proposta completa:** [PROPOSTA_REFATORACAO_FRONTEND.md](PROPOSTA_REFATORACAO_FRONTEND.md). Traz o diagnóstico com
   números, a arquitetura por módulos, o design system, a robustez, as fases e os riscos.
