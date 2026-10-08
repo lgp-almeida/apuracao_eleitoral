@@ -6,14 +6,17 @@ import { api, baixar, enviar } from "./core/api.ts";
 import { dicaFlutuante } from "./componentes/dica.ts";
 import { quebrasQuantis } from "./componentes/escalas.ts";
 import { salvarBlob } from "./componentes/exportar.ts";
-import { graficoDispersao } from "./componentes/grafico/dispersao.ts";
 import { graficoLinhas } from "./componentes/grafico/linhas.ts";
 import { graficoSwing, graficoVariacao } from "./componentes/grafico/variacao.ts";
 import { criarCamadas } from "./componentes/mapa/camadas.ts";
 import { criarMapa } from "./componentes/mapa/criar.ts";
+import { copiarLink } from "./componentes/link.ts";
+import { criarAbaPerfil } from "./abas/perfil/index.ts";
+import { criarAbaTransferencia } from "./abas/transferencia/index.ts";
+import { NOMES_CARGO } from "./core/cargos.ts";
 import { ficha, tabelaOrdenavel } from "./componentes/tabela.ts";
 import { cor, el } from "./core/dom.ts";
-import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, fmtR, hora, int, mil, p1, pct } from "./core/formatos.ts";
+import { fmtFreq, fmtInt, fmtNum, fmtP, fmtPct, hora, int, pct } from "./core/formatos.ts";
 import { gravarJson, gravarPreferencia, lerJson, lerPreferencia } from "./core/preferencias.ts";
 import { Roteador } from "./core/roteador.ts";
 import { lerEndereco } from "./core/rotas.ts";
@@ -23,6 +26,10 @@ const estado = { aba: "painel", uf: "", ano: 2026, candidatosCache: {}, geo: nul
   destacar: new Set(), destacarDefinido: false, cadAbertos: new Set(), painel: null };
 // endereço de cada aba: tabela no fim do arquivo (roteador.registrar)
 const roteador = new Roteador(mostrarAba, () => estado.aba);
+// abas já migradas para abas/<aba>/ (registradas no fim do arquivo)
+const modulos = new Map();
+const contexto = { uf: () => estado.uf, mostrarAba, gravarEndereco: (a) => roteador.gravar(a),
+  endereco: (a) => roteador.endereco(a) };
 
 // ---------------------------------------------------------------- abas
 document.querySelectorAll(".abas button").forEach((b) =>
@@ -41,15 +48,7 @@ function mostrarAba(aba) {
     if (!estado.compMapa) estado.compMapa = criarMapa(document.getElementById("comp-mapa"));
     if (!estado.compFeito) { estado.compFeito = true; atualizarComparacao(); }
   }
-  if (aba === "transferencia" && !tf.feito) {
-    tf.feito = true;
-    iniciarTransferencia().catch((e) => { tfq("msg").textContent = `Não foi possível abrir: ${e.message}`; });
-  }
-  if (aba === "perfil" && !estado.pf.feito) {
-    estado.pf.feito = true;
-    iniciarPerfil().then(() => ajustarPerfil()).then(analisarPerfil)
-      .catch((e) => { pf("msg").textContent = `Não foi possível abrir: ${e.message}`; });
-  }
+  modulos.get(aba)?.aoMostrar?.();
 }
 
 // ---------------------------------------------------------------- status
@@ -1021,13 +1020,6 @@ for (const [, id] of CAMPOS_PLANILHA) {
   document.getElementById(id).addEventListener("change", () => roteador.gravar("candidato"));
 }
 
-async function copiarLink(hash, msg) {
-  const url = `${location.origin}${location.pathname}${hash}`;
-  try { await navigator.clipboard.writeText(url); msg.textContent = " copiado."; }
-  catch (_) { msg.textContent = ` ${url}`; }  // sem permissão de área de transferência: mostra o link
-  setTimeout(() => { msg.textContent = ""; }, 4000);
-}
-
 // ---------------------------------------------------------------- mapa por bairro (malha do IBGE + microdados)
 const detalheSel = document.getElementById("mapa-detalhe");
 const anoBairrosSel = document.getElementById("mapa-ano");
@@ -1429,8 +1421,6 @@ async function tick() {
   }
 }
 // ---------------------------------------------------------------- comparação entre eleições
-const NOMES_CARGO = { 1: "Presidente", 3: "Governador", 5: "Senador", 6: "Deputado Federal", 7: "Deputado Estadual",
-  11: "Prefeito" };
 const compMetrica = document.getElementById("comp-metrica");
 const compCargo = document.getElementById("comp-cargo");
 
@@ -1803,426 +1793,6 @@ compCargo.addEventListener("change", ajustarVar);
 compDetalhe.addEventListener("change", ajustarVar);
 
 
-// endereços diretos: #mapas[?cargo=&metrica=&numero=&momento=&locais=1], #comparacao,
-// #candidato?cargo=&numero=[&municipio=&ordem=COLUNA-desc|asc][&pl=1&pl_ano=&pl_cargo=&pl_numero=&pl_municipio=&pl_comparar=]
-// (e o antigo #candidato/<cargo>/<número>[/<município>]),
-// #comparacao?cargo=&metrica=[&partido=|&numero_a=&numero_b=][&ordem=]
-// ---------------------------------------------------------------- perfil × voto (por bairro)
-const pf = (id) => document.getElementById(`pf-${id}`);
-estado.pf = { info: null, listas: {}, feito: false, dados: null, pedido: 0 };
-
-const REG_PADRAO = ["pct_superior", "renda_media", "pct_pretos_pardos", "pct_60_mais"];
-// unidade de análise: bairro (malha de bairros), local de votação ou área de ponderação (estas duas: estado inteiro)
-const UNIDADES_PF = { bairro: ["bairro", "bairros"], local: ["local", "locais"], area: ["área", "áreas"] };
-const unidadePf = () => (pf("unidade").value in UNIDADES_PF ? pf("unidade").value : "bairro");
-const ehLocal = () => unidadePf() !== "bairro";  // estado inteiro (local ou área)
-const nomeUnidade = (plural = true) => UNIDADES_PF[unidadePf()][plural ? 1 : 0];
-const NomeUnidade = (plural = true) => nomeUnidade(plural).replace(/^./, (c) => c.toUpperCase());
-
-// info da unidade escolhida (bairro ou local): municípios e indicadores mudam com ela
-async function carregarInfoPerfil() {
-  const u = pf("unidade").value;
-  estado.pf.infos ||= {};
-  if (!estado.pf.infos[u]) estado.pf.infos[u] = await api(`api/perfil/info?unidade=${u}`);
-  estado.pf.info = estado.pf.infos[u];
-  pf("nota-area").hidden = u !== "area";
-  const info = estado.pf.info;
-  const xAtual = pf("x").value, munAtual = pf("municipio").value;
-  const grupos = {};
-  for (const [k, i] of Object.entries(info.indicadores)) (grupos[i.fonte] ||= []).push(el("option", { value: k }, i.rotulo));
-  pf("x").replaceChildren(...Object.entries(grupos).map(([f, ops]) => el("optgroup", { label: f }, ops)),
-    el("optgroup", { label: "Outra eleição" }, el("option", { value: "voto" }, "Voto em outra eleição (transferência)")));
-  if ([...pf("x").options].some((o) => o.value === xAtual)) pf("x").value = xAtual;
-  pf("municipio").replaceChildren(el("option", { value: "" }, ehLocal() ? "Estado inteiro" : "Todos com bairros"),
-    ...info.municipios.map((m) => el("option", { value: m.CD_MUN }, `${m.NM_MUN} (${m.BAIRROS} ${nomeUnidade()})`)));
-  if ([...pf("municipio").options].some((o) => o.value === munAtual)) pf("municipio").value = munAtual;
-  const marcados = new Set(estado.pf.reg || REG_PADRAO);
-  pf("reg-ind").replaceChildren(...Object.entries(info.indicadores).map(([k, i]) => el("label", { class: "check" },
-    el("input", { type: "checkbox", value: k, checked: marcados.has(k) || null }), ` ${i.rotulo}`)));
-  return info;
-}
-
-async function iniciarPerfil() {
-  if (estado.pf.info && estado.pf.info.unidade === pf("unidade").value) return;
-  const primeira = !estado.pf.info;
-  const info = await carregarInfoPerfil();
-  if (!primeira) return;
-  const anos = Object.keys(info.anos).sort((a, b) => b - a);
-  for (const sel of [pf("ano"), pf("x-ano")]) sel.replaceChildren(...anos.map((a) => el("option", { value: a }, a)));
-  // padrão: a eleição mais recente com governador (2022), senão a mais recente
-  const comGov = anos.find((a) => info.anos[a].includes(3));
-  pf("ano").value = comGov ?? anos[0] ?? "";
-  pf("x-ano").value = anos.find((a) => a !== pf("ano").value) ?? pf("ano").value;
-  pf("x").value = "pct_superior";
-}
-
-function cargosPerfil(sel, ano, preferido = null) {
-  const info = estado.pf.info;
-  const cs = info.anos[ano] || [];
-  const alvo = String(preferido ?? sel.value);
-  sel.replaceChildren(...cs.map((c) => el("option", { value: c }, info.cargos[c])));
-  if (cs.map(String).includes(alvo)) sel.value = alvo;
-  else if (cs.includes(3)) sel.value = "3";
-}
-
-async function listaPerfil(tipo, ano, cargo, turno) {
-  const mun = tipo === "candidatos" ? pf("municipio").value : "";  // nº municipal muda de pessoa a cada município
-  const u = pf("unidade").value;
-  const chave = `${tipo}/${ano}/${cargo}/${turno}/${mun}/${u}`;
-  if (!estado.pf.listas[chave]) {
-    try {
-      estado.pf.listas[chave] = await api(`api/perfil/${tipo}?ano=${ano}&cargo=${cargo}&turno=${turno}&unidade=${u}` +
-        (mun ? `&municipio=${mun}` : ""));
-    }
-    catch (_) { estado.pf.listas[chave] = []; }  // ex.: turno sem votos para o cargo
-  }
-  return estado.pf.listas[chave];
-}
-
-// preenche a lista de candidatos (datalist) e de partidos de um lado (Y: prefixo "", X: prefixo "x-")
-async function preencherAlvo(p) {
-  const ano = pf(`${p}ano`).value, cargo = pf(`${p}cargo`).value, turno = pf(`${p}turno`).value;
-  const partido = pf(`${p}tipo`).value === "partido";
-  document.getElementById(`pf-l-${p}numero`).hidden = partido || (p && pf("x").value !== "voto");
-  document.getElementById(`pf-l-${p}partido`).hidden = !partido || (p && pf("x").value !== "voto");
-  if (!ano || !cargo) return;
-  if (partido) {
-    const ps = await listaPerfil("partidos", ano, cargo, turno);
-    const atual = pf(`${p}partido`).value, siglaAtual = pf(`${p}partido`).selectedOptions[0]?.dataset.sigla;
-    pf(`${p}partido`).replaceChildren(...ps.map((x) => el("option", { value: x.PARTIDO, "data-sigla": x.SIGLA ?? "" },
-      `${x.PARTIDO}${x.SIGLA ? " " + x.SIGLA : ""} — ${int(x.VOTOS)} votos`)));
-    // mantém a escolha ao trocar de ano só se for o MESMO partido: o nº é reaproveitado (14 = PTB em 2022,
-    // MISSÃO em 2026); escolha vinda do endereço (sem sigla anterior) vale pelo nº
-    if (ps.some((x) => String(x.PARTIDO) === atual && (siglaAtual === undefined || (x.SIGLA ?? "") === siglaAtual))) {
-      pf(`${p}partido`).value = atual;
-    }
-  } else {
-    const cs = await listaPerfil("candidatos", ano, cargo, turno);
-    pf(`${p}lista`).replaceChildren(...cs.map((c) => el("option", { value: String(c.NUMERO) }, c.NOME)));
-    if (!pf(`${p}numero`).value && cs.length) pf(`${p}numero`).value = String(cs[0].NUMERO);
-  }
-}
-
-function numeroPerfil(p) {
-  const t = pf(`${p}numero`).value.trim();
-  if (/^\d+$/.test(t)) return t;
-  const lista = estado.pf.listas[`candidatos/${pf(`${p}ano`).value}/${pf(`${p}cargo`).value}/${pf(`${p}turno`).value}/` +
-    `${pf("municipio").value}/${pf("unidade").value}`] || [];
-  const alvo = t.toUpperCase();
-  const achado = alvo && lista.find((c) => (c.NOME || "").toUpperCase().includes(alvo));
-  if (achado) { pf(`${p}numero`).value = String(achado.NUMERO); return String(achado.NUMERO); }
-  return "";
-}
-
-async function ajustarPerfil(lado = null) {
-  const xVoto = pf("x").value === "voto";
-  document.querySelectorAll(".pf-xv").forEach((e) => { e.hidden = !xVoto; });
-  if (lado !== "x") { cargosPerfil(pf("cargo"), pf("ano").value); await preencherAlvo(""); }
-  if (xVoto && lado !== "y") { cargosPerfil(pf("x-cargo"), pf("x-ano").value); await preencherAlvo("x-"); }
-}
-
-pf("ano").addEventListener("change", () => { pf("numero").value = ""; ajustarPerfil("y"); });
-pf("cargo").addEventListener("change", () => { pf("numero").value = ""; preencherAlvo(""); });
-pf("turno").addEventListener("change", () => { pf("numero").value = ""; preencherAlvo(""); });
-pf("tipo").addEventListener("change", () => preencherAlvo(""));
-pf("x").addEventListener("change", () => ajustarPerfil("x"));
-pf("x-ano").addEventListener("change", () => { pf("x-numero").value = ""; ajustarPerfil("x"); });
-pf("x-cargo").addEventListener("change", () => { pf("x-numero").value = ""; preencherAlvo("x-"); });
-pf("x-turno").addEventListener("change", () => { pf("x-numero").value = ""; preencherAlvo("x-"); });
-pf("x-tipo").addEventListener("change", () => preencherAlvo("x-"));
-pf("municipio").addEventListener("change", () => ajustarPerfil());
-pf("unidade").addEventListener("change", async () => {
-  await carregarInfoPerfil(); await ajustarPerfil(); analisarPerfil();
-});
-pf("reg-btn").addEventListener("click", () => {
-  estado.pf.reg = [...pf("reg-ind").querySelectorAll("input:checked")].map((i) => i.value);
-  analisarPerfil();
-});
-document.getElementById("form-perfil").addEventListener("submit", (e) => { e.preventDefault(); analisarPerfil(); });
-pf("copiar").addEventListener("click", () => copiarLink(roteador.endereco("perfil"), pf("copiar-msg")));
-
-function parametrosPerfil() {
-  const q = new URLSearchParams({ ano: pf("ano").value, turno: pf("turno").value, cargo: pf("cargo").value });
-  if (pf("tipo").value === "partido") q.set("partido", pf("partido").value);
-  else q.set("numero", numeroPerfil(""));
-  q.set("x", pf("x").value);
-  if (pf("x").value === "voto") {
-    q.set("x_ano", pf("x-ano").value); q.set("x_turno", pf("x-turno").value); q.set("x_cargo", pf("x-cargo").value);
-    if (pf("x-tipo").value === "partido") q.set("x_partido", pf("x-partido").value);
-    else q.set("x_numero", numeroPerfil("x-"));
-  }
-  if (ehLocal()) q.set("unidade", unidadePf());
-  if (pf("municipio").value) q.set("municipio", pf("municipio").value);
-  q.set("min_validos", pf("min").value || "0");
-  if (pf("ponderar").checked) q.set("ponderar", "true");
-  const reg = estado.pf.reg || REG_PADRAO;
-  if (reg.join(",") !== REG_PADRAO.join(",")) q.set("reg", reg.join(","));
-  return q;
-}
-
-async function aplicarEnderecoPerfil(params) {
-  estado.pf.feito = true;  // o endereço manda; nada de análise padrão por cima
-  mostrarAba("perfil");
-  const q = new URLSearchParams(params);
-  pf("unidade").value = q.get("unidade") in UNIDADES_PF ? q.get("unidade") : "bairro";
-  if (q.get("reg")) estado.pf.reg = q.get("reg").split(",").filter(Boolean);
-  await iniciarPerfil();
-  const def = (id, k) => { if (q.get(k) !== null) pf(id).value = q.get(k); };
-  def("ano", "ano"); def("turno", "turno");
-  cargosPerfil(pf("cargo"), pf("ano").value, q.get("cargo"));
-  pf("tipo").value = q.get("partido") ? "partido" : "numero";
-  def("numero", "numero");
-  def("x", "x"); def("x-ano", "x_ano"); def("x-turno", "x_turno");
-  pf("x-tipo").value = q.get("x_partido") ? "partido" : "numero";
-  def("x-numero", "x_numero");
-  def("municipio", "municipio"); def("min", "min_validos");
-  pf("ponderar").checked = q.get("ponderar") === "true";
-  await preencherAlvo("");
-  if (q.get("partido")) pf("partido").value = q.get("partido");
-  if (pf("x").value === "voto") {
-    document.querySelectorAll(".pf-xv").forEach((e) => { e.hidden = false; });
-    cargosPerfil(pf("x-cargo"), pf("x-ano").value, q.get("x_cargo"));
-    await preencherAlvo("x-");
-    if (q.get("x_partido")) pf("x-partido").value = q.get("x_partido");
-  } else document.querySelectorAll(".pf-xv").forEach((e) => { e.hidden = true; });
-  await analisarPerfil();
-}
-
-const INDICADOR_FMT = {
-  renda_media: (v) => `R$ ${fmtInt.format(Math.round(v))}`, renda_mediana: (v) => `R$ ${fmtInt.format(Math.round(v))}`,
-  densidade: (v) => `${fmtInt.format(Math.round(v))}/km²`, moradores_domicilio: (v) => v.toFixed(2).replace(".", ","),
-};
-const fmtX = (k, v) => (v === null || v === undefined ? "—" : (INDICADOR_FMT[k] || pct)(v));
-function forca(r) {
-  const a = Math.abs(r ?? 0);
-  return a < 0.1 ? "desprezível" : a < 0.3 ? "fraca" : a < 0.5 ? "moderada" : a < 0.7 ? "forte" : "muito forte";
-}
-
-async function analisarPerfil() {
-  const msg = pf("msg");
-  const limpar = () => ["fichas", "grafico", "correlacoes", "acima", "abaixo", "reg", "reg-fichas"].forEach((k) => pf(k).replaceChildren());
-  roteador.gravar("perfil");
-  const params = parametrosPerfil();
-  if (!params.get("numero") && !params.get("partido")) { limpar(); msg.textContent = "Escolha o candidato ou o partido."; return; }
-  if (params.get("x") === "voto" && !params.get("x_numero") && !params.get("x_partido")) {
-    limpar(); msg.textContent = "Escolha o candidato ou o partido da outra eleição (eixo X)."; return;
-  }
-  msg.textContent = "calculando… (a 1ª vez de um ano baixa o perfil do eleitorado do TSE)";
-  const base = new URLSearchParams(params); base.delete("x"); for (const k of [...base.keys()]) if (k.startsWith("x_")) base.delete(k);
-  base.delete("reg");
-  const reg = estado.pf.reg || REG_PADRAO;
-  let d, c, rg;
-  const pedido = ++estado.pf.pedido;  // só a análise mais recente desenha (cliques rápidos não se atropelam)
-  try {
-    [d, c, rg] = await Promise.all([api(`api/perfil/dispersao?${params}`), api(`api/perfil/correlacoes?${base}`),
-      reg.length ? api(`api/perfil/regressao?${base}&indicadores=${reg.join(",")}`).catch((err) => ({ erro: err.message }))
-        : Promise.resolve(null)]);
-  } catch (e) {
-    if (pedido !== estado.pf.pedido) return;
-    limpar(); estado.pf.dados = null; msg.textContent = `Não foi possível analisar: ${e.message}`; return;
-  }
-  if (pedido !== estado.pf.pedido) return;
-  estado.pf.dados = d;
-  const e = d.estatistica;
-  msg.textContent = e.pearson === null ? `Sem ${nomeUnidade()} suficientes (ou sem variação) para calcular a correlação.` : "";
-  const xk = params.get("x");
-  const unidadeX = xk === "voto" || !INDICADOR_FMT[xk] ? "p.p." : xk.startsWith("renda") ? "R$" : "unidade";
-  pf("fichas").replaceChildren(
-    ficha(`${NomeUnidade()} na análise`, int(e.n) + (d.ponderado ? ` (n efetivo ${int(Math.round(e.n_efetivo || 0))})` : "")),
-    ficha("Pearson r", e.pearson === null ? "—" : `${fmtR(e.pearson)} (${forca(e.pearson)})`),
-    ficha("IC 95% de r", e.ic95 ? `${fmtR(e.ic95[0])} a ${fmtR(e.ic95[1])}` : "—"),
-    ficha("Spearman ρ", fmtR(e.spearman)),
-    ficha("p-valor (r ≠ 0)", fmtP(e.p)),
-    ficha("R²", e.r2 === null ? "—" : fmtPct.format(100 * e.r2) + "%"),
-    ficha(`Inclinação (+1 ${unidadeX} no eixo X)`, e.b === null ? "—" :
-      `${e.b >= 0 ? "+" : "−"}${Math.abs(e.b).toLocaleString("pt-BR", { maximumSignificantDigits: 3 })} p.p.`),
-  );
-  pf("titulo-grafico").textContent = `${d.rotulo_y} × ${d.rotulo_x}`;
-  pf("grafico").replaceChildren(d.pontos.length ? graficoDispersao(d, xk, (v) => fmtX(xk, v), NomeUnidade(false)) : el("p", { class: "nota" }, `Nenhum ${nomeUnidade(false)}.`));
-  // correlações: da mais forte para a mais fraca; clicar usa o indicador no eixo X
-  const linhas = c.correlacoes.map((k) => el("tr", {
-    class: `clicavel${k.indicador === xk ? " selecionado" : ""}`, "data-indicador": k.indicador,
-    onclick: () => { pf("x").value = k.indicador; ajustarPerfil("x"); analisarPerfil(); },
-  }, el("td", {}, k.rotulo), el("td", { class: "num" }, fmtR(k.pearson)), el("td", { class: "num" }, fmtR(k.spearman)),
-    el("td", { class: "num" }, k.ic95 ? `${fmtR(k.ic95[0])} a ${fmtR(k.ic95[1])}` : "—"), el("td", { class: "num" }, int(k.n)),
-    el("td", { title: k.fonte }, k.fonte.startsWith("TSE") ? "TSE" : "IBGE")));
-  pf("correlacoes").replaceChildren(el("table", {}, el("thead", {}, el("tr", {},
-    ["Indicador", "r", "ρ", "IC 95% (r)", NomeUnidade(), "Fonte"].map((t, i) => el("th", { class: i && i < 5 ? "num" : null }, t)))),
-  el("tbody", {}, linhas)));
-  const tab = (rows) => el("table", {}, el("thead", {}, el("tr", {}, [NomeUnidade(false), "Eixo X", "Voto", "Resíduo"].map((t, i) =>
-    el("th", { class: i ? "num" : null }, t)))), el("tbody", {}, rows.map((r) => el("tr", {},
-    el("td", {}, r.BAIRRO), el("td", { class: "num" }, fmtX(xk, r.X)), el("td", { class: "num" }, pct(r.Y)),
-    el("td", { class: "num" }, `${r.RESIDUO >= 0 ? "+" : "−"}${fmtPct.format(Math.abs(r.RESIDUO))} p.p.`)))));
-  pf("acima").replaceChildren(tab(d.acima));
-  pf("abaixo").replaceChildren(tab(d.abaixo));
-  desenharRegressao(rg);
-}
-
-function desenharRegressao(rg) {
-  if (!rg) { pf("reg").replaceChildren(el("p", { class: "nota" }, "Marque ao menos um indicador.")); pf("reg-fichas").replaceChildren(); return; }
-  if (rg.erro) { pf("reg").replaceChildren(el("p", { class: "nota" }, `Regressão indisponível: ${rg.erro}`)); pf("reg-fichas").replaceChildren(); return; }
-  pf("reg-fichas").replaceChildren(ficha(NomeUnidade(), int(rg.n)),
-    ficha("R² (juntos)", fmtPct.format(100 * rg.r2) + "%"), ficha("R² ajustado", fmtPct.format(100 * rg.r2_ajustado) + "%"));
-  const sinal = (x) => `${x >= 0 ? "+" : "−"}${fmtPct.format(Math.abs(x))}`;
-  pf("reg").replaceChildren(el("table", {}, el("thead", {}, el("tr", {},
-    ["Indicador", "Efeito (p.p. por +1 dp)", "IC 95%", "p", "VIF", "r simples", "1 dp ="].map((t, i) =>
-      el("th", { class: i ? "num" : null }, t)))),
-  el("tbody", {}, rg.coeficientes.map((k) => el("tr", { class: k.vif > 5 ? "cad-disputa" : null,
-    title: k.vif > 5 ? "VIF > 5: anda junto com outro indicador; efeito individual instável" : null },
-  el("td", {}, k.rotulo), el("td", { class: "num" }, `${sinal(k.efeito_pp_por_dp)} p.p.`),
-  el("td", { class: "num" }, `${sinal(k.ic95[0])} a ${sinal(k.ic95[1])}`), el("td", { class: "num" }, fmtP(k.p)),
-  el("td", { class: "num" }, k.vif.toFixed(1).replace(".", ",")), el("td", { class: "num" }, fmtR(k.r_simples)),
-  el("td", { class: "num" }, fmtX(k.indicador, k.dp_indicador)))))));
-}
-
-// ---------------------------------------------------------------- transferência 1º → 2º turno
-// Matriz da inferência ecológica (apuracao/transferencia.py): para onde foi cada grupo do 1º turno.
-// Endereço: #transferencia?fonte=microdados|tempo_real&ano=&cargo=&nivel=secao|local|municipio[&municipio=<TSE>]
-const tf = { feito: false, info: null, pronto: null, ultimo: null };
-const tfq = (id) => document.getElementById(`tf-${id}`);
-const CORES_2T = ["--serie-1", "--serie-2", "--outros", "--texto-2"];  // finalista A, B, branco/nulo, abstenção
-const TINTA_2T = ["#fff", "#fff", "var(--texto)", "var(--superficie)"];
-const NOME_NIVEL = { secao: "seção", local: "local de votação", municipio: "município" };
-
-function iniciarTransferencia() {
-  tf.pronto = tf.pronto || (async () => {
-    tf.info = await api("api/transferencia/info");
-    tfq("ano").replaceChildren(...tf.info.anos.slice().reverse().map((a) => el("option", { value: a }, a)));
-    const opTR = tfq("fonte").querySelector('[value="tempo_real"]');
-    opTR.disabled = !tf.info.tempo_real;
-    if (tf.info.tempo_real) tfq("fonte").value = "tempo_real";  // noite do 2º turno: é o que existe
-    for (const id of ["fonte", "ano", "cargo"]) tfq(id).addEventListener("change", () => ajustarTf());
-    document.getElementById("form-tf").addEventListener("submit", (e) => { e.preventDefault(); calcularTf(); });
-    tfq("link").addEventListener("click", () => copiarLink(roteador.endereco("transferencia"), tfq("link-msg")));
-    await ajustarTf();
-  })();
-  return tf.pronto;
-}
-
-async function ajustarTf(pedido = {}) {
-  const tempoReal = tfq("fonte").value === "tempo_real";
-  document.querySelectorAll(".tf-md").forEach((l) => { l.hidden = tempoReal; });
-  const cargos = tempoReal ? tf.info.cargos_tempo_real : (tf.info.cargos[tfq("ano").value] || []);
-  const antes = pedido.cargo || tfq("cargo").value;
-  tfq("cargo").replaceChildren(...cargos.map((c) => el("option", { value: c }, NOMES_CARGO[c] || c)));
-  if (cargos.map(String).includes(String(antes))) tfq("cargo").value = String(antes);
-  if (tempoReal) return;
-  const prefeito = tfq("cargo").value === "11";
-  let muns = [];
-  try { muns = await api(`api/transferencia/municipios?ano=${tfq("ano").value}&cargo=${tfq("cargo").value}`); }
-  catch (e) { tfq("msg").textContent = `Sem a lista de municípios: ${e.message}`; }
-  tfq("municipio").replaceChildren(...(prefeito ? [] : [el("option", { value: "" }, `Todo o estado (${estado.uf})`)]),
-    ...muns.map((m) => el("option", { value: m.CD_MUNICIPIO }, m.NM_MUNICIPIO)));
-  const mun = pedido.municipio ?? "";
-  if ([...tfq("municipio").options].some((o) => o.value === String(mun))) tfq("municipio").value = String(mun);
-}
-
-function parametrosTf() {
-  const q = new URLSearchParams({ fonte: tfq("fonte").value, cargo: tfq("cargo").value });
-  if (q.get("fonte") === "microdados") {
-    q.set("ano", tfq("ano").value);
-    q.set("nivel", tfq("nivel").value);
-    if (tfq("municipio").value) q.set("municipio", tfq("municipio").value);
-  }
-  return q;
-}
-
-async function aplicarEnderecoTf(params) {
-  await iniciarTransferencia();
-  const q = new URLSearchParams(params);
-  const temOpcao = (sel, v) => v !== null && [...sel.options].some((o) => o.value === v && !o.disabled);
-  if (temOpcao(tfq("fonte"), q.get("fonte"))) tfq("fonte").value = q.get("fonte");
-  if (temOpcao(tfq("ano"), q.get("ano"))) tfq("ano").value = q.get("ano");
-  if (temOpcao(tfq("nivel"), q.get("nivel"))) tfq("nivel").value = q.get("nivel");
-  await ajustarTf({ cargo: q.get("cargo"), municipio: q.get("municipio") });
-  await calcularTf();
-}
-
-async function calcularTf() {
-  const q = parametrosTf();
-  const out = tfq("resultado");
-  if (!tfq("cargo").value) { tfq("msg").textContent = "Nenhum cargo com 2º turno nesta fonte."; return; }
-  tfq("msg").textContent = "Calculando… a 1ª vez lê os microdados e roda o bootstrap (10 a 30 s).";
-  roteador.gravar("transferencia");
-  const pedido = q.toString();
-  tf.ultimo = pedido;
-  let r;
-  try { r = await api(`api/transferencia?${pedido}`); } catch (e) {
-    if (tf.ultimo === pedido) { tfq("msg").textContent = `Não foi possível calcular: ${e.message}`; out.replaceChildren(); }
-    return;
-  }
-  if (tf.ultimo !== pedido) return;  // outro pedido foi feito enquanto este calculava
-  tfq("msg").textContent = "";
-  desenharTf(r);
-}
-
-function desenharTf(r) {
-  const out = tfq("resultado");
-  const cat2 = r.categorias_2t;
-  const cor = (j) => `var(${CORES_2T[j]})`;
-  const val = r.validacao;
-  const ab = r.abstencao;
-  const fichas = el("div", { class: "fichas" },
-    ficha("Unidades", `${fmtInt.format(r.unidades)} (${NOME_NIVEL[r.nivel]})`),
-    ficha("Regiões com matriz própria", r.n_estratos > 1 ? `${r.n_estratos} (${r.estrato === "zona" ? "zonas" : "municípios"})` : "uma só"),
-    ficha("Abstenção 1º → 2º turno", `${p1(ab.pct_1t)} → ${p1(ab.pct_2t)} (${ab.extra_pp >= 0 ? "+" : ""}${ab.extra_pp.toFixed(2).replace(".", ",")} p.p.)`),
-    val ? ficha("Erro fora da amostra", `${val.rmse_modelo_medio_pp.toFixed(2).replace(".", ",")} p.p. (swing uniforme ${val.rmse_swing_medio_pp.toFixed(2).replace(".", ",")})`) : null,
-    ficha("Células no limite (0% ou 100%)", `${r.celulas_no_limite} de ${r.categorias_1t.length * cat2.length}`));
-  const legenda = el("div", { class: "tf-legenda" },
-    ...cat2.map((c, j) => el("span", { style: { "--cor": cor(j) } }, c)));
-  const barras = r.matriz.map((m) => el("div", { class: "tf-linha" },
-    el("div", { class: "rot" }, m.origem, el("small", {}, `${p1(m.pct_1t)} do eleitorado · ${mil(m.eleitores_1t)}`)),
-    el("div", { class: "tf-barra", role: "img",
-      "aria-label": `${m.origem}: ` + m.destinos.map((d) => `${d.destino} ${p1(d.pct)}`).join(", ") },
-      ...m.destinos.map((d, j) => d.pct < 0.05 ? null : el("div", {
-        style: { width: `${d.pct}%`, "--cor": cor(j), "--tinta": TINTA_2T[j] },
-        title: `${m.origem} → ${d.destino}: ${p1(d.pct)} (IC 95% ${p1(d.baixo)} a ${p1(d.alto)}); ≈ ${mil(d.eleitores)} eleitores`,
-      }, d.pct >= 7 ? p1(d.pct) : "")))));
-  const matriz = el("table", {},
-    el("thead", {}, el("tr", {}, el("th", {}, "1º turno"), el("th", { class: "n" }, "Eleitores"),
-      ...cat2.map((c) => el("th", { class: "n" }, c)))),
-    el("tbody", {}, ...r.matriz.map((m) => el("tr", {}, el("td", {}, m.origem), el("td", { class: "n" }, int(m.eleitores_1t)),
-      ...m.destinos.map((d) => el("td", { class: "n", title: `≈ ${int(d.eleitores)} eleitores` },
-        p1(d.pct), el("br"), el("small", { class: "nota" }, `${p1(d.baixo)}–${p1(d.alto)}`)))))));
-  const tabela = (titulo, cols, linhas, fmt) => el("div", {}, el("h3", {}, titulo),
-    el("div", { class: "tabela-rolagem" }, el("table", {},
-      el("thead", {}, el("tr", {}, ...cols.map(([rot, , num]) => el("th", { class: num ? "n" : null }, rot)))),
-      el("tbody", {}, ...linhas.map((l) => el("tr", {}, ...cols.map(([, k, num]) =>
-        el("td", { class: num ? "n" : null }, fmt(k, l[k])))))))));
-  const fmt = (k, v) => (typeof v === "number" ? (k.endsWith("_PP") ? `${v >= 0 ? "+" : ""}${v.toFixed(1).replace(".", ",")}`
-    : k.endsWith("_PCT") ? p1(v) : int(v)) : v ?? "—");
-  const [a, b] = cat2;
-  const estratos = r.n_estratos > 1 ? tabela(`Votos dos eliminados, por ${r.estrato === "zona" ? "zona" : "município"} (maiores eleitorados)`,
-    [["Região", "ESTRATO"], ["Eliminados no 1º", "ELIMINADOS_1T", true],
-      ...cat2.map((c) => [`→ ${c}`, `ELIM_PARA_${c}_PCT`, true])], r.estratos, fmt) : null;
-  const nome = r.nivel === "municipio" ? "Município" : "Unidade";
-  const abst = tabela("Maior abstenção extra (p.p. do eleitorado)", [[nome, "NOME"], ["Município", "NM_MUNICIPIO"],
-    ["1º turno", "ABST_1_PCT", true], ["2º turno", "ABST_2_PCT", true], ["Extra", "ABST_EXTRA_PP", true]],
-  r.maior_abstencao_extra, fmt);
-  const res = (titulo, linhas) => tabela(titulo, [[nome, "NOME"], ["Município", "NM_MUNICIPIO"],
-    ["Observado", `${a}_2_PCT`, true], ["Previsto", `${a}_2_AJUSTE_PCT`, true], ["Diferença (p.p.)", "RESIDUO_A_PP", true]],
-  linhas, fmt);
-  const novos = ab.novos_abstencionistas.filter((n) => n.eleitores > 0)
-    .map((n) => `${n.origem}: ${mil(n.eleitores)}`).join(" · ");
-  const fragil = r.nivel === "municipio" || r.celulas_no_limite >= 6;
-  out.replaceChildren(
-    el("h3", {}, `Para onde foi cada grupo do 1º turno — ${r.descricao}`),
-    fragil ? el("p", { class: "aviso" }, "Leitura frágil: ",
-      r.nivel === "municipio" ? "com municípios como unidades o viés de agregação é grande (em 2022, no RJ, o destino "
-        + "dos eliminados por município diferiu em até 22 p.p. do estimado por seção). Use como indicação; a estimativa "
-        + "boa vem com os microdados (seção ou local), dias depois do 2º turno. "
-        : "",
-      `${r.celulas_no_limite} células ficaram em 0% ou 100% (a restrição segurou valores impossíveis).`) : null,
-    fichas, legenda, el("div", {}, ...barras),
-    el("p", { class: "nota" }, "Passe o mouse numa barra para o intervalo de 95% e o número de eleitores. ",
-      `Votaram no 1º turno e se abstiveram no 2º (estimado): ${novos || "—"}.`),
-    el("details", { class: "caixa" }, el("summary", {}, "Matriz completa, com intervalos de 95%"),
-      el("div", { class: "tabela-rolagem" }, matriz)),
-    el("div", { class: "tf-tabelas" }, estratos, abst,
-      res(`Onde ${a} foi melhor do que a matriz prevê`, r.residuos_a.acima),
-      res(`Onde ${a} foi pior do que a matriz prevê`, r.residuos_a.abaixo)));
-}
-
 // ---------------------------------------------------------------- alertas da noite
 // O servidor verifica a cada 15 s (apuracao/alertas.py); a página consulta /api/alertas?desde=<último id>.
 // Condições ativas (coletor parado, bloqueio…) ficam na faixa do topo; alertas novos viram avisos com som.
@@ -2364,7 +1934,7 @@ document.getElementById("destaque-link").addEventListener("click", () =>
   copiarLink(roteador.endereco("painel"), document.getElementById("destaque-link-msg")));
 
 // Ponto de acesso dos testes e2e: no script clássico estes nomes eram globais; no módulo, não.
-window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
+window.__apuracao = { estado, alertas, tocar, api, desenharPainel, atualizarPainel, atualizarAlertas,
   consultarCandidato, partidosVar };
 
 (function iniciarAlertas() {
@@ -2383,15 +1953,15 @@ window.__apuracao = { estado, alertas, tf, tocar, api, desenharPainel, atualizar
 })();
 
 // ---------------------------------------------------------------- endereços das abas (tabela única)
+function registrarModulo(m) { modulos.set(m.id, m); return m; }
 // escrever: estado da aba → parâmetros (gravar e "Copiar link"); aplicar: parâmetros → estado (abre a aba)
 roteador
   .registrar("painel", { escrever: parametrosPainel, aplicar: aplicarEnderecoPainel, enderecoAoMostrar: true })
   .registrar("candidato", { escrever: parametrosCandidato, aplicar: aplicarEnderecoCandidato })
   .registrar("mapas", { escrever: parametrosMapa, aplicar: (q) => aplicarEnderecoMapa(q).then(() => mostrarAba("mapas")) })
   .registrar("comparacao", { escrever: parametrosComp, aplicar: aplicarEnderecoComp })
-  .registrar("perfil", { escrever: parametrosPerfil, aplicar: aplicarEnderecoPerfil })
-  .registrar("transferencia", {
-    escrever: parametrosTf, aplicar: (q) => { mostrarAba("transferencia"); return aplicarEnderecoTf(q); } });
+  .registrar("perfil", registrarModulo(criarAbaPerfil(contexto)))
+  .registrar("transferencia", registrarModulo(criarAbaTransferencia(contexto)));
 window.addEventListener("hashchange", () => roteador.abrir());
 
 // ---------------------------------------------------------------- seletor de UF (site com várias UFs)
