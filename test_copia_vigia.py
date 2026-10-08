@@ -90,6 +90,34 @@ def test_copia_final_e_poda(tmp_path: Path) -> None:
     assert (tmp_path / "copia" / "instantaneos" / "final").exists()
 
 
+
+def test_parcial_depois_do_final_e_espelhada_e_refaz_o_final(tmp_path: Path) -> None:
+    """Rodada 70 (TODO 28): o TSE publica depois do final (EA20 regerado, retotalização) — antes, nunca copiado."""
+    d = _dados(tmp_path, 100.0, final=True)
+    _parcial(d, "antes.json.gz")
+    copia = tmp_path / "copia"
+    c = Copiador(d, copia, espelho_min=0, agora=Relogio("2026-10-05T00:20:00"))
+    assert c.verificar()["nome"] == "final"
+    assert c.verificar() is None                                   # nada novo: o final não é refeito
+    _parcial(d, "depois.json.gz")
+    (d / "status.json").write_text('{"depois": true}')
+    r = c.verificar()
+    assert r is not None and r["nome"] == "final" and r["raw_novos"] == 0  # o espelho veio antes do instantâneo
+    assert (copia / "raw" / "21272" / "rj-c0003-e021272-u" / "depois.json.gz").exists()
+    assert json.loads((copia / "instantaneos" / "final" / "status.json").read_text()) == {"depois": True}
+    assert [x["nome"] for x in json.loads((copia / "copias.json").read_text())] == ["final", "final"]
+
+
+def test_espelho_respeita_o_intervalo_e_encerrar_nao_espera(tmp_path: Path) -> None:
+    d = _dados(tmp_path, 100.0, final=True)
+    c = Copiador(d, tmp_path / "copia", espelho_min=5, agora=Relogio("2026-10-05T00:20:00"))
+    c.verificar()
+    _parcial(d, "tardia.json.gz")
+    assert c.verificar() is None                                   # menos de 5 min desde o espelho
+    assert not (tmp_path / "copia" / "raw").exists() or not list((tmp_path / "copia" / "raw").rglob("tardia*"))
+    assert c.encerrar()["nome"] == "final"                         # fim do ensaio: espelha já
+    assert list((tmp_path / "copia" / "raw").rglob("tardia.json.gz"))
+
 def test_sem_dados_nao_copia_e_destino_dentro_dos_dados_e_recusado(tmp_path: Path) -> None:
     d = tmp_path / "dados"
     d.mkdir()

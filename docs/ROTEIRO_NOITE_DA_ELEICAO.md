@@ -27,7 +27,7 @@ oficial do 1º turno pela prontidão).
 | 25/10, 17h em diante | acompanhar (seletor de UF no cabeçalho) | http://localhost:8001 |
 | 25/10, na TV | painel em tela cheia de uma UF | http://localhost:8001/rj/#painel?tv=1 |
 | a cada hora cheia e no fim | boletim de cada UF para a equipe | `dados_2026/oficial_t2_<UF>/boletins/boletim_ultimo.html` e `.xlsx` |
-| ao fim | conferir a cópia final e guardar tudo; **não apagar** `dados_2026/oficial_t2_*` | `ls <copia-dir>/t2/oficial_t2_RJ/instantaneos/final` e `tar czf oficial_t2_25out.tgz dados_2026/oficial_t2_*` |
+| ao fim | conferir a cópia final e guardar tudo; **não apagar** `dados_2026/oficial_t2_*`. Não desligue o site logo depois do final: o TSE ainda publica (EA20 regerado, retotalização) e a cópia segue espelhando a cada 5 min e refaz o `final` (rodada 70). Espere uns 10 min ou faça uma cópia à mão: `python copiar_dados.py --dados dados_2026/oficial_t2_<UF> --destino <copia-dir>/t2/oficial_t2_<UF> --uf <UF>` | `ls <copia-dir>/t2/oficial_t2_RJ/instantaneos/final` e `tar czf oficial_t2_25out.tgz dados_2026/oficial_t2_*` |
 | ao fim | análise das parciais da noite | `python analisar_coleta.py --dados dados_2026/oficial_t2_RJ --saida saidas/coleta_t2_RJ.xlsx --grafico saidas/coleta_t2_RJ.png` |
 | logo depois | **ligar as vigias dos microdados** (ver "Depois → Microdados do 2º turno") | `python preparar_2026.py --vigiar` e `python baixar_ufs.py --etapas microdados --ufs todas --vigiar` |
 

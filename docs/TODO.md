@@ -52,6 +52,7 @@ dele entra sozinho quando os dados existirem (ver as pendências da [RODADA_47](
 | 26 | Prontidão do 2º turno: `verificar_prontidao.py --turno 2 --ufs todas --testes`, ensaio do 2º turno numa UF com 2º turno, códigos oficiais do `ele-c.json` e revisão do roteiro para várias UFs | antes de 25/10 (prontidão até ~20/10; códigos quando o TSE publicar) | **prontidão feita em 07/10**: 0 falhas; 2º turno de Governador em AC, AM, DF, ES, RJ, RN e TO; códigos oficiais 6260 (Gov.) e 6258 (Pres.) já no `ele-c.json`; acompanhamento ainda 404 (normal antes de 25/10). Checagem do relógio passou a usar o oficial (o simulado saiu do ar). Ensaio do 2º turno (ES) OK em 07/10, depois de corrigir o TSE simulado do ensaio (o EA20 era carimbado com a hora exata e mostrava o minuto cheio: o coletor aceitava a versão anterior como final e 11 abrangências ficavam em 99,99%). Roteiro do 2º turno atualizado em 07/10 (`docs/ROTEIRO_NOITE_DA_ELEICAO.md`). **Feito** |
 | 27 | Fallback dos totais pelo Boletim de Urna (3º nível, por turno) e votacao_partido_munzona reconstruído para as cadeiras | 2º turno (BU sai dias antes dos microdados) | **feito**: [RODADA_55](RODADA_55_2026-10-07_fallback_bweb_e_partidos.md) (golden RJ 2022 com 0 diferença; pedido em [PROMPT_fallback_bweb_munzona.md](PROMPT_fallback_bweb_munzona.md)) |
 | 28 | Abstenção × mudança de local de votação 2022 → 2026 (planilha; impacto em Presidente e Governador) | urgente (07/10) | **feito** (27 UFs + consolidado): [RODADA_56](RODADA_56_2026-10-07_abstencao_mudanca_local.md); falta o 2º turno |
+| 28b | Cópia de segurança para de espelhar `raw/` depois do instantâneo "final" (seção 28 abaixo) | antes do 2º turno, 25/10 | **feito**: [RODADA_70](RODADA_70_2026-10-08_copia_depois_do_final.md) |
 
 ---
 
@@ -360,3 +361,16 @@ Registrado em 07/10/2026 (pedido do usuário: planejar a refatoração do front-
   mudar asserções, no Vitest, no `tsc --strict` e no ensaio geral.
 - **Quando:** num ramo (`frontend-refatoracao`), que só entra em `main` **depois do 2º turno (25/10/2026)**. Até lá,
   as correções do front-end vão para o `app.js` atual.
+
+## 28. Cópia de segurança para de espelhar `raw/` depois do instantâneo "final" — FEITO (rodada 70)
+
+Registrado em 08/10/2026, achado no ensaio da rodada 69 (ramo `frontend-refatoracao`). **Feito na
+[RODADA_70](RODADA_70_2026-10-08_copia_depois_do_final.md)**, no `main` e no ramo.
+
+- **O defeito:** em `apuracao/copia.py`, `Copiador.verificar()` devolvia `None` quando o instantâneo `final` já
+  existia, antes do espelho de `raw/` a cada `espelho_min`. Toda parcial que chegasse depois do "final" nunca era
+  copiada. Exemplos: o EA20 regerado depois do anúncio no EA15 (rodada 36) e uma retotalização.
+- **Como apareceu:** o ensaio a 60× falhou em "cópia final com todas as parciais do TSE" com 3.680 de 3.682. As duas
+  que faltaram eram os `rj-e0212{70,72}-ab` gerados às 00:23, que chegaram 13 s depois do instantâneo `final`.
+- **Correção:** com o `final` feito, o espelho de `raw/` continua no intervalo de sempre, e o `final` é refeito
+  quando chega parcial nova. `encerrar()` faz a verificação sem esperar o intervalo; o ensaio a usa no fim.
