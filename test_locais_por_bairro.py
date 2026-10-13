@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import openpyxl
 import polars as pl
 import pytest
 
@@ -52,8 +53,16 @@ def test_fonte_ibge_sem_malha_falha(secoes_2026: pl.DataFrame) -> None:
         lb.locais_do_bairro(secoes_2026, "Centro", fonte="ibge")
 
 
-def test_cli_imprime_e_grava_csv(tse_cache: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    saida = tmp_path / "out" / "centro.csv"
+def test_tabela_locais_rotula_agregada(secoes_2026: pl.DataFrame) -> None:
+    locais = lb.locais_do_bairro(secoes_2026, "centro")
+    tab = lb.tabela_locais(locais, lb.secoes_dos_locais(secoes_2026, locais))
+    assert not [c for c in tab.columns if c.startswith("_")]
+    pedro_rio = tab.filter((pl.col("NM_MUNICIPIO") == "RIO DE JANEIRO") & (pl.col("NR_LOCAL_VOTACAO") == 1015))
+    assert pedro_rio.select("N_SECOES", "QT_ELEITORES", "SECOES").row(0) == (4, 955, "10, 11, 12, 13 (agregada à 12)")
+
+
+def test_cli_imprime_e_grava_planilha(tse_cache: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    saida = tmp_path / "out" / "centro.xlsx"
     rc = cli.main(["CENTRO", "--ano", "2026", "--municipio", "Rio de Janeiro", "--cache-dir", str(tse_cache),
                    "--saida", str(saida)])
     out = capsys.readouterr().out
@@ -63,9 +72,25 @@ def test_cli_imprime_e_grava_csv(tse_cache: Path, tmp_path: Path, capsys: pytest
     assert "4 seções, 955 eleitores" in out
     assert "Total: 2 locais, 5 seções, 1.105 eleitores" in out
     assert "NITERÓI" not in out
-    assert pl.read_csv(saida, separator=";").height == 5
+    assert f"Planilha gravada em {saida}" in out
+    wb = openpyxl.load_workbook(saida, read_only=True)
+    assert wb.sheetnames == ["Locais", "Seções", "Consulta"]
+    aba = {nome: list(wb[nome].iter_rows(values_only=True)) for nome in wb.sheetnames}
+    col = aba["Locais"][0].index("NR_LOCAL_VOTACAO")
+    assert [r[col] for r in aba["Locais"][1:]] == [1015, 1023]
+    tipo = aba["Seções"][0].index("TIPO_SECAO")
+    assert [r[tipo] for r in aba["Seções"][1:]].count("AGREGADA") == 1 and len(aba["Seções"]) == 6
+    consulta = dict(aba["Consulta"][1:])
+    assert consulta["bairro"] == "CENTRO" and consulta["eleitores"] == "1105"
+    assert not list(saida.parent.glob("*.tmp"))
 
 
-def test_cli_sem_resultado_sugere_e_devolve_1(tse_cache: Path, caplog: pytest.LogCaptureFixture) -> None:
-    assert cli.main(["Lap", "--ano", "2026", "--cache-dir", str(tse_cache)]) == 1
+def test_destino_padrao_por_uf_bairro_e_ano() -> None:
+    assert cli.destino_padrao("RJ", "Barra da Tijuca", 2026) == Path("saidas/RJ/locais_bairro_barradatijuca_2026.xlsx")
+
+
+def test_cli_sem_resultado_sugere_e_nao_grava(tse_cache: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    saida = tmp_path / "lap.xlsx"
+    assert cli.main(["Lap", "--ano", "2026", "--cache-dir", str(tse_cache), "--saida", str(saida)]) == 1
     assert "LAPA" in caplog.text
+    assert not saida.exists()

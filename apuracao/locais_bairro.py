@@ -6,11 +6,12 @@ Duas fontes de bairro:
 - "ibge": o bairro da malha do IBGE/Censo 2022 que CONTÉM a coordenada do local
   (`bairros.locais_em_bairros`, o mesmo critério do mapa por bairro). Local sem coordenada fica de fora.
 
-Sem I/O: recebe as seções de `eleitorado.load_sections` (e a malha, na fonte "ibge").
+Sem I/O (exceto `para_planilha`): recebe as seções de `eleitorado.load_sections` (e a malha, na fonte "ibge").
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -75,3 +76,35 @@ def sugestoes(secoes: pl.DataFrame, bairro: str, fonte: str = "cadastro", geo: d
                         | (pl.lit(alvo).str.contains(pl.col("_BAIRRO_BUSCA"), literal=True)
                            & (pl.col("_BAIRRO_BUSCA").str.len_chars() >= 4)))
     return hits.sort("n", descending=True)["BAIRRO"].head(limite).to_list()
+
+
+def rotulo_secao() -> pl.Expr:
+    """"375" ou "375 (agregada à 109)"."""
+    return (pl.when(pl.col("TIPO_SECAO") == "PRINCIPAL").then(pl.col("NR_SECAO").cast(pl.String))
+            .otherwise(pl.format("{} (agregada à {})", "NR_SECAO", "NR_SECAO_PRINCIPAL")))
+
+
+def tabela_locais(locais: pl.DataFrame, secoes: pl.DataFrame) -> pl.DataFrame:
+    """Uma linha por local, para a planilha: sem colunas internas e com a lista de seções rotulada."""
+    listas = (secoes.with_columns(rotulo_secao().alias("_ROTULO"))
+              .group_by(v.LOCAL_KEY, maintain_order=True).agg(pl.col("_ROTULO").str.join(", ").alias("SECOES")))
+    return (locais.drop("SECOES").join(listas, on=v.LOCAL_KEY, how="left", maintain_order="left")
+            .select("NM_MUNICIPIO", "CD_MUNICIPIO", "NR_ZONA", "NR_LOCAL_VOTACAO", "NM_LOCAL_VOTACAO", "DS_ENDERECO",
+                    "BAIRRO", "NR_LATITUDE", "NR_LONGITUDE", "N_SECOES", "QT_ELEITORES", "SECOES"))
+
+
+def para_planilha(locais: pl.DataFrame, secoes: pl.DataFrame, consulta: dict[str, Any], destino: Path) -> Path:
+    """.xlsx com as abas "Locais" (um por linha), "Seções" (uma por linha) e "Consulta" (parâmetros e totais)."""
+    import xlsxwriter
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    resumo = {**consulta, "locais": locais.height, "seções": secoes.height,
+              "eleitores": int(secoes["QT_ELEITOR_SECAO"].sum())}
+    abas = {"Locais": tabela_locais(locais, secoes), "Seções": secoes,
+            "Consulta": pl.DataFrame({"ITEM": list(resumo), "VALOR": [str(x) for x in resumo.values()]})}
+    tmp = destino.with_name(destino.name + ".tmp")
+    with xlsxwriter.Workbook(str(tmp)) as wb:
+        for nome, df in abas.items():
+            df.write_excel(wb, worksheet=nome, autofit=True, freeze_panes=(1, 0))
+    tmp.replace(destino)
+    return destino
