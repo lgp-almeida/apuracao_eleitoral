@@ -5,9 +5,12 @@ por padrão, o texto NM_BAIRRO do cadastro; com --fonte ibge, o bairro da malha 
 (Censo 2022) que contém a coordenada do local. Nomes comparados sem acento, caixa ou
 pontuação. Seções agregadas aparecem com a seção principal entre parênteses.
 
+Imprime a lista e grava a planilha .xlsx (abas Locais, Seções e Consulta), por padrão em
+saidas/<UF>/locais_bairro_<bairro>_<ano>.xlsx.
+
     python locais_por_bairro.py Tijuca --municipio "Rio de Janeiro"
     python locais_por_bairro.py tijuca --contem --uf RJ --ano 2024
-    python locais_por_bairro.py Icaraí --municipio Niterói --fonte ibge --saida saidas/icarai.csv
+    python locais_por_bairro.py Icaraí --municipio Niterói --fonte ibge --saida saidas/icarai.xlsx
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--contem", action="store_true", help="aceita bairros cujo nome CONTÉM o texto dado")
     p.add_argument("--fonte", choices=lb.FONTES, default="cadastro",
                    help="cadastro = bairro-texto do TSE; ibge = malha de bairros do Censo 2022 (pela coordenada)")
-    p.add_argument("--saida", help="grava as seções em CSV (;) em vez de só imprimir")
+    p.add_argument("--saida", type=Path, help="planilha .xlsx; padrão saidas/<UF>/locais_bairro_<bairro>_<ano>.xlsx")
     p.add_argument("--cache-dir", default="cache_tse")
     p.add_argument("--sha512", action="store_true", help="validar .sha512 do TSE ao baixar")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -49,23 +52,20 @@ def _milhar(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
 
-def _rotulo_secao(r: dict) -> str:
-    return str(r["NR_SECAO"]) if r["TIPO_SECAO"] == "PRINCIPAL" else f"{r['NR_SECAO']} (agregada à {r['NR_SECAO_PRINCIPAL']})"
+def destino_padrao(uf: str, bairro: str, ano: int) -> Path:
+    return Path("saidas") / uf / f"locais_bairro_{el.compact(bairro).lower()}_{ano}.xlsx"
 
 
 def imprimir(locais: pl.DataFrame, secoes: pl.DataFrame) -> None:
-    por_local = secoes.partition_by(v.LOCAL_KEY, as_dict=True, maintain_order=True)
     municipio = None
-    for loc in locais.iter_rows(named=True):
+    for loc in lb.tabela_locais(locais, secoes).iter_rows(named=True):
         if loc["NM_MUNICIPIO"] != municipio:
             municipio = loc["NM_MUNICIPIO"]
             print(f"\n== {municipio} ==")
-        chave = tuple(loc[k] for k in v.LOCAL_KEY)
-        linhas = por_local[chave].iter_rows(named=True)
         print(f"\nZona {loc['NR_ZONA']} · Local {loc['NR_LOCAL_VOTACAO']} — {loc['NM_LOCAL_VOTACAO']}")
         print(f"  {loc['DS_ENDERECO'] or 's/ endereço'} — {loc['BAIRRO']}")
         print(f"  {loc['N_SECOES']} seções, {_milhar(loc['QT_ELEITORES'])} eleitores")
-        print(f"  Seções: {', '.join(_rotulo_secao(r) for r in linhas)}")
+        print(f"  Seções: {loc['SECOES']}")
     print(f"\nTotal: {locais.height} locais, {secoes.height} seções, "
           f"{_milhar(int(secoes['QT_ELEITOR_SECAO'].sum()))} eleitores")
 
@@ -88,11 +88,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         tabela = lb.secoes_dos_locais(secoes, locais)
         imprimir(locais, tabela)
-        if args.saida:
-            destino = Path(args.saida)
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            tabela.write_csv(destino, separator=";")
-            print(f"Seções gravadas em {destino}")
+        consulta = {"bairro": args.bairro, "fonte": args.fonte, "nome exato": not args.contem, "UF": args.uf,
+                    "município": args.municipio or "todos", "cadastro de eleitorado": args.ano, "turno": args.turno}
+        destino = lb.para_planilha(locais, tabela, consulta,
+                                   args.saida or destino_padrao(args.uf, args.bairro, args.ano))
+        print(f"Planilha gravada em {destino}")
     except (v.TseDataError, requests.RequestException) as exc:
         logger.error("%s", exc)
         return 1

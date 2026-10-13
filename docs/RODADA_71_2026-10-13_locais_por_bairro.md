@@ -14,7 +14,7 @@ Dado o nome de um bairro, listar os locais de votação dele e as seções eleit
   ```bash
   python locais_por_bairro.py Tijuca --municipio "Rio de Janeiro"
   python locais_por_bairro.py tijuca --contem
-  python locais_por_bairro.py Icaraí --municipio Niterói --fonte ibge --saida saidas/icarai.csv
+  python locais_por_bairro.py Icaraí --municipio Niterói --fonte ibge --saida saidas/icarai.xlsx
   ```
 
   - Para cada local mostra zona, número, nome, endereço, bairro, nº de seções, eleitores e a lista de seções. As
@@ -49,6 +49,19 @@ Números reais do cadastro de 2026 (RJ, 5.062 locais, 1.656 nomes de bairro dist
 
 As duas fontes não coincidem, porque o texto do TSE é livre (CLAUDE.md: ~83% de coincidência no Rio). Como o
 mesmo nome existe em vários municípios (há uma "Tijuca" em Teresópolis), vale passar `--municipio`.
+
+## Adendo: planilha .xlsx (13/10/2026)
+
+O CSV de `--saida` virou planilha `.xlsx`, gravada SEMPRE (padrão `saidas/<UF>/locais_bairro_<bairro>_<ano>.xlsx`,
+bairro por `compact`; `--saida` muda o caminho). Sem resultado, nada é gravado.
+
+- **Locais:** um por linha, com coordenadas, nº de seções, eleitores e a lista `SECOES` já rotulada
+  (`375 (agregada à 109)`), a mesma que o terminal mostra (`tabela_locais`).
+- **Seções:** uma por linha (`TIPO_SECAO`, `NR_SECAO_PRINCIPAL`, `QT_ELEITOR_SECAO`), o conteúdo do antigo CSV.
+- **Consulta:** parâmetros (bairro, fonte, exato/contém, UF, município, ano, turno) e totais.
+
+Gravada num `.tmp` e trocada no fim (`para_planilha`), como as outras saídas. Tijuca (Rio): 54 locais e 410 seções,
+os mesmos números do terminal. 8 testes (2 novos: a tabela de locais e o destino padrão; o do CLI lê as três abas).
 
 ## Arquivos
 
