@@ -1,7 +1,7 @@
 # Rodada 71 — Locais de votação e seções de um bairro (13/10/2026)
 
-Script de linha de comando novo, no ramo `frontend-refatoracao` (commit `113ee42`). Não mexe no site, no coletor nem
-no front-end.
+Script de linha de comando novo, no ramo `frontend-refatoracao` (commit `113ee42`) e no `main` por `cherry-pick`
+(commit `e683a1c`). Não mexe no site, no coletor nem no front-end.
 
 ## Objetivo
 
@@ -72,11 +72,11 @@ mesmo nome existe em vários municípios (há uma "Tijuca" em Teresópolis), val
 
 ## Verificação
 
-- `pytest -q -m "not e2e"`: 423 passaram, 1 pulado (sem os 80 e2e; o script não toca no front-end).
+- `pytest -q -m "not e2e"`: no ramo, 423 passaram e 1 foi pulado (sem os 80 e2e); no `main`, depois do
+  `cherry-pick`, 419 passaram e 1 foi pulado (sem os 70 e2e). O script não toca no front-end.
 - `ruff check` sem apontamentos nos três arquivos novos.
 - Consultas reais acima, no cache de 2026.
 
 ## Pendências
 
-- O commit está no ramo `frontend-refatoracao`; vai para o `main` no merge depois de 25/10 (TODO 27), ou antes por
-  `cherry-pick` se for preciso.
+- Nenhuma: o script está no `main` e no ramo `frontend-refatoracao`.
