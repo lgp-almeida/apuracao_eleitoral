@@ -58,12 +58,8 @@ def _milhar(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
 
-def _rotulo(ufs: list[str]) -> str:
-    return "BR" if ufs == list(uf_mod.UFS) else "_".join(ufs)
-
-
 def destino_padrao(ufs: list[str], ano: int, versao: vs.Versao) -> Path:
-    return Path("saidas") / _rotulo(ufs) / f"locais_entre_turnos_{ano}_{versao.carimbo}.xlsx"
+    return Path("saidas") / uf_mod.rotulo(ufs) / f"locais_entre_turnos_{ano}_{versao.carimbo}.xlsx"
 
 
 def carregar(ano: int, ufs: list[str], cache: Path, sha: bool, municipio: str | None) -> tuple[pl.DataFrame, ...]:
