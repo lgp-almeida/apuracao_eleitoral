@@ -35,6 +35,11 @@ def lista(ufs: str | Iterable[str]) -> list[str]:
     return saida
 
 
+def rotulo(ufs: list[str]) -> str:
+    """Nome curto de um conjunto de UFs para pastas de saída: "BR" para as 27, senão as siglas ("RJ", "RJ_SP")."""
+    return "BR" if ufs == list(UFS) else "_".join(ufs)
+
+
 def uf_da_pasta(pasta: Path) -> str | None:
     """A UF que o `status.json` da pasta registra (coletor e importador gravam `uf`)."""
     try:
