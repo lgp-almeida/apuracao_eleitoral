@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import openpyxl
@@ -9,10 +10,15 @@ import polars as pl
 import pytest
 
 import locais_por_bairro as cli
+import votos_por_local_votacao as v
 from apuracao import bairros as br
 from apuracao import eleitorado as el
 from apuracao import locais_bairro as lb
+from apuracao import versoes as vs
 from conftest import escrever_bairros
+
+ZIP_2026 = v.electorate_spec(2026, "RJ").zip_name
+CARIMBO = "2026-09-29T062809"  # DT_GERACAO/HH_GERACAO do cadastro sintético
 
 
 @pytest.fixture
@@ -67,6 +73,7 @@ def test_cli_imprime_e_grava_planilha(tse_cache: Path, tmp_path: Path, capsys: p
                    "--saida", str(saida)])
     out = capsys.readouterr().out
     assert rc == 0
+    assert f"Cadastro de eleitorado 2026, 1º turno — versão {CARIMBO}" in out
     assert "Zona 4 · Local 1015 — COLEGIO PEDRO II" in out
     assert "Seções: 10, 11, 12, 13 (agregada à 12)" in out
     assert "4 seções, 955 eleitores" in out
@@ -81,12 +88,55 @@ def test_cli_imprime_e_grava_planilha(tse_cache: Path, tmp_path: Path, capsys: p
     tipo = aba["Seções"][0].index("TIPO_SECAO")
     assert [r[tipo] for r in aba["Seções"][1:]].count("AGREGADA") == 1 and len(aba["Seções"]) == 6
     consulta = dict(aba["Consulta"][1:])
-    assert consulta["bairro"] == "CENTRO" and consulta["eleitores"] == "1105"
+    assert consulta["bairro"] == "CENTRO" and consulta["eleitores"] == "1105" and consulta["turno"] == "1"
+    # a versão do cadastro usada vai para a Consulta e fica guardada no acervo
+    prov = json.loads((tse_cache / ZIP_2026).with_suffix(".proveniencia.json").read_text())
+    assert consulta["versão do arquivo (carimbo)"] == CARIMBO and consulta["SHA-512"] == prov["sha512"]
+    assert consulta["geração do TSE"] == "29/09/2026 06:28:09"
+    assert [x.carimbo for x in vs.listar(tse_cache, ZIP_2026)] == [CARIMBO]
     assert not list(saida.parent.glob("*.tmp"))
 
 
-def test_destino_padrao_por_uf_bairro_e_ano() -> None:
-    assert cli.destino_padrao("RJ", "Barra da Tijuca", 2026) == Path("saidas/RJ/locais_bairro_barradatijuca_2026.xlsx")
+def test_destino_padrao_leva_turno_fonte_e_versao(tse_cache: Path) -> None:
+    el.ensure_local_provenance(v.electorate_spec(2026, "RJ"), tse_cache)
+    versao = vs.em_uso(tse_cache, ZIP_2026)
+    assert cli.destino_padrao("RJ", "Barra da Tijuca", 2026, 1, versao) == \
+        Path(f"saidas/RJ/locais_bairro_barradatijuca_2026_t1_{CARIMBO}.xlsx")
+    assert cli.destino_padrao("RJ", "Barra da Tijuca", 2026, 2, versao, "ibge") == \
+        Path(f"saidas/RJ/locais_bairro_barradatijuca_2026_t2_ibge_{CARIMBO}.xlsx")
+
+
+def test_cli_grava_no_destino_padrao(tse_cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["CENTRO", "--ano", "2026", "--municipio", "Rio de Janeiro",
+                     "--cache-dir", str(tse_cache)]) == 0
+    assert (tmp_path / f"saidas/RJ/locais_bairro_centro_2026_t1_{CARIMBO}.xlsx").is_file()
+
+
+def test_versao_guardada_refaz_a_lista_sem_o_zip_no_cache(tse_cache: Path, tmp_path: Path) -> None:
+    primeira, refeita = tmp_path / "a.xlsx", tmp_path / "b.xlsx"
+    args = ["CENTRO", "--ano", "2026", "--municipio", "Rio de Janeiro", "--cache-dir", str(tse_cache)]
+    assert cli.main([*args, "--saida", str(primeira)]) == 0
+    for f in tse_cache.glob("eleitorado_local_votacao_2026*"):  # o cache perde o ZIP; o acervo continua com ele
+        f.unlink()
+    assert cli.main([*args, "--versao", "2026-09", "--saida", str(refeita)]) == 0
+    abas = [{n: list(openpyxl.load_workbook(x, read_only=True)[n].iter_rows(values_only=True))
+             for n in ("Locais", "Seções")} for x in (primeira, refeita)]
+    assert abas[0] == abas[1]
+
+
+def test_versao_inexistente_lista_as_guardadas(tse_cache: Path, caplog: pytest.LogCaptureFixture) -> None:
+    assert cli.main(["CENTRO", "--ano", "2026", "--cache-dir", str(tse_cache), "--versao", "1999"]) == 1
+    assert "nenhuma versão guardada" in caplog.text
+
+
+def test_turno_sem_linhas_no_cadastro_e_erro(tse_cache: Path, tmp_path: Path,
+                                            caplog: pytest.LogCaptureFixture) -> None:
+    saida = tmp_path / "t2.xlsx"
+    # o cadastro sintético só tem o 1º turno
+    assert cli.main(["CENTRO", "--ano", "2026", "--turno", "2", "--cache-dir", str(tse_cache),
+                     "--saida", str(saida)]) == 1
+    assert "não tem linhas do 2º turno" in caplog.text and not saida.exists()
 
 
 def test_cli_sem_resultado_sugere_e_nao_grava(tse_cache: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
