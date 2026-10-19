@@ -416,9 +416,8 @@ Registrado em 16/10/2026, na [RODADA_72](RODADA_72_2026-10-16_locais_entre_turno
   `locais_entre_turnos.py --ufs todas` (no roteiro, em 24/10). O TSE já regerou o cadastro cinco vezes (a última
   em 17/10; desde 15/10, uma por dia). O `transf_temporaria_secao_2026.zip` também foi regerado em 17/10 e não está
   no cache.
-- **Diferença entre duas versões do cadastro como comando:** o adendo de 17/10 da rodada 72 comparou as versões
-  linha a linha com um script fora do repositório. Um `ingerir_eleitorado.py --diferencas A B` sobre o acervo
-  (células por coluna, seções criadas/extintas, situação entre turnos em cada versão) evitaria refazê-lo.
+- **Diferença entre duas versões do cadastro como comando — FEITO (rodada 73):**
+  `ingerir_eleitorado.py --diferencas [ANTES [DEPOIS]]`; com `--atualizar`, mostra o que mudou na versão nova.
 - **Depois dos microdados do 2º turno: cadastro × onde a seção votou.**
   - O `votacao_secao_2026` do 2º turno traz o local em que cada seção funcionou.
   - Comparar com a linha do 2º turno do cadastro mostra a interdição de última hora, que o cadastro não pega.
