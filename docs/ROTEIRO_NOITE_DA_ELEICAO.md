@@ -21,7 +21,7 @@ oficial do 1º turno pela prontidão).
 |---|---|---|
 | até 23/10 (opcional) | ensaio em outra UF que teve 2º turno de Governador em 2022 (AC, AM, RN ou TO) | `python ensaio_apuracao.py --uf AM --turno 2` (deve terminar em "RESULTADO DO ENSAIO: OK") |
 | 24/10 | prontidão completa | `python verificar_prontidao.py --turno 2 --ufs todas --testes` |
-| 24/10 | cadastro de eleitorado na versão mais nova do TSE (a anterior fica em `cache_tse/versoes/`) e as seções que mudam de local do 1º para o 2º turno (rodada 72; em 16/10: 2.551 no país, 19 no RJ) | `python ingerir_eleitorado.py --ano 2026 --atualizar --uf todas` e `python locais_entre_turnos.py --ufs todas` |
+| 24/10 | cadastro de eleitorado na versão mais nova do TSE (a anterior fica em `cache_tse/versoes/`) e as seções que mudam de local do 1º para o 2º turno (rodada 72; em 16/10: 2.551 no país, 19 no RJ) | `python ingerir_eleitorado.py --ano 2026 --atualizar --uf todas --diferencas` (o que mudou da versão anterior, rodada 73) e `python locais_entre_turnos.py --ufs todas` |
 | 25/10, 16h | prontidão de novo (sem os testes, é rápida) | `python verificar_prontidao.py --turno 2 --ufs todas` |
 | 25/10, 16h30 | encerrar sites de teste e vigias de microdados que estejam no ar | Ctrl+C, ou `kill` nos PIDs de `ps -eo pid,args \| grep -E "site_apuracao\|preparar_2026\|baixar_ufs"` |
 | 25/10, 16h45 | **subir o site de todas as UFs com coleta, sob o vigia** | `python vigiar_site.py --porta 8001 -- python site_apuracao.py --ambiente oficial --turno 2 --ufs todas --coletar --porta 8001 --copia-dir <pasta em OUTRO disco>/t2` |
