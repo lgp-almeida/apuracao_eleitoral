@@ -406,3 +406,26 @@ Registrado em 08/10/2026. **Quem faz: o usuário**, quando puder, antes do merge
   6. Anotar cada problema com o endereço, o tema, a largura e o erro do console (§5).
 - **Fecha quando:** a lista estiver toda conferida e os problemas anotados estiverem corrigidos no ramo, cada um com
   um teste.
+
+## 30. Locais de votação entre turnos: o que ficou da rodada 72
+
+Registrado em 16/10/2026, na [RODADA_72](RODADA_72_2026-10-16_locais_entre_turnos.md) (acervo de versões do cache e
+`locais_entre_turnos.py`).
+
+- **Antes de 25/10:** rodar de novo `ingerir_eleitorado.py --ano 2026 --atualizar --uf todas` e
+  `locais_entre_turnos.py --ufs todas` (no roteiro, em 24/10). O TSE já regerou o cadastro cinco vezes (a última
+  em 17/10; desde 15/10, uma por dia). O `transf_temporaria_secao_2026.zip` também foi regerado em 17/10 e não está
+  no cache.
+- **Diferença entre duas versões do cadastro como comando:** o adendo de 17/10 da rodada 72 comparou as versões
+  linha a linha com um script fora do repositório. Um `ingerir_eleitorado.py --diferencas A B` sobre o acervo
+  (células por coluna, seções criadas/extintas, situação entre turnos em cada versão) evitaria refazê-lo.
+- **Depois dos microdados do 2º turno: cadastro × onde a seção votou.**
+  - O `votacao_secao_2026` do 2º turno traz o local em que cada seção funcionou.
+  - Comparar com a linha do 2º turno do cadastro mostra a interdição de última hora, que o cadastro não pega.
+  - Comparar com o 1º turno da votação dá a mudança real entre os turnos.
+  - Mesma regra de prédio (`locais_turnos`): nome igual OU endereço igual.
+- **Acervo no vigia dos microdados (`microdados.preparar`):** hoje ele troca o ZIP sem guardar o anterior, e uma
+  retotalização apaga a versão usada nas análises. Falta decidir quantas versões guardar: SP tem 767 MB por versão do
+  `votacao_secao`. O caminho é `versoes.guardar` antes de `baixar`, como em `versoes.atualizar`.
+- **Fecha quando:** a comparação com a votação do 2º turno estiver feita (comando ou opção do
+  `locais_entre_turnos.py`, com teste) e o vigia guardar as versões com um limite definido.
