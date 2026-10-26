@@ -1,4 +1,4 @@
-# Rodada 74 — Noite do 2º turno: três correções na coleta de todas as UFs (25/10/2026)
+# Rodada 74 — Noite do 2º turno: cinco correções na coleta de todas as UFs (25/10/2026)
 
 Rodada no ramo `frontend-refatoracao`, feita com o site no ar durante a apuração. Não mexe no front-end.
 
@@ -75,6 +75,28 @@ E corrigir o que impedisse a coleta durante a noite.
     nas 6 UFs que o tinham. Não fica número congelado.
   - O que já tinha sido coletado do Governador fica em `raw/`, nas séries e no `historico_totais.parquet`.
 
+### 4. Brasil parado em 30%: a marca da totalização inclui as seções (`coletor.py`)
+
+- **Bug.**
+  - Às 21h o painel do Brasil seguia em 30,2% de seções, enquanto o TSE já passava de 99%.
+  - O EA14 nacional traz para o Brasil a MESMA hora de totalização a noite toda, e no futuro ("26/10/2026 09:05:23").
+  - O coletor só pedia o EA20 de uma abrangência quando o `DT_TOTALIZACAO` mudava; no Brasil, ele nunca mudou.
+- **Correção.** A marca da última totalização confirmada (`_ultima_totalizacao`) passou a ser a tupla (dt/ht,
+  seções totalizadas, andamento). Seções novas com a mesma hora = totalização nova.
+  - A marca só é gravada em `_confirmar`, depois que os arquivos chegam (`_marca_vista` guarda a do EA15/EA14 até lá).
+- **No ar** às 21:22 (site reiniciado pelo vigia); o Brasil voltou a avançar no ciclo seguinte.
+
+### 5. Versão final do Brasil não percebida: andamento e geração do EA14 (`coletor.py`)
+
+- **Bug.** Com 100% das seções, a hora fixa e o mesmo nº de seções, a versão final (`and="f"`, situação "Eleito")
+  não mudava a marca: o Brasil ficou na última parcial.
+- **Correção.**
+  - O `ANDAMENTO` já entra na marca (entrega 4).
+  - No Brasil entra também a geração do EA14 (`_ab_gerado`): o arquivo regerado com qualquer mudança faz o EA20
+    nacional ser pedido de novo. O EA20 continua sujeito à regra de `dg`/`hg` ≥ hora anunciada (`_limitar`).
+  - Nas UFs e municípios a geração do acompanhamento NÃO entra: mudaria a cada ciclo e pediria todos os EA20.
+- **No ar** às 23:32; o Brasil final apareceu com Lula eleito.
+
 ## Números reais
 
 - **Linha do tempo (horário de Brasília):**
@@ -87,6 +109,9 @@ E corrigir o que impedisse a coleta durante a noite.
   | 19:18 → 19:22 | sem coleta (correção 2) |
   | 19:22 | site reiniciado com o cliente corrigido |
   | 20:05 | subida com `--so-presidente` (correção 3) |
+  | 21:22 | marca com as seções (correção 4) |
+  | 23:26 | TSE anuncia RR final no EA15 (o EA20 de RR nunca foi regerado na noite) |
+  | 23:32 | marca com andamento e geração do EA14 no Brasil (correção 5) |
 
 - **De 20:05 até 21:05:** 0 timeouts, 0 404, 0 bloqueios, 0 reinícios.
 - **Uma volta pelas 27 UFs** leva ~4¾ min: um ciclo por UF, 2 a 11 s cada, mais o intervalo de 60 s.
@@ -99,16 +124,24 @@ E corrigir o que impedisse a coleta durante a noite.
   | Brasil | 30,2% | 50,47% (18.823.884) | 49,53% (18.476.333) |
   | RJ | 31,9% | 53,2% | 46,8% |
 
+- **Resultado final no Brasil:** Lula 64.256.232 votos (51,79%), eleito; Flávio Bolsonaro 59.826.041 (48,21%).
+  Eleitorado 158.745.502, comparecimento 128.236.074, abstenção 19,22%, brancos 1,12%, nulos 2,12%. Lula venceu em
+  11 UFs e Flávio em 14 (até o fim da noite).
+- **Fim da noite:** Brasil e 26 UFs com totalização final, boletim final e instantâneo "final" da cópia.
+  - **RR:** o EA15 anuncia a UF final às 23:26:38, mas o TSE continuou servindo o EA20 gerado às 22:45:56 com
+    `tf=n` (conferido até ~00:09). O coletor desistiu às 23:54, depois de `TENTATIVAS_ANTIGO` (15) ciclos. Os votos
+    estão completos (100% das seções); falta só a marca de final, e com ela o boletim e a cópia final de RR.
+
 ## Arquivos
 
 | Arquivo | Mudança |
 |---|---|
 | `apuracao/vigia_site.py` | `sondar_http` com `/ufs.json` quando `/api/status` dá 404 |
 | `apuracao/divulgacao/cliente.py` | `novo_ciclo()` fecha as conexões da sessão |
-| `apuracao/divulgacao/coletor.py` | `Coletor(..., so_presidente=False)` |
+| `apuracao/divulgacao/coletor.py` | `Coletor(..., so_presidente=False)`; marca da totalização = (dt/ht, seções, andamento[, geração do EA14 no Brasil]) |
 | `site_apuracao.py`, `coletar_resultados.py` | `--so-presidente` |
 | `test_copia_vigia.py` | `test_sonda_aceita_o_site_de_varias_ufs` |
-| `test_divulgacao.py` | `test_novo_ciclo_fecha_as_conexoes_guardadas`, `test_so_presidente_nao_pede_a_eleicao_estadual` |
+| `test_divulgacao.py` | `test_novo_ciclo_fecha_as_conexoes_guardadas`, `test_so_presidente_nao_pede_a_eleicao_estadual`, `test_brasil_com_a_mesma_hora_no_futuro_e_pedido_quando_as_secoes_avancam` |
 | `docs/ROTEIRO_NOITE_DA_ELEICAO.md`, `CLAUDE.md`, `docs/INDEX.md` | registro |
 
 ## Verificação
@@ -120,6 +153,10 @@ E corrigir o que impedisse a coleta durante a noite.
   - **Correção 2:** duas voltas completas depois da ociosidade, sem timeout.
   - **Correção 3:** a primeira volta com `--so-presidente` mostra `eleições {6258: (1,)}` nas 27 UFs, com 0 404 e só
     o cargo 1 no `ultimo/totais.parquet`.
+  - **Correções 4 e 5:** o Brasil passou de 30,2% para 100% e chegou à versão final.
+- **Correções 4 e 5 (testes):** `pytest -q test_divulgacao.py test_copia_vigia.py test_alertas.py test_lote_ufs.py
+  test_boletim.py test_comparacao.py` → 97 passaram. O teste novo falha sem a correção: muda as seções e o andamento
+  da linha br do EA14 com a mesma hora (1 pedido a mais cada) e depois só a geração (mais 1).
 
 ## Decisões
 
@@ -135,3 +172,6 @@ E corrigir o que impedisse a coleta durante a noite.
 - **`verificar_prontidao.py` não testa o vigia contra o site de várias UFs,** e o ensaio roda com uma UF. Um ensaio
   com `--ufs` e sessões ociosas teria pegado as correções 1 e 2 antes da noite.
 - **Saber por que o RJ ficou fora da divulgação do Governador** no TSE.
+- **RR sem a versão final:** o coletor só volta a pedir quando a marca de RR mudar no EA15. Se o TSE regerar só o
+  EA20, é preciso reiniciar o site (a memória das tentativas é do processo).
+- **O ensaio não simula a hora fixa no futuro do EA14 nacional** (correções 4 e 5).

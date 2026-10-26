@@ -94,7 +94,11 @@ class Coletor:
         self.municipios = pl.DataFrame(schema=m.MUNICIPIOS_SCHEMA)
         self._eleicoes: dict[int, tuple[int, ...]] = {}          # eleição -> cargos coletados
         self._federal: int | None = None                           # eleição do presidente
-        self._ultima_totalizacao: dict[tuple, datetime | None] = {}
+        # chave -> marca (dt/ht anunciado, seções totalizadas, andamento[, geração do EA14]) da última totalização
+        # confirmada. O EA14 nacional repete a MESMA hora no futuro a noite toda (25/10: o Brasil parou em 30% com
+        # 99% apurado; depois, com 100%, não viu a versão final): no Brasil vale também a geração do EA14.
+        self._ultima_totalizacao: dict[tuple, tuple] = {}
+        self._marca_vista: dict[tuple, tuple] = {}
         self._tentativas_404: dict[tuple, int] = {}
         self._tentativas_antigo: dict[tuple, int] = {}
         self._ab_gerado: dict[tuple, datetime | None] = {}  # chave da abrangência -> geração (dg/hg) do EA15/EA14
@@ -237,13 +241,14 @@ class Coletor:
                     continue
                 logger.warning("abrangência %s: o TSE ainda serve resultado anterior à totalização de %s depois de "
                                "%d ciclos; fica o que há até a próxima totalização", chave, dt, n)
-            self._ultima_totalizacao[chave] = dt
+            self._ultima_totalizacao[chave] = self._marca_vista.get(chave, (dt,))
             self._tentativas_404.pop(chave, None)
             self._tentativas_antigo.pop(chave, None)
 
     def _abrangencias_alteradas(self, eleicao: int) -> list[tuple[tuple, datetime | None, tuple[str, int | None]]]:
-        """(chave, dt/ht novo, (uf, município)) de cada abrangência cujo dt/ht mudou desde a última
-        totalização confirmada, segundo EA15/EA14. Nada é confirmado aqui: ver `_confirmar`."""
+        """(chave, dt/ht novo, (uf, município)) de cada abrangência cujo dt/ht, nº de seções totalizadas ou andamento
+        mudou (no Brasil, também a geração do EA14)
+        desde a última totalização confirmada, segundo EA15/EA14. Nada é confirmado aqui: ver `_confirmar`."""
         assert self.cfg is not None
         tabelas = []
         ufs = [self.uf] + (["br"] if eleicao == self._federal and self.presidente_br else [])
@@ -270,7 +275,11 @@ class Coletor:
         for tab in tabelas:
             for row in tab.iter_rows(named=True):
                 chave = (eleicao, row["ABRANGENCIA"], row["UF"], row["CD_MUNICIPIO"])
-                if chave not in self._ultima_totalizacao or self._ultima_totalizacao[chave] != row["DT_TOTALIZACAO"]:
+                marca: tuple = (row["DT_TOTALIZACAO"], row["SECOES_TOTALIZADAS"], row["ANDAMENTO"])
+                if row["ABRANGENCIA"] == "br":
+                    marca += (self._ab_gerado.get(chave),)
+                if self._ultima_totalizacao.get(chave) != marca:
+                    self._marca_vista[chave] = marca
                     uf = ("br" if row["ABRANGENCIA"] == "br" else self.uf if row["UF"] == self.uf.upper()
                           else row["UF"].lower())
                     alterados.append((chave, row["DT_TOTALIZACAO"], (uf, row["CD_MUNICIPIO"])))

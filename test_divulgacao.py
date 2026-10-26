@@ -210,6 +210,30 @@ def _hora_rio_governador(destino: Path) -> str:
     return f'{tot.filter((pl.col("CARGO") == 3) & (pl.col("CD_MUNICIPIO") == 60011))["DT_TOTALIZACAO"].item():%H:%M:%S}'
 
 
+def test_brasil_com_a_mesma_hora_no_futuro_e_pedido_quando_as_secoes_avancam(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """O EA14 nacional repete a mesma hora (no futuro) a noite toda; 25/10: o Brasil parou em 30% com 99% apurado e,
+    com 100%, não viu a versão final."""
+    col = Coletor(_cliente(fake_tse), tmp_path)
+    col.ciclo()
+    nacional = "br-c0001-e021270-u.json"
+    pedidos = sum(url.endswith(nacional) for url in fake_tse.pedidos)
+    col.ciclo()  # nada mudou: o nacional não é pedido de novo
+    assert sum(url.endswith(nacional) for url in fake_tse.pedidos) == pedidos
+    ab = fake_tse._doc("br-e021270-ab.json")
+    fake_tse._docs["br-e021270-ab.json"] = ab
+    linha = next(a for a in ab["abr"] if a["cdabr"] == "br")
+    linha["s"]["st"] = str(int(linha["s"]["st"]) + 1000)  # mesma dt/ht, mais seções
+    linha["and"] = "p"
+    col.ciclo()
+    assert sum(url.endswith(nacional) for url in fake_tse.pedidos) == pedidos + 1
+    linha["and"] = "f"  # 100% apurado: só o andamento muda na versão final
+    col.ciclo()
+    assert sum(url.endswith(nacional) for url in fake_tse.pedidos) == pedidos + 2
+    ab["hg"] = "23:59:59"  # EA14 regerado (o TSE regera o EA20 depois do final)
+    col.ciclo()
+    assert sum(url.endswith(nacional) for url in fake_tse.pedidos) == pedidos + 3
+
+
 def test_so_presidente_nao_pede_a_eleicao_estadual(fake_tse: FakeTSE, tmp_path: Path) -> None:
     """--so-presidente (25/10): no 2º turno o governador dá 404 nas UFs sem 2º turno estadual."""
     col = Coletor(_cliente(fake_tse), tmp_path, so_presidente=True)
