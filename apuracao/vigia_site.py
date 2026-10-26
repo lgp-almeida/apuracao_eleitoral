@@ -29,8 +29,12 @@ PASTA_PADRAO = Path("dados_2026/vigia")
 
 
 def sondar_http(porta: int, timeout: float = 10.0) -> bool:
+    """Site de uma UF: /api/status. Site de várias UFs (--ufs): a raiz não tem /api/status (404) — sonda /ufs.json."""
     try:
-        return requests.get(f"http://127.0.0.1:{porta}/api/status", timeout=timeout).ok
+        resp = requests.get(f"http://127.0.0.1:{porta}/api/status", timeout=timeout)
+        if resp.status_code == 404:
+            resp = requests.get(f"http://127.0.0.1:{porta}/ufs.json", timeout=timeout)
+        return resp.ok
     except requests.RequestException:
         return False
 

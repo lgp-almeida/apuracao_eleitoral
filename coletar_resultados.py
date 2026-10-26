@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
                                      "antiga sem a UF, se existir)")
     p.add_argument("--sem-presidente-br", action="store_true", help="não baixar o arquivo nacional do presidente")
     p.add_argument("--sem-presidente-ufs", action="store_true", help="não baixar o presidente nas outras UFs")
+    p.add_argument("--so-presidente", action="store_true", help="coletar só o Presidente (sem Governador)")
     p.add_argument("--uma-vez", action="store_true", help="um único ciclo e sai")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -46,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
     destino = Path(args.destino) if args.destino else dir_uf(destino_padrao(args.ambiente, turno=args.turno), args.uf)
     coletor = Coletor(ClienteDivulgacao(args.ambiente, max_rps=args.max_rps), destino, args.uf, args.turno,
-                      presidente_br=not args.sem_presidente_br, presidente_ufs=not args.sem_presidente_ufs)
+                      presidente_br=not args.sem_presidente_br, presidente_ufs=not args.sem_presidente_ufs,
+                      so_presidente=args.so_presidente)
     if not args.uma_vez:
         try:
             coletor.executar(args.intervalo)

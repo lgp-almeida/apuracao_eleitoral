@@ -93,6 +93,17 @@ def test_cliente_etag_304_e_404_memorizado(fake_tse: FakeTSE) -> None:
     assert c.get_json("nao/existe.json") is None and c.estatisticas["404"] == 2
 
 
+def test_novo_ciclo_fecha_as_conexoes_guardadas(fake_tse: FakeTSE) -> None:
+    """Keep-alive ocioso entre ciclos morre calado na NAT: cada ciclo abre conexões novas (25/10)."""
+    fechadas = []
+    fake_tse.close = lambda: fechadas.append(True)
+    c = _cliente(fake_tse)
+    c.novo_ciclo()
+    c.novo_ciclo()
+    assert len(fechadas) == 2
+    assert c.get_json("ele2026/21272/dados/rj/rj-c0003-e021272-u.json").mudou  # a sessão segue usável
+
+
 def test_cliente_pagina_html_vira_indisponivel(fake_tse: FakeTSE) -> None:
     fake_tse.html = True
     with pytest.raises(DivulgacaoIndisponivel):
@@ -197,6 +208,15 @@ RIO_GOV = "rj60011-c0003-e021272-u.json"
 def _hora_rio_governador(destino: Path) -> str:
     tot = pl.read_parquet(destino / "ultimo" / "totais.parquet")
     return f'{tot.filter((pl.col("CARGO") == 3) & (pl.col("CD_MUNICIPIO") == 60011))["DT_TOTALIZACAO"].item():%H:%M:%S}'
+
+
+def test_so_presidente_nao_pede_a_eleicao_estadual(fake_tse: FakeTSE, tmp_path: Path) -> None:
+    """--so-presidente (25/10): no 2º turno o governador dá 404 nas UFs sem 2º turno estadual."""
+    col = Coletor(_cliente(fake_tse), tmp_path, so_presidente=True)
+    col.ciclo()
+    assert set(pl.read_parquet(tmp_path / "ultimo" / "totais.parquet")["CARGO"]) == {1}
+    assert not any("21272" in url for url in fake_tse.pedidos)  # nem o acompanhamento estadual
+    assert any(url.endswith("mun-e021270-cm.json") for url in fake_tse.pedidos)  # municípios pela eleição federal
 
 
 @pytest.mark.parametrize("falha", ["rede", 500, 404, 200])  # 200 = HTML no lugar do JSON

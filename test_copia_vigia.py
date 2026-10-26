@@ -12,6 +12,7 @@ import polars as pl
 import pytest
 
 from apuracao.copia import Copiador
+from apuracao import vigia_site
 from apuracao.vigia_site import VigiaSite, porta_do_comando
 
 
@@ -161,6 +162,25 @@ def test_porta_do_comando() -> None:
     assert porta_do_comando(["python", "site_apuracao.py", "--porta", "8022"]) == 8022
     assert porta_do_comando(["python", "site_apuracao.py", "--porta=8023"]) == 8023
     assert porta_do_comando(["python", "site_apuracao.py"]) == 8000
+
+
+def test_sonda_aceita_o_site_de_varias_ufs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Com --ufs a raiz não tem /api/status (404): a sonda vale por /ufs.json (25/10: reiniciava a cada 2,5 min)."""
+    class Resp:
+        def __init__(self, codigo: int) -> None:
+            self.status_code, self.ok = codigo, codigo < 400
+
+    def rotas(codigos: dict[str, int]):
+        return lambda url, timeout: Resp(codigos.get(url.split(":9996")[1], 404))
+
+    monkeypatch.setattr(vigia_site.requests, "get", rotas({"/ufs.json": 200}))
+    assert vigia_site.sondar_http(9996)
+    monkeypatch.setattr(vigia_site.requests, "get", rotas({"/api/status": 200}))
+    assert vigia_site.sondar_http(9996)
+    monkeypatch.setattr(vigia_site.requests, "get", rotas({"/api/status": 500, "/ufs.json": 200}))
+    assert not vigia_site.sondar_http(9996)  # erro do site de uma UF não é mascarado
+    monkeypatch.setattr(vigia_site.requests, "get", rotas({}))
+    assert not vigia_site.sondar_http(9996)
 
 
 def test_vigia_reinicia_processo_que_termina(tmp_path: Path) -> None:

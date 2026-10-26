@@ -95,9 +95,14 @@ class ClienteDivulgacao:
         return f"{self.base}/{self.nome_ambiente}/{caminho}"
 
     def novo_ciclo(self) -> None:
-        """Esquece os 404 do ciclo anterior (um arquivo pode passar a existir)."""
+        """Esquece os 404 do ciclo anterior (um arquivo pode passar a existir) e fecha as conexões guardadas:
+        keep-alive ocioso entre ciclos morre calado na NAT (WSL2) e o pedido seguinte só cai no tempo-limite
+        (25/10: com 27 UFs, ~7 min entre usos da mesma sessão, todo ciclo terminava em "Read timed out")."""
         with self._lock:
             self._nao_encontrados.clear()
+        fechar = getattr(self.sessao, "close", None)  # as sessões falsas dos testes e do ensaio não têm close()
+        if fechar is not None:
+            fechar()
 
     def _contar(self, chave: str) -> None:
         with self._lock:

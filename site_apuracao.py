@@ -61,6 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--intervalo", type=float, default=60.0, help="segundos entre ciclos do coletor")
     p.add_argument("--sem-presidente-ufs", action="store_true",
                    help="não baixar o presidente nas outras UFs (bloco 'Por estado' do cartão Brasil)")
+    p.add_argument("--so-presidente", action="store_true",
+                   help="coletar só o Presidente (sem Governador; 2º turno: evita o 404 nas UFs sem 2º turno estadual)")
     p.add_argument("--sem-boletim", action="store_true", help="não gravar o boletim a cada hora (só com --coletar)")
     p.add_argument("--boletim-min", type=int, default=60, help="minutos entre boletins (padrão: 60, na hora cheia)")
     p.add_argument("--interesse", nargs="+", default=[], metavar="CARGO:NUMERO", type=_cargo_numero,
@@ -91,7 +93,7 @@ def _cargo_numero(texto: str) -> tuple[int, int]:
 def _iniciar_coletor(args: argparse.Namespace, destino: Path, status: dict[str, Any]) -> threading.Event:
     parar = threading.Event()
     coletor = Coletor(ClienteDivulgacao(args.ambiente, max_rps=args.max_rps), destino, args.uf, args.turno,
-                      presidente_ufs=not args.sem_presidente_ufs)
+                      presidente_ufs=not args.sem_presidente_ufs, so_presidente=args.so_presidente)
 
     def rodar() -> None:
         status["ativo"] = True
@@ -114,7 +116,7 @@ def _iniciar_coletor_ufs(args: argparse.Namespace, entradas: list[EntradaUF],
     parar = threading.Event()
     limitador = LimitadorTaxa(args.max_rps)
     coletores = {e.uf: Coletor(ClienteDivulgacao(args.ambiente, limitador=limitador), e.dados, e.uf, args.turno,
-                               presidente_ufs=False) for e in entradas}
+                               presidente_ufs=False, so_presidente=args.so_presidente) for e in entradas}
 
     def rodar() -> None:
         for st in status.values():

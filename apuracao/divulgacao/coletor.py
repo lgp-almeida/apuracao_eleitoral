@@ -81,8 +81,9 @@ class ResumoCiclo:
 class Coletor:
     def __init__(self, cliente: ClienteDivulgacao, destino: Path, uf: str = "RJ", turno: int = 1,
                  presidente_br: bool = True, downloads_simultaneos: int = DOWNLOADS_SIMULTANEOS,
-                 presidente_ufs: bool = True) -> None:
+                 presidente_ufs: bool = True, so_presidente: bool = False) -> None:
         self.cliente = cliente
+        self.so_presidente = so_presidente  # sem a eleição estadual (2º turno: 404 do governador onde não há)
         self.downloads_simultaneos = downloads_simultaneos
         self.destino = destino
         self.uf = uf.lower()
@@ -118,7 +119,7 @@ class Coletor:
                 "parâmetros oficiais na véspera do pleito)")
         self.cfg = m.parse_config(resp.dados)
         self._eleicoes.clear()
-        estadual = self.cfg.por_cargo(3, self.turno)
+        estadual = None if self.so_presidente else self.cfg.por_cargo(3, self.turno)
         if estadual is not None:
             cargos = CARGOS_2_TURNO if self.turno == 2 else (
                 CARGOS_ESTADUAIS + ((CARGO_DISTRITAL,) if self.uf == "df" else ()))
